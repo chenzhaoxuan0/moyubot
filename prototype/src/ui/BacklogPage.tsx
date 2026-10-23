@@ -556,7 +556,7 @@ function BacklogSettings({ onClose }: { onClose: () => void }): ReactElement {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <span className="text-caption text-ash" title="建议指到有冗余的订阅执行器。">
+                <span className="block text-body-sm text-ink" title="建议指到有冗余的订阅执行器。">
                   心跳会话的执行器
                 </span>
                 <select
@@ -573,7 +573,7 @@ function BacklogSettings({ onClose }: { onClose: () => void }): ReactElement {
                 </select>
               </div>
               <div className="space-y-1">
-                <span className="text-caption text-ash">模型（缺省跟随执行器）</span>
+                <span className="block text-body-sm text-ink">模型（缺省跟随执行器）</span>
                 <ModelSelect
                   runtimeId={`daemon:${hb.runtimeId}`}
                   value={hb.model ?? ""}

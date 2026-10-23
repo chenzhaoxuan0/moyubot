@@ -98,17 +98,15 @@ export function MemoryScopePicker({ compact }: { compact?: boolean } = {}) {
       {open && (
         <div className="absolute bottom-full left-0 mb-2 w-80 max-w-[calc(100vw-32px)] rounded-xl border border-line bg-canvas p-3 shadow-xl backdrop-blur-md z-50 text-ink animate-in fade-in zoom-in-95 duration-100">
           <div className="flex items-center justify-between pb-2 border-b border-line-soft">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+            <div
+              className="flex items-center gap-1.5 text-xs font-semibold text-ink"
+              title="开关写入 bot.json 的注入清单——工作台、渠道、定时会话同一份（ADR 0014）。两柱独立，不影响 SOUL / USER / AGENTS.md（在右栏 Context 面板管理）。"
+            >
               <Brain size={14} className="text-teal" />
               <span>记忆注入（这个 bot）</span>
             </div>
             <span className="text-[10px] text-graphite font-mono">contextManifest</span>
           </div>
-
-          <p className="mt-2 text-[11px] leading-relaxed text-graphite">
-            开关写入 bot.json 的注入清单——工作台、渠道、定时会话同一份（ADR 0014）。
-            两柱独立，不影响 SOUL / USER / AGENTS.md（在右栏 Context 面板管理）：
-          </p>
 
           <div className="mt-2.5 space-y-2">
             {/* 1. 语义记忆 (MEMORY.md) */}

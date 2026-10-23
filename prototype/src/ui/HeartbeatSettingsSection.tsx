@@ -103,7 +103,7 @@ export function HeartbeatSettingsSection() {
         </div>
         <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
           <label className="block space-y-1">
-            <span className="block text-caption text-ash" title="建议指到有冗余的订阅执行器。">
+            <span className="block text-body-sm text-ink" title="建议指到有冗余的订阅执行器。">
               心跳会话的执行器
             </span>
             <select
@@ -120,7 +120,7 @@ export function HeartbeatSettingsSection() {
             </select>
           </label>
           <label className="block space-y-1">
-            <span className="block text-caption text-ash">模型（缺省跟随执行器）</span>
+            <span className="block text-body-sm text-ink">模型（缺省跟随执行器）</span>
             <ModelSelect
               runtimeId={`daemon:${hb.runtimeId}`}
               value={hb.model ?? ""}

@@ -202,7 +202,7 @@ function SegmentedField<T extends string>({
       <span className="block text-body-sm text-ink" title={hint}>
         {label}
       </span>
-      <div className="mt-1.5 inline-flex rounded-input border border-line bg-canvas p-0.5">
+      <div className="mt-2 inline-flex rounded-input border border-line bg-canvas p-0.5">
         {options.map((option) => (
           <button
             key={option.value}
@@ -494,7 +494,12 @@ export function AppearanceSettingsSection() {
       >
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <span className="text-body-sm text-ink">背景透明度</span>
+            <span
+              className="text-body-sm text-ink"
+              title="0% 为完全不透明，100% 为完全透明（方向与 CSS 的 alpha 相反，DS 也是这个约定）。拖动后点「跟随主题」可清除自定义值、退回默认：无壁纸 0%（不透明）；开着壁纸时 30% —— 壁纸垫在最底层，底色不半透它就永远看不见。"
+            >
+              背景透明度
+            </span>
             <div className="flex items-center gap-2">
               {followsTheme && (
                 <span className="rounded-chip bg-teal-tint px-2 py-0.5 text-caption text-teal">
@@ -516,11 +521,6 @@ export function AppearanceSettingsSection() {
             aria-label="背景透明度"
             className="w-full accent-teal"
           />
-          <p className="text-caption text-ash">
-            0% 为完全不透明，100% 为完全透明（方向与 CSS 的 alpha 相反，DS 也是这个约定）。
-            拖动后点「跟随主题」可清除自定义值、退回默认：无壁纸 0%（不透明）；
-            开着壁纸时 30% —— 壁纸垫在最底层，底色不半透它就永远看不见。
-          </p>
           {!followsTheme && (
             <button
               type="button"
@@ -533,7 +533,12 @@ export function AppearanceSettingsSection() {
 
           <div className="space-y-3 border-t border-line-soft pt-4">
             <div className="flex items-center justify-between">
-              <span className="text-body-sm text-ink">设置页透明度</span>
+              <span
+                className="text-body-sm text-ink"
+                title="只作用于设置页整页底色，与上面的背景透明度相互独立。默认 0% 完全不透明，叠在主界面上时不透出下层文字；调高后壁纸会透进设置页，但下层内容也会跟着显形。"
+              >
+                设置页透明度
+              </span>
               <span className="rounded-chip bg-surface-hover px-2 py-0.5 text-caption font-mono text-graphite">
                 {activeProfile.overlayTransparency}%
                 {activeProfile.overlayTransparency === 0 ? "不透明" : activeProfile.overlayTransparency === 100 ? "全透" : ""}
@@ -549,15 +554,16 @@ export function AppearanceSettingsSection() {
               aria-label="设置页透明度"
               className="w-full accent-teal"
             />
-            <p className="text-caption text-ash">
-              只作用于设置页整页底色，与上面的背景透明度相互独立。默认 0% 完全不透明，
-              叠在主界面上时不透出下层文字；调高后壁纸会透进设置页，但下层内容也会跟着显形。
-            </p>
           </div>
 
           <div className="space-y-3 border-t border-line-soft pt-4">
             <div className="flex items-center justify-between">
-              <span className="text-body-sm text-ink">终端透明度</span>
+              <span
+                className="text-body-sm text-ink"
+                title="只作用于终端画布的底色，终端文字永远不透明。开着壁纸时建议 60% 以上才能明显透出壁纸（终端后面还垫着一层全局底色）。改完需刷新页面（F5）重建终端才生效 —— xterm 的透明开关只在创建时读取。"
+              >
+                终端透明度
+              </span>
               <span className="rounded-chip bg-surface-hover px-2 py-0.5 text-caption font-mono text-graphite">
                 {activeProfile.terminalTransparency}%
                 {activeProfile.terminalTransparency === 0 ? "不透明" : activeProfile.terminalTransparency === 100 ? "全透" : ""}
@@ -573,11 +579,6 @@ export function AppearanceSettingsSection() {
               aria-label="终端透明度"
               className="w-full accent-teal"
             />
-            <p className="text-caption text-ash">
-              只作用于终端画布的底色，终端文字永远不透明。开着壁纸时建议 60% 以上
-              才能明显透出壁纸（终端后面还垫着一层全局底色）。改完需刷新页面（F5）
-              重建终端才生效 —— xterm 的透明开关只在创建时读取。
-            </p>
           </div>
         </div>
       </SectionCard>
@@ -614,6 +615,7 @@ export function AppearanceSettingsSection() {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
+              title="选中的图由后台 daemon 落盘到工作目录的 wallpapers/ 下，appearance.json 里只记一个路径——图片本身不进配置文件。"
               className="flex items-center gap-1.5 rounded-btn border border-line px-3 py-1.5 text-body-sm text-ink hover:bg-surface-hover"
             >
               <Upload size={13} />
@@ -635,12 +637,6 @@ export function AppearanceSettingsSection() {
             )}
           </div>
           {importError && <p className="text-caption text-loss">{importError}</p>}
-          {!wallpaper.source && !wallpaper.path && (
-            <p className="text-caption text-ash">
-              还没有图片。选中的图会由后台 daemon 落盘到工作目录的 wallpapers/ 下，
-              appearance.json 里只记一个路径 —— 图片本身不进配置文件。
-            </p>
-          )}
           {wallpaper.path && (
             <p className="rounded-btn border border-line/60 bg-line-soft/30 px-2.5 py-1.5 text-caption text-graphite">
               壁纸文件：<span className="font-mono text-ink">{wallpaper.path}</span>
@@ -772,7 +768,11 @@ export function AppearanceSettingsSection() {
             hint="按原比例联动四档圆角（按钮/输入/卡片/胶囊）"
           />
           <div className="sm:col-span-2">
-            <p className="mb-1.5 text-caption text-ash">bot 头像框形态</p>
+            {/* 与同网格的 SliderField 标签同级（text-body-sm text-ink）：
+                视觉同层就得同字号，此前 text-caption text-ash 小了一级 */}
+            <p className="mb-2 text-body-sm text-ink" title="作用于侧栏的 bot 头像框。">
+              bot 头像框形态
+            </p>
             <div className="flex gap-2">
               {([
                 { id: "rounded", label: "圆角" },
@@ -794,10 +794,16 @@ export function AppearanceSettingsSection() {
                 </button>
               ))}
             </div>
-            <p className="mt-1.5 text-caption text-ash">作用于侧栏的 bot 头像框。</p>
           </div>
-          <div className="sm:col-span-2">
-            <p className="mb-1.5 text-caption text-ash">对话列宽</p>
+          {/* mt-2：上一行底部是按钮（实心顶到行底），滑杆行底部是 range 元素盒
+              （轨道细、盒内自带空隙）——补 8px 让视觉空白与滑杆行之间一致 */}
+          <div className="mt-2 sm:col-span-2">
+            <p
+              className="mb-2 text-body-sm text-ink"
+              title="时间线阅读列与输入框共用的最大宽度（默认 900 ≈ ZCode）。用户气泡最宽跟列同宽，调宽即变宽。"
+            >
+              对话列宽
+            </p>
             <div className="flex items-center gap-3">
               <input
                 type="range"
@@ -818,9 +824,6 @@ export function AppearanceSettingsSection() {
                 默认
               </button>
             </div>
-            <p className="mt-1.5 text-caption text-ash">
-              时间线阅读列与输入框共用的最大宽度（默认 900 ≈ ZCode）。用户气泡最宽跟列同宽，调宽即变宽。
-            </p>
           </div>
           <SliderField
             label="表面不透明度 opacity"

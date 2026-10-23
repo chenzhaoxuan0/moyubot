@@ -196,7 +196,7 @@ export function WeixinSetup({
         </label>
         <div className="space-y-1">
           <span
-            className="block text-[11px] text-ash"
+            className="block text-caption text-graphite"
             title="Chat ID / OpenID，必填：仅该 OpenID 的私聊会得到应答，留空则不响应任何消息"
           >
             专属对话过滤（必填）

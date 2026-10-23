@@ -50,7 +50,8 @@ export function NumField({
   };
   return (
     <label className="block space-y-1">
-      <span className="block text-caption text-ash" title={hint}>
+      {/* text-body-sm text-ink：与设置页 SettingsRow 的行标签同级（视觉同层同字号） */}
+      <span className="block text-body-sm text-ink" title={hint}>
         {label}
       </span>
       <input

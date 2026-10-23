@@ -457,7 +457,8 @@ function hostOf(baseUrl: string): string {
 function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[152px_1fr] items-start gap-2">
-      <label className="pt-1.5 text-caption text-graphite" title={hint}>
+      {/* text-body-sm text-ink：与设置页 SettingsRow 行标签同级 */}
+      <label className="pt-1.5 text-body-sm text-ink" title={hint}>
         {label}
       </label>
       <div className="min-w-0">{children}</div>

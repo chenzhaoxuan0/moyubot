@@ -1041,10 +1041,12 @@ function EditorShell({
               )}
               {showTemplate && draft.trim() !== "" && (
                 <div className="mt-1.5">
-                  <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-btn border border-line-soft bg-rail/60 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-ash">
+                  <pre
+                    className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-btn border border-line-soft bg-rail/60 px-2.5 py-2 font-mono text-[11px] leading-relaxed text-ash"
+                    title="模板仅作展示——已有内容不会被覆盖；想用模板请先清空正文再点「使用推荐代写模板」。"
+                  >
                     {template}
                   </pre>
-                  <p className="mt-1 text-[10px] text-ash/70">模板仅作展示——已有内容不会被覆盖；想用模板请先清空正文再点「使用推荐代写模板」。</p>
                 </div>
               )}
             </div>
