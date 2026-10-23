@@ -413,14 +413,16 @@ export function AddBotDialog({
 
   if (!open) return null;
 
-  // 分区导航（弹窗竖排 / 嵌入右栏横排 chips 共用同一组定义；editOnly 仅编辑态出现）
-  const navItems: readonly { id: Section; label: string; icon: LucideIcon; hint: string; editOnly?: boolean }[] = [
+  // 分区导航（弹窗竖排 / 嵌入右栏横排 chips 共用同一组定义）。
+  // 新建与编辑同一套分区（2026-10-23 页面合并）：不适合新建态的功能（技能管理/
+  // 会话导入）以「新建适配形态」呈现——分区可见，正文换成说明卡而不是直接隐藏。
+  const navItems: readonly { id: Section; label: string; icon: LucideIcon; hint: string; hintNew?: string }[] = [
     ...SECTIONS,
-    { id: "skills", label: "工作区技能", icon: Package, hint: "本目录技能置顶与停用", editOnly: true },
-    { id: "importSessions", label: "导入会话", icon: Download, hint: "收入外部终端跑的 CLI 会话", editOnly: true },
+    { id: "skills", label: "工作区技能", icon: Package, hint: "本目录技能置顶与停用", hintNew: "创建时自动播种官方技能" },
+    { id: "importSessions", label: "导入会话", icon: Download, hint: "收入外部终端跑的 CLI 会话", hintNew: "创建后可用" },
   ];
-  const visibleNavItems = navItems.filter((it) => it.editOnly !== true || isEdit);
-  const navBtn = (it: { id: Section; label: string; icon: LucideIcon; hint: string }): ReactElement => {
+  const visibleNavItems = navItems;
+  const navBtn = (it: { id: Section; label: string; icon: LucideIcon; hint: string; hintNew?: string }): ReactElement => {
     const active = section === it.id;
     const Icon = it.icon;
     return embedded ? (
@@ -428,7 +430,7 @@ export function AddBotDialog({
         key={it.id}
         onClick={() => setSection(it.id)}
         aria-current={active}
-        title={it.hint}
+        title={isEdit || it.hintNew === undefined ? it.hint : it.hintNew}
         className={cn(
           "flex shrink-0 items-center gap-1 rounded-chip border px-2 py-1 text-caption transition",
           active ? "border-teal bg-teal-tint font-medium text-ink" : "border-line text-graphite hover:bg-line-soft hover:text-ink",
@@ -452,7 +454,7 @@ export function AddBotDialog({
           <span className={cn("block truncate text-body-sm", active ? "font-medium text-ink" : "text-graphite")}>
             {it.label}
           </span>
-          <span className="block truncate text-caption text-ash">{it.hint}</span>
+          <span className="block truncate text-caption text-ash">{isEdit || it.hintNew === undefined ? it.hint : it.hintNew}</span>
         </span>
       </button>
     );
@@ -713,6 +715,28 @@ export function AddBotDialog({
               </div>
             )}
 
+            {/* 工作区技能 · 新建适配形态（2026-10-23 页面合并）：还没有工作区，
+                管理器换成说明卡——告诉用户创建那一刻会自动得到什么 */}
+            {section === "skills" && !isEdit && (
+              <div className="space-y-3">
+                <div>
+                  <h2 className="text-body-sm font-medium text-ink">创建时自动播种的官方基础技能</h2>
+                  <p className="mt-0.5 text-caption text-ash">不需要任何操作，落盘即生效（.agents/skills/ 规范位，全执行器可发现）</p>
+                </div>
+                <ul className="space-y-1.5 rounded-card border border-line bg-rail/40 p-3 text-caption leading-relaxed">
+                  <li>
+                    <span className="font-medium text-ink">agent-workbench</span>
+                    <span className="text-ash"> —— 驾驶这台工作台：aw CLI 全操作面（会话 / 待办 / git / 通知 / 出图），发现不背诵</span>
+                  </li>
+                  <li>
+                    <span className="font-medium text-ink">workbench-context</span>
+                    <span className="text-ash"> —— 检索本工作区记忆：MEMORY.md / memory/daily / STANDING.md 按需查阅</span>
+                  </li>
+                </ul>
+                <p className="text-caption text-ash">创建后可回到这个分区管理：置顶排序（bot.json pinnedSkills）、停用（.disabled/ 搬运）。</p>
+              </div>
+            )}
+
             {section === "context" && !isEdit && (
               <div className="space-y-5">
                 <div className="space-y-1.5">
@@ -824,6 +848,21 @@ export function AddBotDialog({
               )}
             </div>
           )}
+
+            {/* 导入会话 · 新建适配形态（2026-10-23 页面合并）：bot 还没落盘，
+                没有可挂账的会话台账——说明卡告知创建后可用 */}
+            {section === "importSessions" && !isEdit && (
+              <div className="space-y-3">
+                <div>
+                  <h2 className="text-body-sm font-medium text-ink">导入外部会话</h2>
+                  <p className="mt-0.5 text-caption text-ash">创建后可用</p>
+                </div>
+                <p className="rounded-card border border-line bg-rail/40 p-3 text-caption leading-relaxed text-ash">
+                  把在工作台外、直接用 CLI 在这个工作目录里跑过的会话收进历史台账。
+                  bot 创建后回到这个分区，按工作目录匹配导入。
+                </p>
+              </div>
+            )}
     </div>
   );
 

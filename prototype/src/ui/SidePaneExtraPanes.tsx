@@ -57,9 +57,11 @@ export function NewBotPane(): ReactElement {
           },
           { createRoot: true },
         );
-        // 建完即上岗：切到新 bot，关掉新建页签
+        // 建完即变身（2026-10-23 页面合并）：同一个右栏面板无缝切换成新 bot 的
+        // 完整设置页——切 bot、关新建签、开它的 bot 设置签，一个连续流程
         useWorkbench.getState().selectUnit(id);
         useSidePane.getState().closeTab(NEW_BOT_TAB_ID);
+        useSidePane.getState().openContext({ unitId: id, unitName: draft.name });
       }}
     />
   );
