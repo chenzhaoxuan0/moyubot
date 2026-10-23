@@ -451,10 +451,12 @@ export function AddBotDialog({
       >
         <Icon size={13} className={cn("mt-0.5 shrink-0", active ? "text-teal" : "text-ash")} />
         <span className="min-w-0">
-          <span className={cn("block truncate text-body-sm", active ? "font-medium text-ink" : "text-graphite")}>
+          <span
+            className={cn("block truncate text-body-sm", active ? "font-medium text-ink" : "text-graphite")}
+            title={isEdit || it.hintNew === undefined ? it.hint : it.hintNew}
+          >
             {it.label}
           </span>
-          <span className="block truncate text-caption text-ash">{isEdit || it.hintNew === undefined ? it.hint : it.hintNew}</span>
         </span>
       </button>
     );
@@ -670,10 +672,12 @@ export function AddBotDialog({
                       >
                         <Bot size={14} className={kind === "bot" ? "text-teal" : "text-ash"} />
                         <span>
-                          <span className={cn("block text-body-sm", kind === "bot" ? "font-medium text-ink" : "text-graphite")}>
+                          <span
+                            className={cn("block text-body-sm", kind === "bot" ? "font-medium text-ink" : "text-graphite")}
+                            title="默认形态：一类事务的专人专事"
+                          >
                             不是 · bot（数字员工）
                           </span>
-                          <span className="block text-caption text-ash">默认形态：一类事务的专人专事</span>
                         </span>
                       </button>
                       <button
@@ -687,10 +691,12 @@ export function AddBotDialog({
                       >
                         <Package size={14} className={kind === "project" ? "text-teal" : "text-ash"} />
                         <span>
-                          <span className={cn("block text-body-sm", kind === "project" ? "font-medium text-ink" : "text-graphite")}>
+                          <span
+                            className={cn("block text-body-sm", kind === "project" ? "font-medium text-ink" : "text-graphite")}
+                            title="按开发项目消费：源代码管理、提交图"
+                          >
                             是 · 项目
                           </span>
-                          <span className="block text-caption text-ash">按开发项目消费：源代码管理、提交图</span>
                         </span>
                       </button>
                     </div>
@@ -720,8 +726,12 @@ export function AddBotDialog({
             {section === "skills" && !isEdit && (
               <div className="space-y-3">
                 <div>
-                  <h2 className="text-body-sm font-medium text-ink">创建时自动播种的官方基础技能</h2>
-                  <p className="mt-0.5 text-caption text-ash">不需要任何操作，落盘即生效（.agents/skills/ 规范位，全执行器可发现）</p>
+                  <h2
+                    className="text-body-sm font-medium text-ink"
+                    title="不需要任何操作，落盘即生效（.agents/skills/ 规范位，全执行器可发现）。创建后可回到这个分区管理：置顶排序（bot.json pinnedSkills）、停用（.disabled/ 搬运）。"
+                  >
+                    创建时自动播种的官方基础技能
+                  </h2>
                 </div>
                 <ul className="space-y-1.5 rounded-card border border-line bg-rail/40 p-3 text-caption leading-relaxed">
                   <li>
@@ -733,7 +743,6 @@ export function AddBotDialog({
                     <span className="text-ash"> —— 检索本工作区记忆：MEMORY.md / memory/daily / STANDING.md 按需查阅</span>
                   </li>
                 </ul>
-                <p className="text-caption text-ash">创建后可回到这个分区管理：置顶排序（bot.json pinnedSkills）、停用（.disabled/ 搬运）。</p>
               </div>
             )}
 
@@ -742,8 +751,12 @@ export function AddBotDialog({
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-body-sm font-medium text-ink">SOUL.md · 人设与语气</p>
-                      <p className="text-caption text-ash">保存时物化为文件夹根目录的 SOUL.md。默认 Bare（0 注入），创建后可在设置中按需打开</p>
+                      <p
+                        className="text-body-sm font-medium text-ink"
+                        title="保存时物化为文件夹根目录的 SOUL.md。默认 Bare（0 注入），创建后可在设置中按需打开"
+                      >
+                        SOUL.md · 人设与语气
+                      </p>
                     </div>
                     {!personaTouched && (
                       <button
@@ -776,8 +789,12 @@ export function AddBotDialog({
                 <div className="space-y-1.5 border-t border-line-soft pt-4">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-body-sm font-medium text-ink">AGENTS.md · 岗位说明书</p>
-                      <p className="text-caption text-ash">bot 的规矩与交付规范。执行器通常原生读取；留空保存时生成最小占位</p>
+                      <p
+                        className="text-body-sm font-medium text-ink"
+                        title="bot 的规矩与交付规范。执行器通常原生读取；留空保存时生成最小占位"
+                      >
+                        AGENTS.md · 岗位说明书
+                      </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-1">
                       {SECTION_LIBRARY.map((s) => (
@@ -854,8 +871,9 @@ export function AddBotDialog({
             {section === "importSessions" && !isEdit && (
               <div className="space-y-3">
                 <div>
-                  <h2 className="text-body-sm font-medium text-ink">导入外部会话</h2>
-                  <p className="mt-0.5 text-caption text-ash">创建后可用</p>
+                  <h2 className="text-body-sm font-medium text-ink" title="创建后可用">
+                    导入外部会话
+                  </h2>
                 </div>
                 <p className="rounded-card border border-line bg-rail/40 p-3 text-caption leading-relaxed text-ash">
                   把在工作台外、直接用 CLI 在这个工作目录里跑过的会话收进历史台账。
@@ -996,8 +1014,9 @@ function MemoryToggle({
       )}
     >
       <span className="min-w-0 flex-1">
-        <span className="block text-body-sm font-medium text-ink">{label}</span>
-        <span className="mt-0.5 block text-caption leading-relaxed text-ash">{desc}</span>
+        <span className="block text-body-sm font-medium text-ink" title={desc}>
+          {label}
+        </span>
       </span>
       <span
         className={cn(
@@ -1020,7 +1039,7 @@ function MemoryToggle({
 function Field({ label, hint, required, children }: { label: string; hint?: string; required?: boolean; children: React.ReactNode }) {
   return (
     <label className="block space-y-1">
-      <span className="block text-caption font-medium text-graphite">
+      <span className="block text-caption font-medium text-graphite" title={hint}>
         {label}
         {required && (
           <span className="ml-1 text-teal" title="必填">
@@ -1029,7 +1048,6 @@ function Field({ label, hint, required, children }: { label: string; hint?: stri
         )}
       </span>
       {children}
-      {hint && <span className="block text-caption text-ash">{hint}</span>}
     </label>
   );
 }

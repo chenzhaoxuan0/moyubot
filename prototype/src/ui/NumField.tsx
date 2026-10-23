@@ -50,7 +50,9 @@ export function NumField({
   };
   return (
     <label className="block space-y-1">
-      <span className="block text-caption text-ash">{label}</span>
+      <span className="block text-caption text-ash" title={hint}>
+        {label}
+      </span>
       <input
         value={draft}
         disabled={disabled}
@@ -62,7 +64,6 @@ export function NumField({
         }}
         className={cn(defaultInputCls, inputClassName)}
       />
-      {hint && <span className="block text-[10px] leading-relaxed text-ash/80">{hint}</span>}
     </label>
   );
 }

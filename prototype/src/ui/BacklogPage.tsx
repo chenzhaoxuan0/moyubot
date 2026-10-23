@@ -116,7 +116,7 @@ export function BacklogPage(): ReactElement {
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-4xl px-8 pb-12">
+      <div className="mx-auto max-w-4xl px-8 pb-12 pt-5">
         <header className="mb-5 flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 text-body-lg font-medium text-ink">
@@ -556,7 +556,9 @@ function BacklogSettings({ onClose }: { onClose: () => void }): ReactElement {
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <span className="text-caption text-ash">心跳会话的执行器（建议指到有冗余的订阅执行器）</span>
+                <span className="text-caption text-ash" title="建议指到有冗余的订阅执行器。">
+                  心跳会话的执行器
+                </span>
                 <select
                   value={hb.runtimeId}
                   disabled={busy}

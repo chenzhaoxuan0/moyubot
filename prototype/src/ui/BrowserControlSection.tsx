@@ -147,10 +147,12 @@ export function FanoutCard({ state }: { state: { fanout: readonly { executorId: 
   const okCount = state.fanout.filter((o) => o.ok).length;
   return (
     <GroupCard>
-      <div className="px-4 pb-1 pt-3">
-        <p className="text-caption font-medium text-graphite">扇出状态</p>
-        <p className="mt-0.5 text-caption leading-relaxed text-ash">
-          条目按执行器分别写入原生配置（隔离模式的 profile 目录逐家不同）。
+      <div className="px-4 pb-2.5 pt-3">
+        <p
+          className="text-caption font-medium text-graphite"
+          title="条目按执行器分别写入原生配置（隔离模式的 profile 目录逐家不同）。"
+        >
+          扇出状态
         </p>
       </div>
       <div className="space-y-1 px-4 pb-3">
@@ -182,10 +184,12 @@ export function ActionLogCard({ actions }: { actions: readonly { seq: number; at
   const tail = [...actions].reverse().slice(0, 30);
   return (
     <GroupCard>
-      <div className="px-4 pb-1 pt-3">
-        <p className="text-caption font-medium text-graphite">动作日志（工作台侧事件，最近 30 条）</p>
-        <p className="mt-0.5 text-caption leading-relaxed text-ash">
-          只记工作台可见的事件：配置变更、条目写入、生命周期、工具调用（电脑控制）。
+      <div className="px-4 pb-2.5 pt-3">
+        <p
+          className="text-caption font-medium text-graphite"
+          title="只记工作台可见的事件：配置变更、条目写入、生命周期、工具调用（电脑控制）。"
+        >
+          动作日志（工作台侧事件，最近 30 条）
         </p>
       </div>
       <div className="max-h-56 overflow-y-auto px-4 pb-3">

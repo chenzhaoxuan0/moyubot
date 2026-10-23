@@ -147,10 +147,11 @@ export function FeishuSetup({
       {/* 第 1 步没过的操作区：装 lark-cli。过了就折叠，只留检测按钮 */}
       {list !== null && !list.available && (
         <Card>
-          <p className="text-caption text-ink">先装 lark-cli，飞书这一层全靠它</p>
-          <p className="mt-1 text-[10px] text-graphite">
-            agent-workbench 不自己实现飞书客户端——发消息、收事件、操作文档这些都由
-            lark-cli 做。这里只负责「接在哪个 bot 上」。
+          <p
+            className="text-caption text-ink"
+            title="agent-workbench 不自己实现飞书客户端——发消息、收事件、操作文档这些都由 lark-cli 做。这里只负责「接在哪个 bot 上」。"
+          >
+            先装 lark-cli，飞书这一层全靠它
           </p>
           <Copyable cmd="npm i -g @larksuite/cli" />
           <div className="flex items-center gap-2">

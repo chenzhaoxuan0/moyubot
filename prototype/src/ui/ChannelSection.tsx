@@ -251,18 +251,12 @@ function ChannelCard({
 
           {(channel.kind === "feishu" || channel.kind === "telegram") && (
             <div className="rounded-card border border-loss/30 bg-loss/5 p-2.5">
-              <p className="flex items-center gap-1.5 text-caption font-medium text-loss">
+              <p
+                className="flex items-center gap-1.5 text-caption font-medium text-loss"
+                title="没有逐条审批面。它会按【完全放行】直接对着工作目录执行命令——谁在群里 @ 它，谁就能让它动这个文件夹。收权办法：无规则命中时 headless 会话按【完全放行】执行；要拦敏感命令，用 daemon 的权限规则接口（POST /api/permissions/rules，decision=deny）预置拒绝规则。规则是后端强制的，比这里口头承诺可靠。"
+              >
                 <ShieldAlert size={11} />
                 启用后这个 bot 在 {meta?.label} 里是 headless 的
-              </p>
-              <p className="mt-1 text-caption text-graphite">
-                没有逐条审批面。它会按【完全放行】直接对着工作目录执行命令——
-                谁在群里 @ 它，谁就能让它动这个文件夹。
-              </p>
-              <p className="mt-1 text-caption text-ash">
-                收权办法：无规则命中时 headless 会话按【完全放行】执行；要拦敏感命令，
-                用 daemon 的权限规则接口（POST /api/permissions/rules，decision=deny）预置拒绝规则。
-                规则是后端强制的，比这里口头承诺可靠。
               </p>
             </div>
           )}

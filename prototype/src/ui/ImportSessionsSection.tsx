@@ -96,13 +96,11 @@ export function ImportSessionsSection({ unitId }: { unitId: string }): ReactElem
 
   return (
     <div className="space-y-3 text-body-sm">
-      <p className="text-caption leading-relaxed text-graphite">
-        列出在<strong>工作台外</strong>、直接用 CLI 在这个 bot 的工作目录里跑过的会话（各执行器自己的会话存储），
-        勾选后收进本 bot 的历史列表 —— 带「导入」标签，可回看原生转录、可从 TUI 继续。
-      </p>
-
-      {/* 执行器分段（cc-switch 式：按执行器切换查询面） */}
-      <div className="flex flex-wrap items-center gap-1">
+      {/* 执行器分段（cc-switch 式：按执行器切换查询面）。整段说明收进悬停 */}
+      <div
+        className="flex flex-wrap items-center gap-1"
+        title="列出在工作台外、直接用 CLI 在这个 bot 的工作目录里跑过的会话（各执行器自己的会话存储），勾选后收进本 bot 的历史列表——带「导入」标签，可回看原生转录、可从 TUI 继续。"
+      >
         {bareIds.map((id) => (
           <button
             key={id}

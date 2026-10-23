@@ -660,22 +660,21 @@ function SidePaneHome({
 
   return (
     <div className="h-full min-h-0 overflow-y-auto p-3">
-      <p className="text-body-sm font-medium text-ink">面板功能</p>
-      <p className="mt-0.5 text-[10px] text-ash">点选要打开的功能，它将以标签页入驻本面板</p>
+      <p className="text-body-sm font-medium text-ink" title="点选要打开的功能，它将以标签页入驻本面板">
+        面板功能
+      </p>
 
       {current !== null && (
         <div className="mt-3 overflow-hidden rounded-card border border-line bg-canvas">
           <button
             type="button"
             onClick={() => useSidePane.getState().openTab({ unitId: current.id, unitName: current.name })}
-            className="flex w-full cursor-pointer items-start gap-2.5 p-3 text-left transition hover:bg-teal-tint/40"
+            title={`${current.name} 的自动化任务、待办、心跳与手动会话时间轴`}
+            className="flex w-full cursor-pointer items-center gap-2.5 p-3 text-left transition hover:bg-teal-tint/40"
           >
-            <HistoryIcon size={16} className="mt-0.5 shrink-0 text-teal" />
-            <span className="min-w-0">
-              <span className="block text-body-sm font-medium text-ink">历史会话</span>
-              <span className="mt-0.5 block text-caption text-graphite">
-                {current.name} 的自动化任务、待办、心跳与手动会话时间轴
-              </span>
+            <HistoryIcon size={16} className="shrink-0 text-teal" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-body-sm font-medium text-ink">历史会话</span>
             </span>
           </button>
           {others.length > 0 && (
@@ -754,7 +753,7 @@ function SidePaneHome({
                       ? "还没有可监控的会话"
                       : entry.requiresLiveTarget === true
                         ? `跟随会话 ${liveTarget!.sessionId} 的事件流`
-                        : undefined
+                        : entry.desc
                   }
                 >
                   <Icon
@@ -768,17 +767,18 @@ function SidePaneHome({
                         : "text-ash",
                     )}
                   />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-caption text-graphite">{entry.label}</span>
-                    <span className="mt-0.5 block truncate text-[10px] text-ash">
-                      {entry.key === "live"
-                        ? liveTarget === null
+                  {/* 单行入口：静态说明收进悬停；live 的实时状态是数据，保留为行内后缀 */}
+                  <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+                    <span className="shrink-0 text-caption text-graphite">{entry.label}</span>
+                    {entry.key === "live" && (
+                      <span className="min-w-0 flex-1 truncate text-[10px] text-ash">
+                        {liveTarget === null
                           ? "还没有可监控的会话"
                           : liveTarget.running
                             ? `正在跑：${liveTarget.title}`
-                            : `最近：${liveTarget.title}（回放）`
-                        : entry.desc}
-                    </span>
+                            : `最近：${liveTarget.title}（回放）`}
+                      </span>
+                    )}
                   </span>
                 </button>
               );
@@ -797,13 +797,11 @@ function SidePaneHome({
               key={entry.key}
               type="button"
               onClick={() => entry.open({ unitId: current?.id ?? null, unitName: current?.name ?? "", liveTarget })}
+              title={entry.desc}
               className="flex w-full cursor-pointer items-center gap-2 rounded-btn px-2 py-2 text-left transition hover:bg-line-soft"
             >
               <Icon size={13} className="shrink-0 text-ash" />
-              <span className="min-w-0 flex-1">
-                <span className="block text-caption text-graphite">{entry.label}</span>
-                <span className="mt-0.5 block truncate text-[10px] text-ash">{entry.desc}</span>
-              </span>
+              <span className="min-w-0 flex-1 truncate text-caption text-graphite">{entry.label}</span>
             </button>
           );
         })}

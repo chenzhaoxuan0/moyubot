@@ -57,9 +57,11 @@ export function HeartbeatSettingsSection() {
             启用
           </label>
         </div>
-        <p className="text-caption leading-relaxed text-graphite">
-          心跳是周期性的检查循环：空闲且有余量时，评估要不要提议启动某条待办。
-          任何启动都要经确认门（你点同意才动）；状态为「工作中 / 强制忙碌」时心跳让位，待办不会被自动提议。
+        <p
+          className="text-caption leading-relaxed text-graphite"
+          title="心跳是周期性的检查循环：空闲且有余量时，评估要不要提议启动某条待办。任何启动都要经确认门（你点同意才动）；状态为「工作中 / 强制忙碌」时心跳让位，待办不会被自动提议。"
+        >
+          心跳是周期性的检查循环：空闲时评估是否提议启动待办，启动经确认门。
         </p>
         <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
           <NumField
@@ -101,7 +103,9 @@ export function HeartbeatSettingsSection() {
         </div>
         <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
           <label className="block space-y-1">
-            <span className="block text-caption text-ash">心跳会话的执行器</span>
+            <span className="block text-caption text-ash" title="建议指到有冗余的订阅执行器。">
+              心跳会话的执行器
+            </span>
             <select
               value={hb.runtimeId}
               disabled={busy}
@@ -114,7 +118,6 @@ export function HeartbeatSettingsSection() {
                 </option>
               ))}
             </select>
-            <span className="block text-[10px] text-ash/80">建议指到有冗余的订阅执行器。</span>
           </label>
           <label className="block space-y-1">
             <span className="block text-caption text-ash">模型（缺省跟随执行器）</span>

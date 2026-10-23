@@ -79,8 +79,10 @@ const ICONS: Record<string, typeof Settings2> = {
   smartphone: Smartphone,
 };
 
-/** 居中内容列：max-w-5xl 给予多列执行器与模型管理更充裕的呼吸空间 */
-const FRAME = "mx-auto w-full max-w-5xl px-6 pb-12 pt-2";
+/** 居中内容列：max-w-5xl 给予多列执行器与模型管理更充裕的呼吸空间。
+ *  pt-6 与分区头 mb-6 同值：说明行收进悬停后标题独占一行，上方留白至少
+ *  与到下方内容的间距相等，否则标题贴着面包屑顶带、视觉上吊在最上缘 */
+const FRAME = "mx-auto w-full max-w-5xl px-6 pb-12 pt-6";
 /**
  * 头部行专用：只有水平规格。FRAME 的 pt-2/pb-12 是给可滚动内容列的，
  * 混进固定 h-12 的面包屑行会把内容盒压塌（8+48=56px padding > 48px 高），
@@ -169,8 +171,9 @@ export function SettingsPage() {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className={FRAME}>
             <header className="mb-6">
-              <h1 className="text-body-lg font-medium text-ink">{current.title}</h1>
-              <p className="mt-0.5 text-body-sm text-graphite">{current.desc}</p>
+              <h1 className="text-body-lg font-medium text-ink" title={current.desc}>
+                {current.title}
+              </h1>
             </header>
 
             <SectionBody section={current} />
@@ -183,7 +186,8 @@ export function SettingsPage() {
 
 /* ------------------------------------------------------------- 原语 */
 
-/** 对齐 ZCode 的 SettingsRow：左 label+description，右 control，border-t 分隔 */
+/** 对齐 ZCode 的 SettingsRow：左 label，右 control，border-t 分隔。
+ *  说明文字收进 label 的悬停提示——行高统一单行，页面才不会被说明文字淹没 */
 export function SettingsRow({
   label,
   description,
@@ -192,7 +196,7 @@ export function SettingsRow({
   wide,
 }: {
   label: ReactNode;
-  description?: ReactNode;
+  description?: string;
   control: ReactNode;
   detail?: ReactNode;
   wide?: boolean;
@@ -206,10 +210,9 @@ export function SettingsRow({
         )}
       >
         <div className="min-w-0">
-          <div className="text-body-sm font-medium text-ink">{label}</div>
-          {description && (
-            <div className="mt-0.5 text-body-sm leading-relaxed text-graphite">{description}</div>
-          )}
+          <div className="text-body-sm font-medium text-ink" title={description}>
+            {label}
+          </div>
         </div>
         <div className="flex w-full flex-nowrap items-center justify-end gap-2">{control}</div>
       </div>
@@ -285,10 +288,9 @@ function SectionBody({ section }: { section: SettingsSectionDef }) {  switch (se
               单元选择在这里做，查询/导入本体共用 ImportSessionsSection */}
           <section className="space-y-3 rounded-card border border-line bg-rail/60 p-4">
             <div>
-              <h2 className="font-medium text-ink">导入外部会话</h2>
-              <p className="mt-0.5 text-caption text-ash">
-                收入在工作台外、直接用 CLI 在 bot 工作目录里跑过的会话（查询面参照 cc-switch）
-              </p>
+              <h2 className="font-medium text-ink" title="收入在工作台外、直接用 CLI 在 bot 工作目录里跑过的会话（查询面参照 cc-switch）">
+                导入外部会话
+              </h2>
             </div>
             <ImportSessionsGlobalSection />
           </section>
@@ -517,12 +519,6 @@ function MemorySettingsSection() {
 
   return (
     <div className="space-y-6">
-      <p className="-mt-2 text-body-sm leading-relaxed text-graphite">
-        记忆就是项目文件夹里的普通 Markdown：<span className="font-mono text-ink">MEMORY.md</span> 恒注入，
-        <span className="font-mono text-ink">memory/daily/</span> 按天分片、不注入，
-        <span className="font-mono text-ink">skills/</span> 是程序性记忆。跨会话检索是第四件事，单独授权、默认关。
-      </p>
-
       {/* 上限 */}
       <GroupCard>
         <SettingsRow
@@ -562,10 +558,11 @@ function MemorySettingsSection() {
       {/* 跨项目检索：逐 bot 授权 */}
       <GroupCard>
         <div className="px-4 pb-1 pt-3">
-          <p className="text-caption font-medium text-graphite">跨项目检索</p>
-          <p className="mt-0.5 text-caption leading-relaxed text-ash">
-            默认全关。全局记忆曾经让 A 项目里冒出 B 项目的记忆，直接摧毁对 agent 的信任。
-            铁律：搜到 ≠ 注入 —— 检索结果只出现在它主动查的那一轮，永远不会进项目的 prompt。
+          <p
+            className="text-caption font-medium text-graphite"
+            title="默认全关。全局记忆曾经让 A 项目里冒出 B 项目的记忆，直接摧毁对 agent 的信任。铁律：搜到 ≠ 注入 —— 检索结果只出现在它主动查的那一轮，永远不会进项目的 prompt。"
+          >
+            跨项目检索
           </p>
         </div>
         <ul className="divide-y divide-line-soft">
@@ -591,9 +588,11 @@ function MemorySettingsSection() {
       {/* 后台守护引擎配置 */}
       <GroupCard>
         <div className="px-4 pb-1 pt-3">
-          <p className="text-caption font-medium text-graphite">后台守护引擎 (Guardian Engine)</p>
-          <p className="mt-0.5 text-caption leading-relaxed text-ash">
-            配置用于后台合并压缩（Auto-Consolidator）、每日总结与健康审查的轻量执行器与小模型。
+          <p
+            className="text-caption font-medium text-graphite"
+            title="配置用于后台合并压缩（Auto-Consolidator）、每日总结与健康审查的轻量执行器与小模型。"
+          >
+            后台守护引擎 (Guardian Engine)
           </p>
         </div>
         <SettingsRow
@@ -869,10 +868,12 @@ function HistorySettingsSection() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-body-sm font-semibold text-ink">历史会话展示偏好</h3>
-        <p className="mt-1 text-caption text-ash">
-          标为红色或执行失败的会话通常无法重现或继续交互。默认隐藏失败会话以保持界面整洁，可在需要排查故障或复盘时随时重新开启。
-        </p>
+        <h3
+          className="text-body-sm font-semibold text-ink"
+          title="标为红色或执行失败的会话通常无法重现或继续交互。默认隐藏失败会话以保持界面整洁，可在需要排查故障或复盘时随时重新开启。"
+        >
+          历史会话展示偏好
+        </h3>
       </div>
 
       <GroupCard>
@@ -961,11 +962,12 @@ function TerminalSettingsSection() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-body-sm font-semibold text-ink">对话终端</h3>
-        <p className="mt-1 text-caption text-ash">
-          对话页输入框工具栏的终端按钮唤起的快捷小终端（与「终端」主视图的 TUI 标签页互相独立）。
-          默认 PowerShell 7；机器上没装 pwsh 时 daemon 会自动回退到 Windows PowerShell / CMD。
-        </p>
+        <h3
+          className="text-body-sm font-semibold text-ink"
+          title="对话页输入框工具栏的终端按钮唤起的快捷小终端（与「终端」主视图的 TUI 标签页互相独立）。默认 PowerShell 7；机器上没装 pwsh 时 daemon 会自动回退到 Windows PowerShell / CMD。"
+        >
+          对话终端
+        </h3>
       </div>
 
       <GroupCard>

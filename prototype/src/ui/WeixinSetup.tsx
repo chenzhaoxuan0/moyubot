@@ -92,8 +92,9 @@ export function WeixinSetup({
             <MessageCircle size={15} />
           </div>
           <div>
-            <h4 className="text-body-sm font-medium text-ink">微信 iLink 官方协议接入</h4>
-            <p className="text-[11px] text-graphite">通过腾讯官方 iLink 机器人扫码配对，免封号风险</p>
+            <h4 className="text-body-sm font-medium text-ink" title="通过腾讯官方 iLink 机器人扫码配对，免封号风险">
+              微信 iLink 官方协议接入
+            </h4>
           </div>
         </div>
 
@@ -194,8 +195,11 @@ export function WeixinSetup({
           <span>启用微信数字快捷审批 (回复 1 允许 / 2 拒绝 / 3 始终允许)</span>
         </label>
         <div className="space-y-1">
-          <span className="block text-[11px] text-ash">
-            专属对话过滤 (Chat ID / OpenID，必填：仅该 OpenID 的私聊会得到应答，留空则不响应任何消息)
+          <span
+            className="block text-[11px] text-ash"
+            title="Chat ID / OpenID，必填：仅该 OpenID 的私聊会得到应答，留空则不响应任何消息"
+          >
+            专属对话过滤（必填）
           </span>
           <input
             value={account.chatId ?? ""}

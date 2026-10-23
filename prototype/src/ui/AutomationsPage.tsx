@@ -148,14 +148,14 @@ export function AutomationsPage() {
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-4xl px-8 pb-12">
+      {/* pt-5 与头部 mb-5 同值：说明行收进悬停后标题独占一行，顶部留白对齐下方间距 */}
+      <div className="mx-auto max-w-4xl px-8 pb-12 pt-5">
 
         <header className="mb-5 flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-body-lg font-medium text-ink">自动化</h1>
-            <p className="mt-0.5 text-body-sm text-graphite">
-              按日程自动派活给工作单元，跑完归档产出
-            </p>
+            <h1 className="text-body-lg font-medium text-ink" title="按日程自动派活给工作单元，跑完归档产出">
+              自动化
+            </h1>
           </div>
           <button
             onClick={() => setDialog({ mode: "create" })}

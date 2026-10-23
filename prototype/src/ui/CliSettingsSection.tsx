@@ -57,18 +57,15 @@ export function CliSettingsSection(): ReactElement {
 
   return (
     <div className="space-y-4">
-      <p className="-mt-2 text-body-sm leading-relaxed text-graphite">
-        工作台有一个零依赖的命令行客户端 <span className="font-mono text-ink">aw</span>（node≥22，
-        独立包 <span className="font-mono">cli/</span>）：GUI 能做的每件事都有命令行等价物——
-        让 agent 指挥工作台、写脚本批量操作、或在无 GUI 的服务器上驾驶它。每个 bot 工作区里
-        也播种了同名技能（<span className="font-mono">.agents/skills/agent-workbench/</span>），
-        bot 里的 agent 天然知道怎么用。
-      </p>
-
       {/* 安装与连接 */}
       <div className="overflow-hidden rounded-card border border-line bg-card">
         <div className="border-b border-line-soft px-4 pb-2 pt-3">
-          <p className="text-body-sm font-medium text-ink">安装与连接</p>
+          <p
+            className="text-body-sm font-medium text-ink"
+            title={`daemon 端点 ${endpoint}，凭证在 ~/.agent-workbench/token（aw 自动读取）；AGENT_WORKBENCH_URL / AGENT_WORKBENCH_TOKEN 可覆盖。退出码：0 成功 / 2 用法错 / 3 RPC 错 / 4 传输错（daemon 不在或 401）。`}
+          >
+            安装与连接
+          </p>
         </div>
         <div className="space-y-2.5 px-4 py-3">
           <div>
@@ -79,20 +76,18 @@ export function CliSettingsSection(): ReactElement {
             <p className="mb-1 text-caption text-ash">验证连通（daemon 正在跑时）</p>
             <Code>aw doctor</Code>
           </div>
-          <p className="text-caption leading-relaxed text-ash">
-            daemon 端点 <span className="font-mono text-graphite">{endpoint}</span>，
-            凭证在 <span className="font-mono text-graphite">~/.agent-workbench/token</span>（aw 自动读取）；
-            <span className="font-mono text-graphite">AGENT_WORKBENCH_URL / AGENT_WORKBENCH_TOKEN</span> 可覆盖。
-            退出码：0 成功 / 2 用法错 / 3 RPC 错 / 4 传输错（daemon 不在或 401）。
-          </p>
         </div>
       </div>
 
       {/* 常用命令 */}
       <div className="overflow-hidden rounded-card border border-line bg-card">
         <div className="border-b border-line-soft px-4 pb-2 pt-3">
-          <p className="text-body-sm font-medium text-ink">GUI 操作 × aw 命令对照</p>
-          <p className="mt-0.5 text-caption text-ash">任何操作先查 <span className="font-mono">aw methods</span>——它永远比文档新（全表见 docs/21 §6）</p>
+          <p
+            className="text-body-sm font-medium text-ink"
+            title="任何操作先查 aw methods——它永远比文档新（全表见 docs/21 §6）"
+          >
+            GUI 操作 × aw 命令对照
+          </p>
         </div>
         <ul className="divide-y divide-line-soft">
           {QUICK_MAP.map((r) => (

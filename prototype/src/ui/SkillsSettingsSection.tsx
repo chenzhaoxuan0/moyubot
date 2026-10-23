@@ -199,12 +199,6 @@ export function SkillsSettingsSection() {
 
   return (
     <div className="space-y-4">
-      <p className="-mt-2 text-body-sm leading-relaxed text-graphite">
-        停用 = 把技能文件夹移入技能源内的 <span className="font-mono text-ink">.disabled/</span> 目录，
-        对读取该源的所有执行器立即生效；恢复即搬回，文件一个不丢。
-        每组头部的执行器徽标就是影响范围 —— 专属目录只影响一家，公共目录（.agents）影响所有家。
-      </p>
-
       {/* 视图切换：分源查看 / 统合矩阵 */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex gap-1">
@@ -344,8 +338,11 @@ export function SkillsSettingsSection() {
       )}
 
       {activeRoot !== null && (
-        <p className="text-caption leading-relaxed text-ash">
-          项目级技能源按当前单元（{activeUnit?.name}）列出；切换侧栏单元后此处随之更新。
+        <p
+          className="text-caption text-ash"
+          title="项目级技能源按当前单元列出；切换侧栏单元后此处随之更新。"
+        >
+          项目级源跟随当前单元：{activeUnit?.name}
         </p>
       )}
     </div>

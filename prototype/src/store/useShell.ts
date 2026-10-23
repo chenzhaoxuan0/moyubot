@@ -86,7 +86,7 @@ export const SETTINGS_GROUPS: readonly { id: SettingsGroupId; title: string }[] 
 export const SETTINGS_SECTIONS: readonly SettingsSectionDef[] = [
   { id: "appearance", title: "外观", desc: "预设主题、十组配色、透明度、背景壁纸与表面排版", groupId: "basics", icon: "palette" },
   { id: "models", title: "执行器与模型", desc: "执行器实例、供应商与每个 CLI 的模型清单", groupId: "basics", icon: "brain" },
-  { id: "cli", title: "命令行 (aw)", desc: "aw CLI 的安装、连接与 GUI 操作对照——GUI 能做的每件事都有命令行等价物", groupId: "basics", icon: "terminal" },
+  { id: "cli", title: "命令行 (aw)", desc: "零依赖命令行客户端（node≥22，独立包 cli/）：agent 指挥工作台、脚本批量操作、无 GUI 服务器驾驶它；每个 bot 工作区播种同名技能", groupId: "basics", icon: "terminal" },
   { id: "history", title: "历史会话", desc: "会话时间轴过滤、失败记录隐藏与展示偏好", groupId: "basics", icon: "history" },
   { id: "archivedTasks", title: "归档任务", desc: "查看与恢复已归档的历史任务，放进抽屉不占侧栏空间", groupId: "basics", icon: "archive" },
   { id: "heartbeat", title: "心跳", desc: "心跳开关、周期、空闲阈值、提议超时与忽略上限 —— 待办自动提议的节拍", groupId: "basics", icon: "alarm" },
@@ -94,9 +94,9 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDef[] = [
   { id: "shortcuts", title: "快捷键", desc: "全局键位速查", groupId: "basics", icon: "keyboard" },
 
   { id: "context", title: "上下文清单", desc: "选一个 bot：注入矩阵与 SOUL / AGENTS / MEMORY / STANDING / USER 全部上下文文件的集中编辑", groupId: "agentCapabilities", icon: "book" },
-  { id: "memory", title: "记忆", desc: "语义事实 / 情节事件 / 程序性技能 三层记忆（对齐 waku）", groupId: "agentCapabilities", icon: "brain" },
-  { id: "skills", title: "技能", desc: "按技能源分组的技能清单与停用开关（.disabled/ 搬运）", groupId: "agentCapabilities", icon: "layers" },
-  { id: "mcp", title: "MCP 服务", desc: "分执行器管理各家原生配置里的 MCP：增删改、停用库、跨执行器复制", groupId: "agentCapabilities", icon: "plug" },
+  { id: "memory", title: "记忆", desc: "记忆就是项目文件夹里的普通 Markdown：MEMORY.md 恒注入，memory/daily/ 按天分片不注入，skills/ 是程序性记忆；跨会话检索是第四件事，单独授权、默认关", groupId: "agentCapabilities", icon: "brain" },
+  { id: "skills", title: "技能", desc: "停用 = 技能文件夹移入源内 .disabled/ 目录，对读取该源的所有执行器立即生效；恢复即搬回，文件一个不丢。每组头部的执行器徽标就是影响范围——专属目录只影响一家，公共目录（.agents）影响所有家", groupId: "agentCapabilities", icon: "layers" },
+  { id: "mcp", title: "MCP 服务", desc: "直接读写各执行器自己的配置文件（唯一真相源，原生 TUI 里改的这里也看得到）。停用 = 条目移出配置并存入停用库，恢复即写回；改对新会话生效，运行中的会话不受影响", groupId: "agentCapabilities", icon: "plug" },
   { id: "browserControl", title: "浏览器控制", desc: "playwright-mcp 一键扇出到全部执行器；隔离 / 接管（共享 Chrome）两模式", groupId: "agentCapabilities", icon: "globe" },
   { id: "computerControl", title: "电脑控制", desc: "执行器操作真实桌面（截图 / 键鼠 / 窗口）：总闸、急停与动作日志", groupId: "agentCapabilities", icon: "monitor" },
   { id: "remoteControl", title: "移动端远控", desc: "扫码直连手机 Web 触控界面、公网穿透与 IM 渠道守护状态", groupId: "agentCapabilities", icon: "smartphone" },

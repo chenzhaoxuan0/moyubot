@@ -243,12 +243,13 @@ export function RemoteControlDialog({ onClose, embedded = false }: { onClose: ()
               <Smartphone size={20} />
             </div>
             <div>
-              <h2 id={dialogTitleId} className="text-body font-semibold tracking-tight text-ink">
+              <h2
+                id={dialogTitleId}
+                className="text-body font-semibold tracking-tight text-ink"
+                title="三轨互联：局域网 Web 触控 + 公网穿透直连 + 离场 IM 渠道实时互动"
+              >
                 移动端远控中心
               </h2>
-              <p className="text-caption text-graphite">
-                三轨互联：局域网 Web 触控 + 公网穿透直连 + 离场 IM 渠道实时互动
-              </p>
             </div>
           </div>
           {!embedded && (
@@ -328,6 +329,7 @@ export function RemoteControlDialog({ onClose, embedded = false }: { onClose: ()
                   aria-label="选择本机网络接口"
                   value={selectedIp}
                   onChange={(e) => setSelectedIp(e.target.value)}
+                  title="确保手机与电脑连入同一 Wi-Fi，或使用 Tailscale 跨网访问。"
                   className="w-full rounded-lg border border-line bg-rail px-3 py-2 text-body-sm text-ink outline-none transition focus:border-teal"
                 >
                   {interfaces.map((iface) => (
@@ -344,9 +346,6 @@ export function RemoteControlDialog({ onClose, embedded = false }: { onClose: ()
                     </option>
                   ))}
                 </select>
-                <p className="text-[11px] text-ash">
-                  确保手机与电脑连入同一 Wi-Fi，或使用 Tailscale 跨网访问。
-                </p>
               </div>
 
               {/* 二维码与链接展示 */}
@@ -410,32 +409,23 @@ export function RemoteControlDialog({ onClose, embedded = false }: { onClose: ()
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div className="flex items-start gap-2.5 rounded-xl border border-line/60 bg-rail/40 p-3">
                   <Smartphone size={16} className="mt-0.5 shrink-0 text-teal" />
-                  <div>
-                    <h3 className="text-caption font-semibold text-ink">抗软键盘畸变</h3>
-                    <p className="text-[11px] text-ash">
-                      基于 100dvh 与弹性底抽屉，打字不遮挡消息流
-                    </p>
-                  </div>
+                  <h3 className="text-caption font-semibold text-ink" title="基于 100dvh 与弹性底抽屉，打字不遮挡消息流">
+                    抗软键盘畸变
+                  </h3>
                 </div>
 
                 <div className="flex items-start gap-2.5 rounded-xl border border-line/60 bg-rail/40 p-3">
                   <ShieldCheck size={16} className="mt-0.5 shrink-0 text-teal" />
-                  <div>
-                    <h3 className="text-caption font-semibold text-ink">手势触控审批</h3>
-                    <p className="text-[11px] text-ash">
-                      工具调用拦截门底部卡片呈现，支持大触控按钮快捷决策
-                    </p>
-                  </div>
+                  <h3 className="text-caption font-semibold text-ink" title="工具调用拦截门底部卡片呈现，支持大触控按钮快捷决策">
+                    手势触控审批
+                  </h3>
                 </div>
 
                 <div className="flex items-start gap-2.5 rounded-xl border border-line/60 bg-rail/40 p-3">
                   <Terminal size={16} className="mt-0.5 shrink-0 text-teal" />
-                  <div>
-                    <h3 className="text-caption font-semibold text-ink">虚拟按键终端</h3>
-                    <p className="text-[11px] text-ash">
-                      辅助终端包含 Esc / Tab / Ctrl-C 等快捷按键行
-                    </p>
-                  </div>
+                  <h3 className="text-caption font-semibold text-ink" title="辅助终端包含 Esc / Tab / Ctrl-C 等快捷按键行">
+                    虚拟按键终端
+                  </h3>
                 </div>
               </div>
             </div>
@@ -445,10 +435,12 @@ export function RemoteControlDialog({ onClose, embedded = false }: { onClose: ()
               {/* 顶部状态提示 */}
               <div className="flex items-center justify-between rounded-xl border border-line/60 bg-rail/40 p-4">
                 <div>
-                  <h3 className="text-body-sm font-semibold text-ink">脱离局域网 · 全球公网访问</h3>
-                  <p className="text-caption text-graphite">
-                    无需路由器端口映射，通过 Cloudflare Quick Tunnel 或自定义反代域名，手机在任何蜂窝网络下均可扫码秒连。
-                  </p>
+                  <h3
+                    className="text-body-sm font-semibold text-ink"
+                    title="无需路由器端口映射，通过 Cloudflare Quick Tunnel 或自定义反代域名，手机在任何蜂窝网络下均可扫码秒连。"
+                  >
+                    脱离局域网 · 全球公网访问
+                  </h3>
                 </div>
                 <button
                   onClick={() => void refreshData()}
@@ -529,14 +521,14 @@ export function RemoteControlDialog({ onClose, embedded = false }: { onClose: ()
                         </div>
                       </div>
 
-                      <div className="space-y-1.5 rounded-xl bg-teal-tint/50 p-3 text-caption text-graphite border border-teal/20">
-                        <div className="flex items-center gap-1.5 font-medium text-teal">
+                      <div className="rounded-xl bg-teal-tint/50 p-3 text-caption text-graphite border border-teal/20">
+                        <div
+                          className="flex items-center gap-1.5 font-medium text-teal"
+                          title="二维码包含加密访问令牌，外网访问受到与桌面端同级的鉴权保护与首响仲裁约束。"
+                        >
                           <ShieldCheck size={14} />
                           <span>端到端令牌鉴权保护</span>
                         </div>
-                        <p className="text-[11px] leading-relaxed">
-                          二维码包含加密访问令牌，外网访问受到与桌面端同级的鉴权保护与首响仲裁约束。
-                        </p>
                       </div>
                     </div>
                   </div>
@@ -563,13 +555,15 @@ export function RemoteControlDialog({ onClose, embedded = false }: { onClose: ()
                           <Cloud size={18} />
                         </div>
                         <div>
-                          <h4 className="text-body-sm font-semibold text-ink">Cloudflare Quick Tunnel</h4>
+                          <h4
+                            className="text-body-sm font-semibold text-ink"
+                            title="由 Cloudflare 官方提供临时加密隧道服务，自动生成 trycloudflare.com 域名，免配公网 IP 与路由器。"
+                          >
+                            Cloudflare Quick Tunnel
+                          </h4>
                           <span className="text-[11px] text-teal font-medium">推荐 · 零配置即开即用</span>
                         </div>
                       </div>
-                      <p className="text-[11px] leading-relaxed text-graphite">
-                        由 Cloudflare 官方提供临时加密隧道服务，自动生成 <code className="rounded bg-line-soft px-1 text-ink">trycloudflare.com</code> 域名，免配公网 IP 与路由器。
-                      </p>
                     </div>
 
                     {tunnelState?.cloudflaredAvailable ? (
@@ -612,13 +606,15 @@ export function RemoteControlDialog({ onClose, embedded = false }: { onClose: ()
                           <Globe size={18} />
                         </div>
                         <div>
-                          <h4 className="text-body-sm font-semibold text-ink">自定义域名 / Frp / Ngrok</h4>
+                          <h4
+                            className="text-body-sm font-semibold text-ink"
+                            title="如果您已配置 Frp / Ngrok / Cloudflare Tunnel 固定域名反代本机 daemon 端口，可直接在此填入。"
+                          >
+                            自定义域名 / Frp / Ngrok
+                          </h4>
                           <span className="text-[11px] text-ash">自建穿透 · 永久固定域名</span>
                         </div>
                       </div>
-                      <p className="text-[11px] leading-relaxed text-graphite">
-                        如果您已配置 Frp / Ngrok / Cloudflare Tunnel 固定域名反代本机 daemon 端口，可直接在此填入。
-                      </p>
                     </div>
 
                     <div className="space-y-2">
@@ -647,10 +643,12 @@ export function RemoteControlDialog({ onClose, embedded = false }: { onClose: ()
             <div className="space-y-5">
               <div className="flex items-center justify-between">
                 <div>
-                  <h3 className="text-body-sm font-semibold text-ink">离场 IM 渠道守护状态</h3>
-                  <p className="text-caption text-graphite">
-                    即使离开电脑或不在局域网，四大 IM 机器人也可接收指令并实时推送审批按钮。
-                  </p>
+                  <h3
+                    className="text-body-sm font-semibold text-ink"
+                    title="即使离开电脑或不在局域网，四大 IM 机器人也可接收指令并实时推送审批按钮。"
+                  >
+                    离场 IM 渠道守护状态
+                  </h3>
                 </div>
                 {activeUnit && (
                   <button
@@ -706,13 +704,13 @@ export function RemoteControlDialog({ onClose, embedded = false }: { onClose: ()
               </div>
 
               <div className="rounded-xl border border-line/60 bg-rail/40 p-4 text-caption leading-relaxed text-graphite">
-                <div className="flex items-center gap-1.5 font-medium text-ink">
+                <div
+                  className="flex items-center gap-1.5 font-medium text-ink"
+                  title="当 bot 遇到危险操作触发确认门时，局域网手机 Web、桌面端与所有已配置的 IM 渠道将同步收到审批请求。任何一端点击批准或拒绝后，系统立即实行首响仲裁，其余所有设备与 Bot 消息中的按钮将毫秒级自动置灰，绝无重复执行风险。"
+                >
                   <HelpCircle size={14} className="text-teal" />
                   <span>首响仲裁与多端协同机制</span>
                 </div>
-                <p className="mt-1 text-[11px] text-ash">
-                  当 bot 遇到危险操作触发确认门时，局域网手机 Web、桌面端与所有已配置的 IM 渠道将同步收到审批请求。任何一端点击批准或拒绝后，系统立即实行首响仲裁，其余所有设备与 Bot 消息中的按钮将毫秒级自动置灰，绝无重复执行风险。
-                </p>
               </div>
             </div>
           )}
@@ -754,7 +752,9 @@ function ChannelCard({
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-line-soft text-teal">
               <Icon size={16} />
             </div>
-            <h4 className="text-body-sm font-semibold text-ink">{name}</h4>
+            <h4 className="text-body-sm font-semibold text-ink" title={desc}>
+              {name}
+            </h4>
           </div>
           <span
             className={cn(
@@ -775,7 +775,6 @@ function ChannelCard({
             {isRunning ? "在线守护中" : accountsCount > 0 ? "已配置 (未连接)" : "未配置"}
           </span>
         </div>
-        <p className="text-[11px] leading-relaxed text-graphite">{desc}</p>
       </div>
 
       <div className="mt-3 flex items-center justify-between border-t border-line/40 pt-2 text-[11px] text-ash">

@@ -205,7 +205,12 @@ function SaveDirCard() {
     <div className="rounded-card border border-line bg-card">
       <div className="flex items-center gap-2 px-4 py-3">
         <FolderOpen size={13} className="shrink-0 text-teal" />
-        <p className="text-body-sm font-medium text-ink">保存位置</p>
+        <p
+          className="text-body-sm font-medium text-ink"
+          title="句柄保存在 IndexedDB（agent-workbench:image-fs），文件名格式 img-<时间>-<序号>-<prompt 短语>.<格式>；页面刷新后浏览器要求对文件夹重新授权一次。"
+        >
+          保存位置
+        </p>
         {saveDirName ? (
           <span className="rounded-chip bg-teal-tint px-1.5 py-0.5 font-mono text-[10px] text-teal">{saveDirName}</span>
         ) : (
@@ -214,8 +219,11 @@ function SaveDirCard() {
       </div>
       <div className="space-y-3 border-t border-line-soft px-4 py-3">
         {!supported && (
-          <p className="text-[10px] leading-relaxed text-ash">
-            当前浏览器不支持文件夹选择（File System Access 需要 Chromium 内核）。未设置时图片只存在浏览器内，「下载」按钮走浏览器默认下载目录。
+          <p
+            className="text-[10px] text-ash"
+            title="当前浏览器不支持文件夹选择（File System Access 需要 Chromium 内核）。未设置时图片只存在浏览器内，「下载」按钮走浏览器默认下载目录。"
+          >
+            当前浏览器不支持文件夹选择 —— 未设置时图片仅存浏览器内，悬停看详情。
           </p>
         )}
         <div className="flex items-center gap-2">
@@ -248,11 +256,6 @@ function SaveDirCard() {
           <ToggleSwitch checked={autoSave} onChange={setAutoSave} ariaLabel="image-autoSave" />
           <span className="text-caption text-graphite">生成成功后自动保存到该文件夹</span>
         </div>
-        <p className="text-[10px] leading-relaxed text-ash">
-          句柄保存在 IndexedDB（agent-workbench:image-fs），文件名格式
-          <code className="font-mono"> img-&lt;时间&gt;-&lt;序号&gt;-&lt;prompt 短语&gt;.&lt;格式&gt;</code>
-          ；页面刷新后浏览器要求对文件夹重新授权一次。
-        </p>
       </div>
     </div>
   );
@@ -298,7 +301,6 @@ function ProfileEditor({
   onChange: (patch: Partial<ImageProfile>) => void;
 }) {
   const isResponses = profile.apiMode === "responses";
-  const isGptImage = profile.model.toLowerCase().includes("gpt-image");
 
   return (
     <div className="rounded-card border border-line bg-card">
@@ -326,17 +328,19 @@ function ProfileEditor({
         <Row label="API Key">
           <ApiKeyInput profile={profile} onChange={onChange} />
         </Row>
-        <Row label="接入模式">
+        <Row
+          label="接入模式"
+          hint={
+            isResponses
+              ? "走 /v1/responses：模型出 image_generation 工具调用，可配推理力度与专职图像模型"
+              : "走 /v1/images/generations（生图）与 /v1/images/edits（参考图改图）"
+          }
+        >
           <Segmented
             value={profile.apiMode}
             options={(["images", "responses"] as const).map((m) => ({ value: m, label: API_MODE_LABEL[m] }))}
             onChange={(apiMode) => onChange({ apiMode: apiMode as ApiMode })}
           />
-          <p className="mt-1 text-[10px] leading-relaxed text-ash">
-            {isResponses
-              ? "走 /v1/responses：模型出 image_generation 工具调用，可配推理力度与专职图像模型"
-              : "走 /v1/images/generations（生图）与 /v1/images/edits（参考图改图）"}
-          </p>
         </Row>
         <Row label="模型">
           <input
@@ -387,37 +391,42 @@ function ProfileEditor({
             className={cn(INPUT_CLS, "w-28 tnum")}
           />
         </Row>
-        <Row label="response_format=b64_json">
+        <Row
+          label="response_format=b64_json"
+          hint="dall-e 族需要；gpt-image 恒返回 b64，不要开。非 gpt-image 模型：参数形态按 dall-e 族下发（尺寸族与 quality 取值不同，需要 response_format=b64_json）。"
+        >
           <ToggleSwitch
             checked={Boolean(profile.responseFormatB64Json)}
             onChange={(v) => onChange({ responseFormatB64Json: v })}
             ariaLabel="profile-responseFormatB64Json"
           />
-          <p className="mt-1 text-[10px] text-ash">dall-e 族需要；gpt-image 恒返回 b64，不要开。</p>
         </Row>
-        <Row label="Codex CLI 中转">
+        <Row
+          label="Codex CLI 中转"
+          hint="中转不支持 size/quality 参数：请求丢弃这两个字段，尺寸改写成 prompt 前缀（Generate at W×H resolution.），多张拆并发单发。"
+        >
           <ToggleSwitch checked={profile.codexCli} onChange={(v) => onChange({ codexCli: v })} ariaLabel="profile-codexCli" />
-          <p className="mt-1 text-[10px] leading-relaxed text-ash">
-            中转不支持 size/quality 参数：请求丢弃这两个字段，尺寸改写成 prompt 前缀
-            （Generate at W×H resolution.），多张拆并发单发。
-          </p>
         </Row>
         <Row label="流式传输">
           <ToggleSwitch checked={Boolean(profile.streamImages)} onChange={(v) => onChange({ streamImages: v })} ariaLabel="profile-streamImages" />
           {profile.streamImages && (
             <div className="mt-1.5 flex items-center gap-2">
-              <span className="text-[10px] text-ash">partial images</span>
+              <span className="text-[10px] text-ash" title="0–3 张过渡图，工作台内实时显示">
+                partial images
+              </span>
               <Stepper
                 value={profile.streamPartialImages ?? 0}
                 min={0}
                 max={3}
                 onChange={(v) => onChange({ streamPartialImages: v })}
               />
-              <span className="text-[10px] text-ash">0–3 张过渡图，工作台内实时显示</span>
             </div>
           )}
         </Row>
-        <Row label="透明背景实现">
+        <Row
+          label="透明背景实现"
+          hint="api：gpt-image 原生 background=transparent；local：canvas 抠图后处理（待接真实现，当前等效 api）。"
+        >
           <Segmented
             value={profile.transparentBackgroundMethod}
             options={[
@@ -426,15 +435,7 @@ function ProfileEditor({
             ]}
             onChange={(v) => onChange({ transparentBackgroundMethod: v as ImageProfile["transparentBackgroundMethod"] })}
           />
-          <p className="mt-1 text-[10px] leading-relaxed text-ash">
-            api：gpt-image 原生 background=transparent；local：canvas 抠图后处理（待接真实现，当前等效 api）。
-          </p>
         </Row>
-        {!isGptImage && !profile.codexCli && (
-          <p className="text-[10px] leading-relaxed text-ash">
-            非 gpt-image 模型：参数形态按 dall-e 族下发（尺寸族与 quality 取值不同，需要 response_format=b64_json）。
-          </p>
-        )}
       </div>
     </div>
   );
@@ -453,10 +454,12 @@ function hostOf(baseUrl: string): string {
   }
 }
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[152px_1fr] items-start gap-2">
-      <label className="pt-1.5 text-caption text-graphite">{label}</label>
+      <label className="pt-1.5 text-caption text-graphite" title={hint}>
+        {label}
+      </label>
       <div className="min-w-0">{children}</div>
     </div>
   );

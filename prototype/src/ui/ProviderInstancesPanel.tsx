@@ -498,10 +498,12 @@ export function ProviderInstancesPanel() {
       {/* 顶栏：两个独立按钮 —— 执行器探测 / 模型探测 */}
       <div className="flex items-center justify-between border-b border-line pb-2.5">
         <div>
-          <h2 className="text-body-sm font-medium text-ink">执行器与可用模型</h2>
-          <p className="text-caption text-ash">
-            工作台直接调度本地安装的 Agent CLI；模型清单单独探测，订阅里有新模型点一下就能刷出来。
-          </p>
+          <h2
+            className="text-body-sm font-medium text-ink"
+            title="工作台直接调度本地安装的 Agent CLI；模型清单单独探测，订阅里有新模型点一下就能刷出来。"
+          >
+            执行器与可用模型
+          </h2>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex flex-col items-end gap-0.5">
@@ -862,7 +864,9 @@ function InstanceEditor({
                   />
                 ) : (
                   <div className="flex items-center gap-1 shrink-0">
-                    <h3 className="text-body font-medium text-ink whitespace-nowrap">{name}</h3>
+                    <h3 className="text-body font-medium text-ink whitespace-nowrap" title={guide.desc}>
+                      {name}
+                    </h3>
                     <button
                       onClick={() => setEditingName(true)}
                       title="修改显示名称"
@@ -903,7 +907,6 @@ function InstanceEditor({
                   </span>
                 )}
               </div>
-              <p className="mt-1 text-caption text-ash leading-relaxed line-clamp-2">{guide.desc}</p>
             </div>
           </div>
 
@@ -956,10 +959,12 @@ function InstanceEditor({
       <section className="space-y-2">
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-body-sm font-medium text-ink">模型生态与选择器过滤</h3>
-            <p className="text-caption text-ash">
-              点击星星可置顶收藏；隐藏的模型不会出现在对话底栏的下拉菜单中，保持界面清爽。
-            </p>
+            <h3
+              className="text-body-sm font-medium text-ink"
+              title="点击星星可置顶收藏；隐藏的模型不会出现在对话底栏的下拉菜单中，保持界面清爽。"
+            >
+              模型生态与选择器过滤
+            </h3>
           </div>
         </div>
         <ProviderModelPanel runtimeId={runtimeId} displayName={name} />
@@ -970,16 +975,16 @@ function InstanceEditor({
         <section className="rounded-card border border-amber-500/30 bg-amber-500/5 p-4 space-y-2">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-0.5">
-              <div className="flex items-center gap-2 text-body-sm font-medium text-ink">
+              <div
+                className="flex items-center gap-2 text-body-sm font-medium text-ink"
+                title="开启后，在工作台启动 Antigravity 终端时将自动注入免审批参数，自动放行所有终端命令与文件读写，无需每步手动确认。"
+              >
                 <Zap size={14} className="text-amber-500" />
                 <span>终端默认启用 YOLO 免审批模式</span>
                 <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-semibold text-amber-500 font-mono">
                   --dangerously-skip-permissions
                 </span>
               </div>
-              <p className="text-caption text-ash leading-relaxed">
-                开启后，在工作台启动 Antigravity 终端时将自动注入免审批参数，自动放行所有终端命令与文件读写，无需每步手动确认。
-              </p>
             </div>
             <InstanceSwitch
               checked={agyDefaultYolo}
@@ -1136,11 +1141,10 @@ function NativeModelDefaultsCard({ runtimeId }: { runtimeId: string }) {
     <section className="rounded-card border border-line bg-card p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="flex items-center gap-1.5 text-body-sm font-medium text-ink">
+          <h3 className="flex items-center gap-1.5 text-body-sm font-medium text-ink" title={cfg.note}>
             <SlidersHorizontal size={13} className="text-teal" />
             原生模型默认值 · 写入 CLI 自己的配置
           </h3>
-          <p className="mt-0.5 text-caption text-ash">{cfg.note}</p>
           <ConfigPathBar path={cfg.configPath} />
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -1159,7 +1163,9 @@ function NativeModelDefaultsCard({ runtimeId }: { runtimeId: string }) {
       <div className="mt-3 grid grid-cols-1 gap-x-4 gap-y-2.5 sm:grid-cols-2">
         {cfg.fields.map((f) => (
           <label key={f.key} className="block min-w-0">
-            <span className="text-caption font-medium text-graphite">{f.label}</span>
+            <span className="text-caption font-medium text-graphite" title={f.hint}>
+              {f.label}
+            </span>
             {f.kind === "enum" ? (
               <select
                 value={drafts[f.key] ?? ""}
@@ -1204,7 +1210,6 @@ function NativeModelDefaultsCard({ runtimeId }: { runtimeId: string }) {
                 ))}
               </datalist>
             )}
-            {f.hint && <span className="mt-0.5 block text-[10px] leading-snug text-ash">{f.hint}</span>}
           </label>
         ))}
       </div>
@@ -1215,8 +1220,11 @@ function NativeModelDefaultsCard({ runtimeId }: { runtimeId: string }) {
           {saveErr}
         </p>
       )}
-      <p className="mt-2 text-[10px] leading-snug text-ash">
-        清空一个字段 = 删掉对应的键（回到 CLI 自己的默认）；写的是字段级补丁，配置文件里你手写的其余内容不会被改动。
+      <p
+        className="mt-2 text-[10px] text-ash"
+        title="清空一个字段 = 删掉对应的键（回到 CLI 自己的默认）；写的是字段级补丁，配置文件里你手写的其余内容不会被改动。"
+      >
+        清空字段 = 删键回默认；字段级补丁，不动你手写的其余内容。
       </p>
     </section>
   );
@@ -1395,11 +1403,10 @@ function ModelProvidersCard({ runtimeId }: { runtimeId: string }) {
     <section className="rounded-card border border-line bg-card p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="flex items-center gap-1.5 text-body-sm font-medium text-ink">
+          <h3 className="flex items-center gap-1.5 text-body-sm font-medium text-ink" title={info.note}>
             <Zap size={13} className="text-teal" />
             供应商与模型 · 写入 CLI 自己的配置
           </h3>
-          <p className="mt-0.5 text-caption text-ash">{info.note}</p>
           <ConfigPathBar path={info.configPath} />
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -1476,8 +1483,11 @@ function ModelProvidersCard({ runtimeId }: { runtimeId: string }) {
           {saveErr}
         </p>
       )}
-      <p className="mt-2 text-[10px] leading-snug text-ash">
-        条目里未列出的字段（headers / compat 一类）保存时原样保留；整表提交，删掉的供应商会从配置中移除。
+      <p
+        className="mt-2 text-[10px] text-ash"
+        title="条目里未列出的字段（headers / compat 一类）保存时原样保留；整表提交，删掉的供应商会从配置中移除。"
+      >
+        未列出字段原样保留；整表提交，删掉的供应商会从配置移除。
       </p>
     </section>
   );
@@ -1638,11 +1648,10 @@ function ModelCatalogCard({ runtimeId }: { runtimeId: string }) {
     <section className="rounded-card border border-line bg-card p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <h3 className="flex items-center gap-1.5 text-body-sm font-medium text-ink">
+          <h3 className="flex items-center gap-1.5 text-body-sm font-medium text-ink" title={info.note}>
             <Sparkles size={13} className="text-teal" />
             模型目录 · 增删与编辑（写入 CLI 目录文件）
           </h3>
-          <p className="mt-0.5 text-caption text-ash">{info.note}</p>
           {info.activePath !== null ? (
             <ConfigPathBar path={info.activePath} />
           ) : (
@@ -1769,8 +1778,11 @@ function ModelCatalogCard({ runtimeId }: { runtimeId: string }) {
           {saveErr}
         </p>
       )}
-      <p className="mt-2 text-[10px] leading-snug text-ash">
-        整表提交：删掉的条目即从目录移除{hiddenCount > 0 ? `；已隐藏 ${hiddenCount} 条（隐藏 ≠ 删除，随时点眼睛恢复）` : ""}。条目里未列出的其余字段（描述 / 优先级…）保存时原样保留。
+      <p
+        className="mt-2 text-[10px] text-ash"
+        title={`整表提交：删掉的条目即从目录移除${hiddenCount > 0 ? `；已隐藏 ${hiddenCount} 条（隐藏 ≠ 删除，随时点眼睛恢复）` : ""}。条目里未列出的其余字段（描述 / 优先级…）保存时原样保留。`}
+      >
+        整表提交：删掉的条目即从目录移除{hiddenCount > 0 ? ` · 已隐藏 ${hiddenCount} 条（可恢复）` : ""}。
       </p>
     </section>
   );

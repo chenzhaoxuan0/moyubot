@@ -62,10 +62,9 @@ function SectionCard({
       <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
         <div className="flex items-start gap-2">
           <span className="mt-0.5 text-teal">{icon}</span>
-          <div>
-            <h2 className="text-body font-medium text-ink">{title}</h2>
-            <p className="mt-1 text-body-sm text-graphite">{desc}</p>
-          </div>
+          <h2 className="text-body font-medium text-ink" title={desc}>
+            {title}
+          </h2>
         </div>
         {action}
       </div>
@@ -104,8 +103,9 @@ function ColorField({
         />
       </label>
       <div className="min-w-0 flex-1">
-        <span className="block text-caption text-ink">{label}</span>
-        {hint && <span className="block truncate text-caption text-ash">{hint}</span>}
+        <span className="block text-caption text-ink" title={hint}>
+          {label}
+        </span>
       </div>
       <input
         value={draft ?? value}
@@ -162,7 +162,9 @@ function SliderField({
   return (
     <div className={cn(disabled && "pointer-events-none opacity-40")}>
       <div className="flex items-center justify-between">
-        <span className="text-body-sm text-ink">{label}</span>
+        <span className="text-body-sm text-ink" title={hint}>
+          {label}
+        </span>
         <span className="rounded-chip bg-surface-hover px-2 py-0.5 text-caption font-mono text-graphite">
           {format(value)}
         </span>
@@ -178,7 +180,6 @@ function SliderField({
         aria-label={label}
         className="mt-2 w-full accent-teal"
       />
-      {hint && <p className="mt-1 text-caption text-ash">{hint}</p>}
     </div>
   );
 }
@@ -198,7 +199,9 @@ function SegmentedField<T extends string>({
 }) {
   return (
     <div>
-      <span className="block text-body-sm text-ink">{label}</span>
+      <span className="block text-body-sm text-ink" title={hint}>
+        {label}
+      </span>
       <div className="mt-1.5 inline-flex rounded-input border border-line bg-canvas p-0.5">
         {options.map((option) => (
           <button
@@ -216,7 +219,6 @@ function SegmentedField<T extends string>({
           </button>
         ))}
       </div>
-      {hint && <p className="mt-1 text-caption text-ash">{hint}</p>}
     </div>
   );
 }
@@ -318,14 +320,15 @@ export function AppearanceSettingsSection() {
                   )}
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-body-sm font-medium text-ink">{preset.name}</span>
+                  <span className="text-body-sm font-medium text-ink" title={preset.desc}>
+                    {preset.name}
+                  </span>
                   {active && (
                     <span className="flex h-4 w-4 items-center justify-center rounded-full bg-teal text-canvas">
                       <Check size={11} strokeWidth={3} />
                     </span>
                   )}
                 </div>
-                <p className="mt-1 text-caption leading-relaxed text-graphite">{preset.desc}</p>
               </button>
             );
           })}
@@ -338,7 +341,10 @@ export function AppearanceSettingsSection() {
         title="外观模式"
         desc="决定用哪一套配色档案。对应 DS 的 appearance 字段。"
       >
-        <div className="grid grid-cols-3 gap-3">
+        <div
+          className="grid grid-cols-3 gap-3"
+          title={`正在编辑「${resolvedAppearance === "dark" ? "深色" : "浅色"}」档案。切换模式会切到另一套档案，两套的改动各自独立保存。`}
+        >
           {(
             [
               { value: "light", label: "浅色", icon: Sun },
@@ -371,9 +377,6 @@ export function AppearanceSettingsSection() {
             );
           })}
         </div>
-        <p className="mt-3 text-caption text-ash">
-          正在编辑「{resolvedAppearance === "dark" ? "深色" : "浅色"}」档案。切换模式会切到另一套档案，两套的改动各自独立保存。
-        </p>
       </SectionCard>
 
       {/* ---------------------------------------------------- 显示视图模式 */}
@@ -406,8 +409,9 @@ export function AppearanceSettingsSection() {
               >
                 <Icon size={16} className={cn("mt-0.5 shrink-0", active ? "text-teal" : "text-graphite")} />
                 <div className="min-w-0 flex-1">
-                  <span className="block text-body-sm font-medium text-ink">{option.label}</span>
-                  <span className="block text-caption text-ash mt-0.5">{option.hint}</span>
+                  <span className="block text-body-sm font-medium text-ink" title={option.hint}>
+                    {option.label}
+                  </span>
                 </div>
                 {active && (
                   <span className="ml-auto flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-teal text-canvas">
@@ -418,10 +422,6 @@ export function AppearanceSettingsSection() {
             );
           })}
         </div>
-        <p className="mt-3 text-caption text-ash">
-          当前硬件检测为：{windowIsMobile ? "移动端（窄屏或触屏设备）" : "桌面端（宽屏桌面设备）"}。
-          若在手机上切换到了「电脑视图」，可随时在顶部标题栏点击「📱 切回手机视图」返回。
-        </p>
       </SectionCard>
 
       {/* ---------------------------------------------------- 底栏（任务栏） */}
@@ -432,11 +432,15 @@ export function AppearanceSettingsSection() {
       >
         <div className="flex items-center justify-between gap-4">
           <div className="min-w-0">
-            <p className="text-body-sm font-medium text-ink">锁定底栏高度</p>
-            <p className="mt-0.5 text-caption leading-relaxed text-ash">
-              {statusBarLocked
-                ? `已锁定在当前高度（${statusBarHeight}px）。解锁后可拖动底栏上缘调整。`
-                : "未锁定：拖动底栏上缘可在 28–44px 间调整（拉高显示任务详情行），双击手柄复位最薄档。"}
+            <p
+              className="text-body-sm font-medium text-ink"
+              title={
+                statusBarLocked
+                  ? `已锁定在当前高度（${statusBarHeight}px）。解锁后可拖动底栏上缘调整。`
+                  : "未锁定：拖动底栏上缘可在 28–44px 间调整（拉高显示任务详情行），双击手柄复位最薄档。"
+              }
+            >
+              锁定底栏高度
             </p>
           </div>
           <Toggle on={statusBarLocked} onChange={setStatusBarLocked} ariaLabel="锁定底栏高度" />

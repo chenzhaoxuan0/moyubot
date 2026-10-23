@@ -187,11 +187,6 @@ export function McpSettingsSection() {
 
   return (
     <div className="space-y-4">
-      <p className="-mt-2 text-body-sm leading-relaxed text-graphite">
-        直接读写各执行器自己的配置文件（唯一真相源，原生 TUI 里改的这里也看得到）。
-        停用 = 条目移出配置文件并存入停用库，恢复即写回；改对新会话生效，运行中的会话不受影响。
-      </p>
-
       {/* 视图切换：逐家（tab 进单家清单） / 矩阵（行=服务 × 列=执行器，cc-switch AppMatrix 形态） */}
       <div className="flex items-center gap-2">
         <div className="flex gap-1">
@@ -663,12 +658,13 @@ function EntryEditor({
   );
 }
 
-/** 编辑器字段：标题 + 一句说明 + 控件（对齐 cc-switch 的表单形态） */
+/** 编辑器字段：标题 + 控件（说明收进悬停，对齐 cc-switch 的表单形态） */
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <div>
-      <p className="text-caption font-medium text-graphite">{label}</p>
-      {hint !== undefined && <p className="mb-1 text-caption leading-relaxed text-ash">{hint}</p>}
+      <p className="text-caption font-medium text-graphite" title={hint}>
+        {label}
+      </p>
       {children}
     </div>
   );

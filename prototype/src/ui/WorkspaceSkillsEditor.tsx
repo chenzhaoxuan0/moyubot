@@ -101,11 +101,11 @@ export function WorkspaceSkillsEditor({ unit }: { unit: WorkUnit }): ReactElemen
 
   return (
     <div className="space-y-3">
-      <p className="-mt-1 text-[11px] leading-relaxed text-ash">
-        只管理这个 bot 工作目录内的技能（<span className="font-mono">.agents/skills/</span> 与
-        <span className="font-mono"> skills/</span>）。置顶只影响此页排序（存 bot.json）；
-        停用 = 搬进源内 <span className="font-mono">.disabled/</span>，对读取该源的一切执行器生效。
-        两个官方基础技能（agent-workbench / workbench-context）默认置顶——它们是 init 播种的基础能力。
+      <p
+        className="-mt-1 text-[11px] text-ash"
+        title="只管理这个 bot 工作目录内的技能（.agents/skills/ 与 skills/）。置顶只影响此页排序（存 bot.json）；停用 = 搬进源内 .disabled/，对读取该源的一切执行器生效。两个官方基础技能（agent-workbench / workbench-context）默认置顶——它们是 init 播种的基础能力。"
+      >
+        只管理本工作目录内的技能；置顶影响排序，停用搬入 .disabled/（悬停看全部语义）。
       </p>
 
       {err !== null && (

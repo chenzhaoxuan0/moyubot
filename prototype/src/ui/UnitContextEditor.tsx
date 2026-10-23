@@ -195,13 +195,20 @@ export function UnitContextEditor({ unitId }: { unitId: string }): ReactElement 
       {/* ---- 注入矩阵 ---- */}
       <div className="overflow-hidden rounded-card border border-line bg-canvas">
         <div className="px-3 pb-1 pt-2.5">
-          <p className="text-caption font-medium text-ink">注入清单 · {unit.name}</p>
-          <p className="mt-0.5 text-[11px] text-ash">写入 bot.json（contextManifest 节）——工作台、渠道、定时会话同一份</p>
+          <p
+            className="text-caption font-medium text-ink"
+            title="写入 bot.json（contextManifest 节）——工作台、渠道、定时会话同一份"
+          >
+            注入清单 · {unit.name}
+          </p>
         </div>
         <div className="divide-y divide-line-soft">
           <div className="flex items-center justify-between gap-3 px-3 py-2.5 bg-canvas/40">
             <div className="min-w-0">
-              <p className="text-caption font-semibold text-ink flex items-center gap-1.5">
+              <p
+                className="text-caption font-semibold text-ink flex items-center gap-1.5"
+                title="开启时，新开对话首轮自动按下方清单注入；关闭后开局默认 Bare，由用户在聊天输入框按需勾选。"
+              >
                 <span>新会话首轮自动注入</span>
                 <span
                   className={cn(
@@ -211,9 +218,6 @@ export function UnitContextEditor({ unitId }: { unitId: string }): ReactElement 
                 >
                   {manifest.firstTurnInject !== false ? "默认开启" : "默认关闭"}
                 </span>
-              </p>
-              <p className="mt-0.5 text-[11px] leading-snug text-ash">
-                开启时，新开对话首轮自动按下方清单注入；关闭后开局默认 Bare，由用户在聊天输入框按需勾选。
               </p>
             </div>
             <button
@@ -231,18 +235,20 @@ export function UnitContextEditor({ unitId }: { unitId: string }): ReactElement 
           </div>
           <div className="flex items-center justify-between gap-3 px-3 py-2.5">
             <div className="min-w-0">
-              <p className="text-caption font-medium text-ink flex items-center gap-1.5 flex-wrap">
+              <p
+                className="text-caption font-medium text-ink flex items-center gap-1.5 flex-wrap"
+                title={
+                  nativeReadsAgents
+                    ? `当前执行器${primaryRuntime !== "" ? `（${primaryRuntime}）` : ""}原生读取 —— auto 不重复注入（防双注）`
+                    : `当前执行器${primaryRuntime !== "" ? `（${primaryRuntime}）` : ""}未声明原生读取 —— auto 由工作台注入兜底`
+                }
+              >
                 <span>岗位说明书 · AGENTS.md</span>
                 {!hasSubstantiveContent(unit.agentsMd) && (
                   <span className="rounded px-1.5 py-0.5 bg-line-soft text-ash text-[10px] font-normal leading-none">
                     空内容 · 自动跳过
                   </span>
                 )}
-              </p>
-              <p className="mt-0.5 text-[11px] leading-snug text-ash">
-                {nativeReadsAgents
-                  ? `当前执行器${primaryRuntime !== "" ? `（${primaryRuntime}）` : ""}原生读取 —— auto 不重复注入（防双注）`
-                  : `当前执行器${primaryRuntime !== "" ? `（${primaryRuntime}）` : ""}未声明原生读取 —— auto 由工作台注入兜底`}
               </p>
             </div>
             <div className="flex shrink-0 rounded-btn border border-line p-0.5">
@@ -537,7 +543,7 @@ function ManifestRow({
   return (
     <div className="flex items-center justify-between gap-3 px-3 py-2.5">
       <div className="min-w-0">
-        <p className="text-caption font-medium text-ink flex items-center gap-1.5 flex-wrap">
+        <p className="text-caption font-medium text-ink flex items-center gap-1.5 flex-wrap" title={desc}>
           <span>{title}</span>
           {empty === true && (
             <span className="rounded px-1.5 py-0.5 bg-line-soft text-ash text-[10px] font-normal leading-none">
@@ -545,7 +551,6 @@ function ManifestRow({
             </span>
           )}
         </p>
-        <p className="mt-0.5 text-[11px] leading-snug text-ash">{desc}</p>
       </div>
       <Toggle on={on} onChange={onToggle} ariaLabel={title} />
     </div>
@@ -618,11 +623,11 @@ function SkillsBindingSection({
     <div className="px-3 py-2.5">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-caption font-medium text-ink">技能目录 · skills</p>
-          <p className="mt-0.5 text-[11px] leading-snug text-ash">
-            ⚠ 防双注：执行器原生就会发现自己的技能目录（.agents/skills 等）——多数情况
-            下**保持关闭**即可；此开关是给不列技能的执行器补一份目录索引（name + 路径，
-            不注 SKILL.md 全文）。名单只过滤这个 bot 的注入
+          <p
+            className="text-caption font-medium text-ink"
+            title="⚠ 防双注：执行器原生就会发现自己的技能目录（.agents/skills 等）——多数情况下保持关闭即可；此开关是给不列技能的执行器补一份目录索引（name + 路径，不注 SKILL.md 全文）。名单只过滤这个 bot 的注入"
+          >
+            技能目录 · skills
           </p>
         </div>
         <Toggle on={manifestSkills} onChange={onToggle} ariaLabel="技能目录注入" />
