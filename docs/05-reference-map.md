@@ -26,11 +26,14 @@
 | agents.md 规范 | 规范文档（本地克隆） | bot 的岗位说明书 | `AddBotDialog.tsx` | `C:\Users\chenziyu\project\Agent\zocdeusually\agents.md` | 无 |
 | termux-app | 本地克隆（GPL-3.0） | 移动端终端虚拟键盘辅助按键栏形式与排布（2x7 双行网格、倒 T 方向键集群、修饰键粘滞状态机） | `prototype/src/ui/mobile/MobileVirtualKeyBar.tsx` | `C:\Users\chenziyu\project\Agent\termux-app` | 无（纯前端触控交互） |
 | GrokBot | 视觉参照 | 侧栏 bot 头像形态 | `Sidebar.tsx` `UnitRow` | 无本地克隆（仅视觉参照） | 无 |
+| Apache Maka | 本地克隆（Apache-2.0，ASF 孵化中；**2026-10 引入的后期架构参照**，不在起步四家之列） | 对话账本归 host、对话谱系与分叉 | `backend/src/runtime/host.ts` `backend/src/store/db.ts` `prototype/src/core/events.ts` `prototype/src/ui/forkHistory.ts` | `C:\Users\chenziyu\project\Agent\maka` | `core/events.ts` RuntimeEvent union + `store/db.ts` 账本 seq 与血缘三列 + `session.events.since` 账本读通道 |
 
 > 上述 git 克隆（含 WeKnora 源码）已于 2026-09-29 全量 `git pull --ff-only` 同步至各自上游 HEAD；
 > WeKnora 源码带一处本地定制（docker-compose.yml 将 neo4j 端口映射改为 17474/17687，
 > 规避 Windows Hyper-V 动态保留端口），pull 时用 `--autostash` 保留，勿还原；
 > 同名备选目录（`dsh`、`dshwork`、`t3codeuse`、`pi`）均非上游克隆，真正的克隆以上表为准。
+> **Apache Maka 是 2026-10 后期引入的架构参照，不在上条 2026-09-29 全量同步范围内**——需要
+> 与上游对齐时自行 `git pull --ff-only`（上游为 ASF 孵化项目，master 可能有较大变动）。
 
 ---
 
@@ -187,7 +190,7 @@ ZCode 是工作台布局与交互习惯的**总参照**，几乎每个壳层文�
 
 ## 十二、许可证状况
 
-参照仓库均满足「只接受 Apache-2.0 / MIT」的硬约束：ZCode（Apache-2.0）、t3code / deepseek-harness / pi / gpt_image_playground / waku-agent（MIT）、WeKnora（Apache-2.0）。逐仓库的 HEAD 与活跃度证据见 `02-reference-audit.md`（waku-agent、gpt_image_playground、WeKnora 三家为后期引入，尚未补入该审计表）。
+参照仓库均满足「只接受 Apache-2.0 / MIT」的硬约束：ZCode（Apache-2.0）、t3code / deepseek-harness / pi / gpt_image_playground / waku-agent（MIT）、WeKnora（Apache-2.0）、Apache Maka（Apache-2.0，ASF 孵化中）。逐仓库的 HEAD 与活跃度证据见 `02-reference-audit.md`（waku-agent、gpt_image_playground、WeKnora、Apache Maka 四家为后期引入，尚未补入该审计表）。
 
 ---
 
@@ -233,7 +236,7 @@ ZCode 是工作台布局与交互习惯的**总参照**，几乎每个壳层文�
 | `extra-keys` 两行七列网格（`DEFAULT_IVALUE_EXTRA_KEYS`） | `MobileVirtualKeyBar.tsx` 主网格 | Row 1: `ESC / - HOME ↑ END PGUP`；Row 2: `TAB CTRL ALT ← ↓ → PGDN`。彻底消除单行横向滚动的低效，所有高频终端操作键一屏直达 |
 | 倒 T 方向键与导航集群（`HOME ↑ END PGUP` / `← ↓ → PGDN`） | 4 列导航区 | 上下垂直对齐、左右居中围绕、行首/行尾与翻页成列，极大提升移动端光标与命令历史翻查效率 |
 | 修饰键（`CTRL` / `ALT`）粘滞与锁定机制 | `ModifierState`（off → active → locked） | 单击一次生效后自动复位，双击锁定常驻；配合唤出 `Ctrl+C/D/Z/L/A/E` 快捷指令条，解决手机软键盘无 Ctrl 的痛点 |
-| 副键上滑手势（`{key: '-', popup: '|'}`） | `isSwipedUp` 触控手势 | 键位上滑触发副键（`-` 上滑为 `|`，`/` 上滑为 `\`，`ESC` 上滑为 `CLR` 清屏，`CTRL` 上滑为 `^C` 中断等） |
+| 副键上滑手势（`{key: '-', popup: '\|'}`） | `isSwipedUp` 触控手势 | 键位上滑触发副键（`-` 上滑为 `\|`，`/` 上滑为 `\`，`ESC` 上滑为 `CLR` 清屏，`CTRL` 上滑为 `^C` 中断等） |
 | 长按自动连发（`PRIMARY_REPETITIVE_KEYS`） | `isRepetitive` 定时器 | 方向键与翻页键长按 320ms 后以 70ms 间隔平滑连击，无需反复狂点屏幕 |
 
 > **开源许可证边界严正说明：**
@@ -255,3 +258,61 @@ ZCode 是工作台布局与交互习惯的**总参照**，几乎每个壳层文�
 | 每日记忆默认不进 system prompt，仅 /new 时注近 2 天（1200/2800 上限） | `src/auto-reply/reply/startup-context.ts:12-35` | 现状 daily 恒注入 | 不跟：本项目 daily 已按天分片 + 4000 截断，且 manifest 可关 |
 | Skills 只注目录（name+位置，不注全文） | `src/agents/system-prompt-skills.ts:15-36` | Phase 4 计划（docs/20 P4） | 未实施 |
 | 每 agent 独立 workspace 目录（天然隔离） | `src/agents/agent-scope-config.ts:468-492` | 「文件夹即 bot」本来就如此 | 互相印证，非借鉴 |
+
+---
+
+## 十七、Apache Maka —— 账本归 host 与对话分叉的架构蓝本
+
+本地克隆：`C:\Users\chenziyu\project\Agent\maka`（Apache Maka，Apache-2.0，ASF 孵化中）。
+
+**它是 2026-10 引入的后期架构参照，不在项目起步时的四家之列**——`02-reference-audit.md`
+只审计了 ZCode / t3code / dsh / pi。引入动因是写 ADR 0012 / 0013 时对「多执行器下对话上下文
+归谁」的调研：ADR 0012 的「host 拥有 canonical 对话账本」与 ADR 0013 的「分支 = 新物理段 +
+血缘字段 + 读模型折叠」两块骨架都出自这里。
+
+> **借鉴边界（必须先说清）**：本项目从 Maka 取的是**架构思想与交互语义**，**未复制或改编任何
+> Maka 的代码与资产**。两仓做过导出标识符 / 文件名 / 长字符串字面量 / 长注释行四路交叉比对：
+> 命中项全是 `RuntimeEvent`、`PermissionMode`、`PlanStep` 这类任何 agent harness 都会有的
+> 通用词与普适常量（`application/json; charset=utf-8` 等），**Maka 的特征性标识符
+> （`collapseSessionRevisions` / `sessionRevisionFamilyId` / `visibleSessionRevisionMembers` /
+> `createConversationCopySlice` / `revisionRootSessionId` / `revision-staged-context` /
+> `session-revision-coordinator` …）在本项目零命中**。
+>
+> 因此 Maka **不进** `THIRD-PARTY-NOTICES.md` 的「已并入 / 移植的代码与资产」表——该表是
+> 代码与资产登记表，本文件第 3-5 行已写明「设计层面的参照不在此列，出处见代码注释与本文」。
+
+### 十七·1 借鉴点清单
+
+| # | 借鉴点 | Maka 出处 | 本项目落点 | 取舍 |
+|---|---|---|---|---|
+| 1 | **日志即运行时**：host 拥有 canonical 对话账本，界面 / 历史 / 恢复都是这份日志的投影 | `ARCHITECTURE.zh-CN.md:45`；`packages/core/src/runtime-event-store.ts:127-266`；`docs/blogs/log-is-the-runtime.zh-CN.md:22-60` | ADR 0012；`backend/src/runtime/trace.ts`（append-only NDJSON + 会话内单调 seq）；`prototype/src/core/events.ts:39-277`（`RuntimeEvent` union）；`backend/src/store/db.ts`（`last_seq` / `turn_count`） | **借原则不借载体**：账本的载体形态（NDJSON 行、`TraceRecord`）来自 dsh（见 §三），Maka 给的是「把日志升格为唯一事实源，其余全是投影」 |
+| 2 | **单一 Host 是唯一 authority**：执行器会话降为可丢弃的租户，账本不依赖租户存活 | `ARCHITECTURE.zh-CN.md:24`；`docs/architecture/runtime-host-architecture.zh-CN.md:43` | `backend/src/runtime/host.ts:369`（`RuntimeHost`）；ADR 0012 不变量 5 | **借权责模型不借实现**：Maka 有 root writer lease + OS 文件锁 + `hostEpoch` 身份三元组；本项目是单进程 daemon 内的 `Map<SessionId, HostSession>`，无跨进程租约 |
+| 3 | **对话谱系 = 段的链**：血缘用会话行上的不可变字段表达，跨段由读取端拼接 | `packages/core/src/session.ts:273-297` | `backend/src/store/db.ts:270`（`conversation_id`）+ 血缘三列；`backend/src/runtime/host.ts`（谱系继承、`buildHandoffBlock`） | 借建模手法。**注意命名巧合**：Maka 的 `runtime-handoff.ts` 指的是「一次物理 invocation 结束后授权唯一后继物理尝试」的内部交接，与本项目的跨执行器上下文交接不是同一件事，不可混写 |
+| 4 | **分支边界语义二分**：`branch` = through（含锚点轮整轮）/ `revision` = before（不含锚点轮） | `packages/runtime/src/conversation-copy.ts:243-281` | ADR 0013 不变量 4（原文即写「照抄 Maka」）；`backend/src/runtime/host.ts` `resolveForkAtSeq`（`:1499-1501` 注释 + 实现） | 语义一致，**实现不同**：Maka 按消息 `turnId` 切片并物化复制；本项目按账本 seq 上界切片，只存区间引用、读取端拼接 |
+| 5 | **血缘字段只写一次**：分支身份落在会话行上，不进 upsert 的冲突更新 | `packages/core/src/session.ts:288-297` | `backend/src/store/db.ts:280-289`（`fork_of_session` / `fork_at_seq` / `fork_kind` 三列迁移），`:378-381` 注释「血缘三列只在 INSERT 时写入，冲突更新不触碰」 | 借「不可变列」手法。本项目另有 Maka 没有的 `fork_at_seq`（账本区间引用）——它是放弃物化复制后的替代物 |
+| 6 | **版本家族折叠**：同一句话的多个改写版折叠为一个槽位 +「version X of Y」导航 | `packages/core/src/session-revisions.ts:33-122` | `prototype/src/ui/forkHistory.ts:32-75`（`collapseForkVersions` / `forkVersionBadge`，代码注释已标注该模式）；消费方 `HistoryPane.tsx` `Sidebar.tsx` | 表面同构、**实现全异**：家族键（Maka 走 `revisionRootSessionId`，本项目走 `forkOf@forkAtSeq` 复合串）、代表选择规则（Maka 有 activeId 优先 + freshness 排序 + 隐藏 preparing，本项目用「降序首个 = 最新」）、输出形状（Maka 返回 `SessionSummary[]`，本项目返回带 `versionFrom`/`versionCount` 的 `ForkVersionSlot`）。**不能称代码移植** |
+| 7 | **编辑即草稿，发送才建段**：点编辑只回填 composer，取消零持久化 | `packages/ui/src/revision-staged-context.ts:247-253,280-353` | ADR 0013 不变量 5（原文即写「照抄 Maka」）；`prototype/src/store/useWorkbench.ts:257-263`（`pendingFork` 意图态）、`:932-951` | 交互契约一致。本项目用 zustand 单状态字段实现，Maka 是注入式生命周期对象（含 quote / attachment 归属再键与冲突 gate）——本项目没有这层复杂度，代价是「编辑重发不还原附件」 |
+| 8 | **分叉门禁**：源段运行中禁止分叉 | `packages/runtime-host/src/server/session-revision-coordinator.ts:347`（`session_busy`） | ADR 0013 不变量 6；`prototype/src/ui/Timeline.tsx:1177-1182` | 语义等价（源段 active turn 时拒绝复制）。注意：门禁谓词写在 Timeline 侧，**未复用** `runtimeSwitchBlocked`（后者按 ADR 0012 的放宽口径只拦 `awaiting_permission` / `awaiting_input`，分叉门禁额外拦 `running`） |
+| 9 | **侧聊语义**（**计划中，未实施**）：懒创建、父轮运行中可开、继承的父历史仅作参考 | `packages/core/src/side-conversation.ts:20-35`；`docs/side-conversation.md:20-62` | ADR 0013 P4（本项目尚无 side conversation 实现） | 只能写「计划中」，不可写成「已借鉴实现」 |
+
+### 十七·2 看了但明确没抄的
+
+这一节与「借鉴点清单」同等重要：不写清楚，读者会默认两边是同一套实现。
+
+| Maka 的做法 | 本项目为何不跟 | 出处 |
+|---|---|---|
+| 分支 = **全量物化复制**（复制消息 / runtime events / artifacts + 幂等 claim 表 + preparing/committed 两阶段协议 + 崩溃恢复） | 本项目分支只是「开新段」，无数据搬家；账本本就 host-owned 且跨段连续，读取端拼接即可。两阶段协议等出现真实的失败恢复需求再引入 | ADR 0013:10 |
+| **event→provider 无损重投影 runtime**（靠自持 agent loop，每轮从账本重建模型历史） | 13 个执行器适配器全是外部 CLI，agent loop 不在我们手里，做不到无损。只移植「账本归 host」的原则与租户协议 | ADR 0012:3,29 |
+| 切换执行器时**只允许切模型** | 执行器是一等公民，各执行器可跑的模型集合不同，模型切换替代不了执行器切换；多执行器是本产品立身之本 | ADR 0012:7 |
+| 跨执行器**原样迁移上下文** | 各执行器上下文本体是私有领地，格式互不通用；伪造的迁移是失真仿制品 | ADR 0012:8 |
+| **前端本地记忆谱系** | 投影必须来自账本侧事实，否则刷新即丢 | ADR 0012:10 |
+| **消息级树**（`parentUuid` 链） | 账本是事件流不是消息树，分支边界天然是 turn 边界，树挂在段上而不是消息上 | ADR 0013:12 |
+| **每分支头独立 conversation** | 侧栏折叠可解决呈现，谱系查询保持一棵树 | ADR 0013:28 |
+| 分支时**回滚工作区文件** | revision 只回退对话上下文、不回退文件；切回旧版本时文件残留是预期行为 | ADR 0013:30 |
+| **树视图** | 两个参考实现都不做树视图是有意的取舍——先平铺 + 版本家族折叠 | ADR 0013:33 |
+
+**概念上存在但本项目主动不做**（Maka 有、我们没有）：Agent Graph 多 agent 调度
+（`packages/core/src/agent-graph-*.ts`）——本项目 `docs/00-north-star.md` 已写明第一轮就把它
+移出需求；Context compaction 历史压缩、Eval 体系（Experiment → Cell → Attempt → Result）、
+Peer Mesh 远程多端、交互式 user-question 工具——这四块分别走自己的路线（compaction 记入
+ADR 0012 future work；eval 参照 waku-agent 见 §四；远程走 ADR 0006 双轨；question 工具未实现）。

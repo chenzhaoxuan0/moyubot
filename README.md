@@ -48,7 +48,8 @@ pnpm smoke        # daemon 冒烟
 ## 接入的 Agent CLI
 
 `zcode` · Claude Code · OpenAI Codex CLI · `pi` · MiniMax Code（`mcode`）·
-DeepSeek Harness（`dsh`）· OpenCode · Hermes · Kimi Code（`kimi`）· Antigravity（`agy`）
+DeepSeek Harness（`dsh`）· OpenCode · Hermes · Kimi Code（`kimi`）· Antigravity（`agy`）·
+Grok Build（xAI）· Cursor Agent · OpenClaw
 
 三种接入形态：一次性进程（每轮 spawn CLI 翻 JSONL）、ACP 常驻 stdio 子进程
 （带真权限审批流）、常驻 HTTP server + SSE（真 patch diff）。详见 `docs/03` §3.3.1。
@@ -156,11 +157,19 @@ agent-workbench/
 [`docs/05-reference-map.md`](docs/05-reference-map.md)，
 起步时四家仓库的代码走查实证见 [`docs/02-reference-audit.md`](docs/02-reference-audit.md)。
 
+**两类参照分开记账**：**设计层**（架构思想、交互语义、视觉范式）登记在本节与
+`docs/05-reference-map.md`；**代码与资产层**（真正复制或移植的源码、图标、文案）登记在
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。**不 fork 不等于零重合**——ZCode 的提交图
+泳道布局算法就是实打实的移植（已登记在 notices）；而像 Apache Maka 这样的**纯架构参照**，
+经导出标识符 / 文件名 / 长字符串字面量 / 长注释行四路交叉比对，**其特征性标识符在本项目
+零命中**——只借思想，不借实现。
+
 ### 架构与实现参照
 
 | 仓库 | 许可证 | 参照内容与主要落点 |
 |---|---|---|
 | **ZCode**（`zocdeusually/ZCode`） | Apache-2.0 | 外壳骨架总蓝本：Shell 布局「收起即归零」、设置覆盖层、命令中心、自动化页两条口径、空态原则（功能不因空而消失）；MCP 配置同步的原子写与坏文件 fail-stop 规范、技能扫描策略（点目录跳过）→ MCP / 技能管理 |
+| **Apache Maka**（Apache 软件基金会，孵化中） | Apache-2.0 | **仅架构与设计参照，未复制代码**（2026-10 引入的后期架构参照，非起步四家之一）：①「日志即运行时」——host 拥有 canonical 对话账本，界面 / 历史 / 恢复都是这份日志的投影；② 对话谱系 = 段的链；③ 分支 = 新物理段 + 血缘字段 + 读模型折叠 → `backend/src/runtime/host.ts` `backend/src/store/db.ts` `prototype/src/core/events.ts` `prototype/src/ui/forkHistory.ts`；逐条明细见本节下方「Apache Maka —— 借鉴点明细」 |
 | **t3code**（T3） | MIT | 供应商实例管理（ProviderInstancesPanel）、模型偏好系统（隐藏/排序/自定义模型）、harness 品牌图标、opencode 接入形态（serve + SSE） |
 | **deepseek-harness**（dsh） | MIT | 轨迹账本与轮次头、会话内页签、StatsPills/ModelsSection；其 ACP 协议实现是 dsh/mcode/hermes/kimi 四家 acp 接入的参照 |
 | **waku / waku-agent**（Sean Chen / ShenSeanChen） | MIT | 记忆三柱（语义事实/情节事件/程序性技能）与编排、管家（steward）机制 |
@@ -183,9 +192,53 @@ agent-workbench/
 第三方代码与资产（移植代码、品牌图标）的著作权与许可声明，
 见 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)。
 
-### 接入的开源 Agent CLI
+### Apache Maka（Apache 软件基金会，孵化中）—— 借鉴点明细
 
-上表「接入的 Agent CLI」所列九家均为开源项目：
-Claude Code、OpenAI Codex CLI、OpenCode、DeepSeek Harness、MiniMax Code、
-Kimi Code、Hermes（Nous Research）、pi（badlogic/pi-mono）、ZCode。
+Maka 是本项目 **2026-10 引入的后期架构参照**（不在项目起步时的四家之列——`docs/02` 只审计了
+ZCode / t3code / dsh / pi），引入动因是写 ADR 0012 / ADR 0013 时对「多执行器下对话上下文归谁」
+的调研。它是本项目**对话账本**与**对话分叉**两块设计的蓝本。
+
+> **借鉴边界先说清**：拿的是**架构思想与交互语义**，**未复制或改编任何 Maka 的代码与资产**。
+> 两仓做过导出标识符 / 文件名 / 长字符串字面量 / 长注释行四路交叉比对：命中项全是
+> `RuntimeEvent`、`PermissionMode`、`PlanStep` 这类任何 agent harness 都会有的通用词与普适常量，
+> **Maka 的特征性标识符（`collapseSessionRevisions` / `sessionRevisionFamilyId` /
+> `createConversationCopySlice` / `revision-staged-context` / `session-revision-coordinator` …）
+> 在本项目零命中**。因此 Maka 不进 `THIRD-PARTY-NOTICES.md` 的「已并入 / 移植的代码与资产」
+> 表——那是代码与资产登记表，设计层参照按该文件自己的政策留在本节与 `docs/05`。
+
+| # | 借鉴点 | Maka 出处 | 本项目落点 |
+|---|---|---|---|
+| 1 | **日志即运行时**：host 拥有 canonical 对话账本，界面、历史与恢复都是这份日志的投影 | `ARCHITECTURE.zh-CN.md:45`、`packages/core/src/runtime-event-store.ts` | ADR 0012；`backend/src/runtime/trace.ts`（append-only NDJSON + 会话内单调 seq）、`prototype/src/core/events.ts:39`（`RuntimeEvent` union）、`backend/src/store/db.ts`（`last_seq` / `turn_count`） |
+| 2 | **单一 Host 是唯一 authority**：执行器会话降为可丢弃的租户，账本不依赖租户存活 | `ARCHITECTURE.zh-CN.md:24`、`docs/architecture/runtime-host-architecture.zh-CN.md:43` | `backend/src/runtime/host.ts:369`（`RuntimeHost`）、ADR 0012 不变量 5 |
+| 3 | **对话谱系 = 段的链**：血缘用会话行上的不可变字段表达，跨段由读取端拼接 | `packages/core/src/session.ts:273-297` | `backend/src/store/db.ts:270`（`conversation_id`）+ 血缘三列、`backend/src/runtime/host.ts`（谱系继承与 HANDOFF 投影） |
+| 4 | **分支边界语义二分**：`branch` = through（含锚点轮整轮）/ `revision` = before（不含锚点轮） | `packages/runtime/src/conversation-copy.ts:243-281` | ADR 0013 不变量 4（原文标注「照抄 Maka」）、`backend/src/runtime/host.ts` `resolveForkAtSeq` |
+| 5 | **血缘字段只写一次**：分支身份落在会话行上，不进 upsert 的冲突更新 | `packages/core/src/session.ts:288-297` | `backend/src/store/db.ts:280-289`（`fork_of_session` / `fork_at_seq` / `fork_kind` 三列迁移） |
+| 6 | **版本家族折叠**：同一句话的多个改写版折叠为一个槽位 +「version X of Y」导航 | `packages/core/src/session-revisions.ts` | `prototype/src/ui/forkHistory.ts:32`（`collapseForkVersions`——代码注释已标注该模式） |
+| 7 | **编辑即草稿，发送才建段**：点编辑只回填 composer，取消零持久化 | `packages/ui/src/revision-staged-context.ts` | ADR 0013 不变量 5（原文标注「照抄 Maka」）、`prototype/src/store/useWorkbench.ts:257`（`pendingFork` 意图态） |
+| 8 | **分叉门禁**：源段运行中禁止分叉 | `packages/runtime-host/src/server/session-revision-coordinator.ts:347`（`session_busy`） | ADR 0013 不变量 6、`prototype/src/ui/Timeline.tsx:1177-1183`（idle 门禁） |
+| 9 | **侧聊语义**（**计划中，未实施**）：懒创建、父轮运行中可开、继承的父历史仅作参考 | `packages/core/src/side-conversation.ts`、`docs/side-conversation.md` | ADR 0013 P4（未做） |
+
+**看了但明确没抄的**——这部分同样要写清楚，否则「借鉴」二字会让人误以为两边是同一套实现：
+
+| Maka 的做法 | 本项目为何不跟 |
+|---|---|
+| 分支 = **全量物化复制**（复制消息 / runtime events / artifacts + 幂等 claim 表 + preparing/committed 两阶段协议 + 崩溃恢复） | 本项目分支只是「开新段」，无数据搬家；账本本就 host-owned 且跨段连续，读取端拼接即可（ADR 0013） |
+| event→provider **无损重投影 runtime**（靠自持 agent loop，每轮从账本重建模型历史） | 13 个执行器适配器全是外部 CLI，agent loop 不在我们手里，做不到无损；只移植「账本归 host」的原则与租户协议（ADR 0012） |
+| 切换执行器时只允许**切模型** | 执行器是一等公民，各执行器可跑的模型集合不同；多执行器是本产品立身之本（ADR 0012） |
+| 跨执行器**原样迁移上下文** | 各执行器上下文是私有领地，格式互不通用，伪造的迁移是失真仿制品（ADR 0012） |
+| **消息级树**（`parentUuid` 链） | 账本是事件流不是消息树，分支边界天然是 turn 边界，树挂在段上而非消息上（ADR 0013） |
+| 分支时**回滚工作区文件** | revision 只回退对话上下文、不回退文件；切回旧版本时文件残留是预期行为（ADR 0013） |
+
+### 接入的 Agent CLI：清单与许可
+
+本项目共注册 **13 个执行器适配器**（`backend/src/index.ts` 的注册表）：ZCode、
+OpenAI Codex CLI、Claude Code、pi、MiniMax Code（`mcode`）、DeepSeek Harness（`dsh`）、
+OpenCode、Hermes、Kimi Code、Google Antigravity（`agy`）、Grok Build（xAI）、
+Cursor Agent、OpenClaw。
+
+其中开源的是 ZCode 与 OpenAI Codex CLI（Apache-2.0）、OpenCode / DeepSeek Harness /
+MiniMax Code / Kimi Code / Hermes / pi / OpenClaw（MIT）、Grok Build（Apache-2.0）；
+**Claude Code 走 Anthropic 专有商业条款，Antigravity 与 Cursor Agent 为专有分发**——
+本项目对这三家只做协议对接与品牌标识，不复制、不分发其代码。
+
 名称与 logo 归各自所有者，本项目中的使用仅用于标识集成关系。

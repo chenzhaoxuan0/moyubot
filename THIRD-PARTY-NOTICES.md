@@ -21,8 +21,10 @@
 ## 品牌
 
 各 CLI 名称与 logo（Claude、Codex、OpenAI、DeepSeek、MiniMax、Kimi、OpenCode、
-Hermes 等）是其各自所有者的商标。本项目中的使用仅用于标识集成关系，
-不构成对这些项目的认可或归属声明。
+Hermes、Antigravity、Grok、Cursor、OpenClaw、pi、ZCode 等）是其各自所有者的商标。
+本项目中的使用仅用于标识集成关系，不构成对这些项目的认可或归属声明。
+其中 Claude Code 走 Anthropic 专有商业条款、Antigravity 与 Cursor Agent 为专有分发——
+本项目对这三家只做协议对接与品牌标识，不复制、不分发其代码。
 
 ## 原始许可文本
 
