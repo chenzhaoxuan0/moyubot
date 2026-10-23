@@ -20,7 +20,6 @@ import {
 } from "../store/useImageStudio.ts";
 import { useShell } from "../store/useShell.ts";
 import { ensureSavePermission } from "../core/imageSave.ts";
-import { TitleBarClearance } from "./WindowControls.tsx";
 import { cn } from "./cn.ts";
 
 /**
@@ -46,14 +45,18 @@ export function ImageStudioPage() {
   return (
     /* 头在滚动容器之外（固定 48px + 下方 flex-1 滚动）：滚动条不再越过 HEAD */
     <div className="flex h-full min-h-0 flex-col">
-      {/* 面包屑顶带 —— 统一在侧边栏返回工作台 */}
-      <div className="shrink-0 border-b border-line bg-canvas">
-        <div className="titlebar-drag mx-auto flex h-12 max-w-4xl items-center gap-2 px-8">
+      {/* 面包屑顶带 —— 统一在侧边栏返回工作台。titlebar-drag 挂整宽外层条；
+          no-drag 占位绝对锚定行右缘（落在窗口按钮带正下方） */}
+      <div className="titlebar-drag relative h-12 shrink-0 border-b border-line bg-canvas">
+        <div className="mx-auto flex h-12 max-w-4xl items-center gap-2 px-8">
           <span className="text-body-sm font-medium text-ink">出图工作台</span>
           <span className="rounded-chip bg-teal-tint px-1.5 py-0.5 text-[10px] text-teal">OpenAI 兼容 images / responses</span>
-          {/* 让出右上角窗口控制钮带（drag 行的行内 no-drag 占位，浏览器为 0） */}
-          <TitleBarClearance width="var(--wco-w, 0px)" push />
         </div>
+        <div
+          aria-hidden
+          className="titlebar-no-drag absolute right-0 top-0 h-full"
+          style={{ width: "var(--wco-w, 0px)" }}
+        />
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">

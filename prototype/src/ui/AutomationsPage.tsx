@@ -32,7 +32,6 @@ import { asUnitId } from "../core/units.ts";
 import { useBacklog } from "../store/useBacklog.ts";
 import { fetchResumableSessions, type ResumableSession } from "../adapters/daemon/client.ts";
 import { AutomationDialog, type AutomationDialogPrefill } from "./AutomationDialog.tsx";
-import { TitleBarClearance } from "./WindowControls.tsx";
 import { cn } from "./cn.ts";
 
 /**
@@ -138,14 +137,19 @@ export function AutomationsPage() {
     /* 头在滚动容器之外（固定 48px + 下方 flex-1 滚动）：sticky-in-scroller 的
        旧结构会让滚动条轨道顶到窗口最上缘，从 HEAD 上面穿出去压住窗口控制钮 */
     <div className="flex h-full min-h-0 flex-col">
-      {/* 面包屑顶带 —— 统一在侧边栏返回工作台 */}
-      <div className="shrink-0 border-b border-line bg-canvas">
-        <div className="titlebar-drag mx-auto flex h-12 max-w-4xl items-center gap-2 px-8">
+      {/* 面包屑顶带 —— 统一在侧边栏返回工作台。titlebar-drag 挂整宽外层条，
+          no-drag 占位绝对锚定行右缘（减法只对 drag 行的后代生效，且必须落在
+          窗口按钮带正下方——留在居中列里会在头右侧挖出一个拖不动的洞） */}
+      <div className="titlebar-drag relative h-12 shrink-0 border-b border-line bg-canvas">
+        <div className="mx-auto flex h-12 max-w-4xl items-center gap-2 px-8">
           <span className="text-body-sm font-medium text-ink">自动化</span>
           <span className="rounded-chip bg-teal-tint px-1.5 py-0.5 text-[10px] text-teal">定时巡航与自动化触发</span>
-          {/* 让出右上角窗口控制钮带（drag 行的行内 no-drag 占位，浏览器为 0） */}
-          <TitleBarClearance width="var(--wco-w, 0px)" push />
         </div>
+        <div
+          aria-hidden
+          className="titlebar-no-drag absolute right-0 top-0 h-full"
+          style={{ width: "var(--wco-w, 0px)" }}
+        />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
       {/* pt-5 与头部 mb-5 同值：说明行收进悬停后标题独占一行，顶部留白对齐下方间距 */}
@@ -377,15 +381,15 @@ function AutomationCard({
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="rounded-chip bg-line-soft px-2 py-0.5 text-caption text-graphite">
+        <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-graphite">
           {describeSchedule(a)}
         </span>
-        <span className={cn("flex items-center gap-1 rounded-chip px-2 py-0.5 text-caption", meta.cls)}>
+        <span className={cn("flex shrink-0 items-center gap-1 whitespace-nowrap rounded-chip px-2 py-0.5 text-caption", meta.cls)}>
           <Icon size={12} />
           {meta.label}
         </span>
         {!a.enabled && (
-          <span className="rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">已暂停</span>
+          <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">已暂停</span>
         )}
       </div>
 
@@ -489,72 +493,78 @@ function AutomationCard({
         </div>
       )}
 
-      <div className="mt-auto flex items-center gap-2 border-t border-line-soft pt-2.5">
-        <span className="font-mono text-caption text-ash">{a.runtimeId}</span>
-        {/* 投递目标：发给新对话 vs 往老对话里发一条。用户建任务时最容易误解的就是这个 */}
-        <span
-          className={cn(
-            "rounded-chip px-1.5 py-px text-caption",
-            a.dispatchTarget === "existing_session" ? "bg-teal-tint text-teal" : "bg-line-soft text-ash",
-          )}
-          title={a.dispatchTarget === "existing_session" ? "到点把提示词当一条消息发进已有的对话（对话已结束会自动接回来）" : "到点新开一个对话，把提示词当第一句话"}
-        >
-          {a.dispatchTarget === "existing_session" ? "发到已有对话" : "新对话"}
-        </span>
-        {/* 钉了具体对话就说清楚是哪一段 —— 「发到已有对话」本身用户无从判断 */}
-        {a.dispatchTarget === "existing_session" && (
-          <span
-            className="max-w-[15rem] truncate rounded-chip bg-line-soft px-1.5 py-px text-caption text-graphite"
-            title={a.targetSessionId ?? undefined}
-          >
-            {a.targetSessionId === null || a.targetSessionId === undefined || a.targetSessionId === ""
-              ? "自动选最近一个"
-              : (sessionTitles.get(a.targetSessionId) ?? a.targetSessionId)}
-          </span>
-        )}
-        {/* 自动排的续跑要标出来：否则用户看到一条自己没建过的任务会以为系统乱排 */}
-        {a.origin === "quota_resume" && (
-          <span
-            className="rounded-chip bg-amber-500/10 px-1.5 py-px text-caption text-amber-600"
-            title="用量耗尽时自动排的续跑任务，到点往刚才中断的那个对话里发一句「继续」"
-          >
-            用量续跑
-          </span>
-        )}
-        {/* 执行方式标记：TUI = 到点在前端拉终端；后台 = headless 会话（不弹终端） */}
-        <span
-          className={cn(
-            "rounded-chip px-1.5 py-px text-caption",
-            a.launchMode === "headless" ? "bg-line-soft text-ash" : "bg-teal-tint text-teal",
-          )}
-          title={a.launchMode === "headless" ? "纯后台 headless 会话执行" : "到点在前端拉起执行器 TUI（免审批）"}
-        >
-          {a.launchMode === "headless" ? "后台" : "TUI"}
-        </span>
-        <button
-          onClick={() => void runNow(a.id)}
-          className="flex items-center gap-1 rounded-btn px-1.5 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink"
-        >
-          <Play size={12} />
-          立即运行
-        </button>
-        <button
-          role="switch"
-          aria-checked={a.enabled}
-          aria-label={`${a.name} 开关`}
-          onClick={() => void toggle(a.id)}
-          className={cn(
-            "relative ml-auto h-5 w-9 shrink-0 rounded-chip transition",
-            a.enabled ? "bg-teal" : "bg-line",
-          )}
-        >
+      {/* 底部两行：元信息带可换行（chip 一律不内折，宁可整枚换行），
+          动作行独立 —— 此前七个元素挤一行，窄窗口时按钮被压成竖排文字 */}
+      <div className="mt-auto space-y-2 border-t border-line-soft pt-2.5">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="shrink-0 whitespace-nowrap font-mono text-caption text-ash">{a.runtimeId}</span>
+          {/* 投递目标：发给新对话 vs 往老对话里发一条。用户建任务时最容易误解的就是这个 */}
           <span
             className={cn(
-              "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all",
-              a.enabled ? "left-[18px]" : "left-0.5",
+              "shrink-0 whitespace-nowrap rounded-chip px-1.5 py-px text-caption",
+              a.dispatchTarget === "existing_session" ? "bg-teal-tint text-teal" : "bg-line-soft text-ash",
             )}
-          />
-        </button>
+            title={a.dispatchTarget === "existing_session" ? "到点把提示词当一条消息发进已有的对话（对话已结束会自动接回来）" : "到点新开一个对话，把提示词当第一句话"}
+          >
+            {a.dispatchTarget === "existing_session" ? "发到已有对话" : "新对话"}
+          </span>
+          {/* 钉了具体对话就说清楚是哪一段 —— 「发到已有对话」本身用户无从判断 */}
+          {a.dispatchTarget === "existing_session" && (
+            <span
+              className="min-w-0 max-w-[15rem] shrink truncate rounded-chip bg-line-soft px-1.5 py-px text-caption text-graphite"
+              title={a.targetSessionId ?? undefined}
+            >
+              {a.targetSessionId === null || a.targetSessionId === undefined || a.targetSessionId === ""
+                ? "自动选最近一个"
+                : (sessionTitles.get(a.targetSessionId) ?? a.targetSessionId)}
+            </span>
+          )}
+          {/* 自动排的续跑要标出来：否则用户看到一条自己没建过的任务会以为系统乱排 */}
+          {a.origin === "quota_resume" && (
+            <span
+              className="shrink-0 whitespace-nowrap rounded-chip bg-amber-500/10 px-1.5 py-px text-caption text-amber-600"
+              title="用量耗尽时自动排的续跑任务，到点往刚才中断的那个对话里发一句「继续」"
+            >
+              用量续跑
+            </span>
+          )}
+          {/* 执行方式标记：TUI = 到点在前端拉终端；后台 = headless 会话（不弹终端） */}
+          <span
+            className={cn(
+              "shrink-0 whitespace-nowrap rounded-chip px-1.5 py-px text-caption",
+              a.launchMode === "headless" ? "bg-line-soft text-ash" : "bg-teal-tint text-teal",
+            )}
+            title={a.launchMode === "headless" ? "纯后台 headless 会话执行" : "到点在前端拉起执行器 TUI（免审批）"}
+          >
+            {a.launchMode === "headless" ? "后台" : "TUI"}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => void runNow(a.id)}
+            className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn px-1.5 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink"
+          >
+            <Play size={12} />
+            立即运行
+          </button>
+          <button
+            role="switch"
+            aria-checked={a.enabled}
+            aria-label={`${a.name} 开关`}
+            onClick={() => void toggle(a.id)}
+            className={cn(
+              "relative ml-auto h-5 w-9 shrink-0 rounded-chip transition",
+              a.enabled ? "bg-teal" : "bg-line",
+            )}
+          >
+            <span
+              className={cn(
+                "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all",
+                a.enabled ? "left-[18px]" : "left-0.5",
+              )}
+            />
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -834,7 +834,12 @@ function CustomPromptEditor({
       <div className="flex items-center justify-between gap-2 px-3 py-2.5 bg-canvas/40 border-b border-line-soft">
         <div className="flex items-center gap-2 min-w-0">
           <MessageSquareQuote size={13} className="shrink-0 text-teal" />
-          <p className="text-caption font-medium text-ink">工作区自定义提示词 · Custom Prompt</p>
+          <p
+            className="text-caption font-medium text-ink"
+            title="在执行器已有系统提示词之外，为本工作区注入自定义前置指引。留空时不注入任何 Token；想让 Bot 记住特定工作习惯、业务规则或引导其调用检索 Skill 时推荐使用。"
+          >
+            工作区自定义提示词 · Custom Prompt
+          </p>
           <span
             className={cn(
               "rounded-chip px-1.5 py-0.5 text-[10px] font-medium leading-none",
@@ -870,9 +875,6 @@ function CustomPromptEditor({
         </div>
       </div>
       <div className="p-3 space-y-2">
-        <p className="text-[11px] leading-snug text-ash">
-          在执行器已有系统提示词之外，为本工作区注入自定义前置指引。留空时不注入任何 Token；想让 Bot 记住特定工作习惯、业务规则或引导其调用检索 Skill 时推荐使用。
-        </p>
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -979,7 +981,9 @@ function EditorShell({
       >
         <div className="flex min-w-0 items-center gap-2">
           {Icon && <Icon size={13} className={cn("shrink-0", missing ? "text-ash/50" : "text-teal")} />}
-          <p className={cn("text-caption font-medium", missing ? "text-ash" : "text-ink")}>{title}</p>
+          <p className={cn("text-caption font-medium", missing ? "text-ash" : "text-ink")} title={desc}>
+            {title}
+          </p>
           {missing && (
             <span
               className="rounded bg-line-soft/60 px-1.5 py-0.5 text-[10px] font-normal leading-none text-ash/80"
@@ -1017,7 +1021,6 @@ function EditorShell({
 
       {!collapsed && (
         <div className="border-t border-line-soft">
-          <p className={cn("px-3 pt-2 text-[11px] leading-snug", missing ? "text-ash/70" : "text-ash")}>{desc}</p>
           {template !== undefined && (
             <div className="px-3 pt-1.5">
               {draft.trim() === "" ? (

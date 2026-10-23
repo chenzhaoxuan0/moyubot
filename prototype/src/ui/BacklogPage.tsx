@@ -31,7 +31,6 @@ import { useBacklog } from "../store/useBacklog.ts";
 import { useWorkbench, visibleModelsFor } from "../store/useWorkbench.ts";
 import { ModelSelect } from "./ModelSelect.tsx";
 import { BacklogDialog } from "./BacklogDialog.tsx";
-import { TitleBarClearance } from "./WindowControls.tsx";
 import { NumField } from "./NumField.tsx";
 import { cn } from "./cn.ts";
 
@@ -107,13 +106,18 @@ export function BacklogPage(): ReactElement {
   return (
     /* 头在滚动容器之外（固定 48px + 下方 flex-1 滚动）：滚动条不再越过 HEAD */
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-b border-line bg-canvas">
-        <div className="titlebar-drag mx-auto flex h-12 max-w-4xl items-center gap-2 px-8">
+      {/* titlebar-drag 挂整宽外层条；no-drag 占位绝对锚定行右缘（落在窗口按钮带
+          正下方——留在居中列里会在头右侧挖出一个拖不动的洞） */}
+      <div className="titlebar-drag relative h-12 shrink-0 border-b border-line bg-canvas">
+        <div className="mx-auto flex h-12 max-w-4xl items-center gap-2 px-8">
           <span className="text-body-sm font-medium text-ink">待办</span>
           <span className="rounded-chip bg-teal-tint px-1.5 py-0.5 text-[10px] text-teal">目标驱动 · 空闲心跳 · 确认门</span>
-          {/* 让出右上角窗口控制钮带（drag 行的行内 no-drag 占位，浏览器为 0） */}
-          <TitleBarClearance width="var(--wco-w, 0px)" push />
         </div>
+        <div
+          aria-hidden
+          className="titlebar-no-drag absolute right-0 top-0 h-full"
+          style={{ width: "var(--wco-w, 0px)" }}
+        />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto max-w-4xl px-8 pb-12 pt-5">
@@ -292,15 +296,15 @@ function BacklogCard({
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className={cn("rounded-chip px-2 py-0.5 text-caption", STATUS_CHIP[item.status])}>
+        <span className={cn("shrink-0 whitespace-nowrap rounded-chip px-2 py-0.5 text-caption", STATUS_CHIP[item.status])}>
           {BACKLOG_STATUS_LABEL[item.status]}
         </span>
         {item.size !== null && (
-          <span className="rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">{item.size === "big" ? "大" : "小"}</span>
+          <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">{item.size === "big" ? "大" : "小"}</span>
         )}
-        {item.source === "inbox" && <span className="rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">收件箱</span>}
+        {item.source === "inbox" && <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">收件箱</span>}
         {item.status === "sleeping" && item.ignoreCount > 0 && (
-          <span className="rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">忽略 {item.ignoreCount} 次</span>
+          <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">忽略 {item.ignoreCount} 次</span>
         )}
       </div>
 
@@ -348,12 +352,12 @@ function BacklogCard({
         </div>
       </dl>
 
-      {/* 状态化动作带 */}
-      <div className="mt-auto flex items-center gap-2 border-t border-line-soft pt-2.5">
+      {/* 状态化动作带：可换行，按钮/状态一律不内折（窄窗口宁可整枚换行） */}
+      <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-line-soft pt-2.5">
         {item.status === "ready" && (
           <button
             onClick={() => void runNow(item.id)}
-            className="flex items-center gap-1 rounded-btn px-1.5 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink"
+            className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn px-1.5 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink"
           >
             <Play size={12} />
             立即执行
@@ -362,7 +366,7 @@ function BacklogCard({
         {item.status === "sleeping" && (
           <button
             onClick={() => void wake(item.id)}
-            className="flex items-center gap-1 rounded-btn px-1.5 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink"
+            className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn px-1.5 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink"
           >
             <CircleCheck size={12} />
             唤醒
@@ -392,14 +396,14 @@ function BacklogCard({
               <>
                 <button
                   onClick={() => void review(item.id, true)}
-                  className="flex items-center gap-1 rounded-btn bg-gain/10 px-2 py-1 text-caption text-gain hover:bg-gain/20"
+                  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn bg-gain/10 px-2 py-1 text-caption text-gain hover:bg-gain/20"
                 >
                   <CircleCheck size={12} />
                   验收通过
                 </button>
                 <button
                   onClick={() => setRejectNote("")}
-                  className="flex items-center gap-1 rounded-btn px-2 py-1 text-caption text-loss hover:bg-loss/10"
+                  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn px-2 py-1 text-caption text-loss hover:bg-loss/10"
                 >
                   <CircleAlert size={12} />
                   打回重跑
@@ -409,18 +413,18 @@ function BacklogCard({
           </div>
         )}
         {item.status === "executing" && (
-          <span className="flex items-center gap-1 text-caption text-blue-500">
+          <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-caption text-blue-500">
             <CircleDot size={12} className="animate-pulse" />
             长任务执行中（{lastRun?.runtimeId ?? item.runtimeId}）
           </span>
         )}
         {item.status === "awaiting_confirm" && (
-          <span className="flex items-center gap-1 text-caption text-amber-600">
+          <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-caption text-amber-600">
             <AlarmClockCheck size={12} />
             提议挂起 —— 看右下角横幅确认
           </span>
         )}
-        {item.status === "done" && <span className="text-caption text-ash">已关闭 · {formatBacklogRelative(item.updatedAt)}</span>}
+        {item.status === "done" && <span className="shrink-0 whitespace-nowrap text-caption text-ash">已关闭 · {formatBacklogRelative(item.updatedAt)}</span>}
       </div>
     </div>
   );

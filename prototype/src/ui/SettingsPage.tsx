@@ -53,7 +53,6 @@ import { ArchivedTasksSettingsSection } from "./ArchivedTasksSettingsSection.tsx
 import { useHistoryPrefs } from "../store/useHistoryPrefs.ts";
 import { useChatTerminal } from "../store/useChatTerminal.ts";
 import { SUPPORTED_TERMINAL_PROFILES } from "../store/useTerminalStore.ts";
-import { TitleBarClearance } from "./WindowControls.tsx";
 import { cn } from "./cn.ts";
 
 const ICONS: Record<string, typeof Settings2> = {
@@ -157,15 +156,20 @@ export function SettingsPage() {
           最小化/关闭钮 —— 顶栏那一带必须是标题栏，不能有内容层的东西 */}
       <div className="flex h-full min-w-0 flex-1 flex-col">
         {/* 面包屑头，对齐 ZCode 的 SettingsHeaderBreadcrumb —— 只呈现路径，
-            返回动作在左导航列顶部。h-12 与内容列顶带同高 */}
-        <div className="shrink-0 border-b border-line bg-rail">
-          <div className={cn(FRAME_HEAD, "titlebar-drag flex h-12 items-center gap-2")}>
+            返回动作在左导航列顶部。h-12 与内容列顶带同高。
+            titlebar-drag 挂整宽外层条；no-drag 占位绝对锚定行右缘（落在窗口
+            按钮带正下方——留在居中列里会在头右侧挖出一个拖不动的洞） */}
+        <div className="titlebar-drag relative h-12 shrink-0 border-b border-line bg-rail">
+          <div className={cn(FRAME_HEAD, "flex h-12 items-center gap-2")}>
             <span className="text-body-sm text-ink">设置</span>
             <span className="text-line">/</span>
             <span className="text-body-sm font-medium text-ink">{current.title}</span>
-            {/* drag 行行内 no-drag 占位：让出右上角窗口控制钮带（--wco-w） */}
-            <TitleBarClearance width="var(--wco-w, 0px)" push />
           </div>
+          <div
+            aria-hidden
+            className="titlebar-no-drag absolute right-0 top-0 h-full"
+            style={{ width: "var(--wco-w, 0px)" }}
+          />
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">

@@ -8,7 +8,6 @@ import {
   Image as ImageIcon,
   Sparkles,
   Frame,
-  Type,
   Wand2,
   FileJson,
   RefreshCw,
@@ -19,11 +18,13 @@ import {
   Smartphone,
   Laptop,
   PanelBottom,
+  Bot,
 } from "lucide-react";
 import { useAppearance } from "../store/useAppearance.ts";
 import { Toggle } from "./Toggle.tsx";
 import { useLayoutStore } from "./mobile/useIsMobile.ts";
 import { useShell as useShellState } from "../store/useShell.ts";
+import { useWorkbench } from "../store/useWorkbench.ts";
 import {
   APPEARANCE_PRESETS,
   contrastRatio,
@@ -912,7 +913,7 @@ export function AppearanceSettingsSection() {
       <SectionCard
         icon={<FileJson size={16} />}
         title="外观文件"
-        desc="整套外观就是这一个 JSON 文件。直接让 agent 改它，应用几秒内自己跟进 —— 不用重启，也不用在这个页面里点。"
+        desc="整套外观就是这一个 JSON 文件。直接让 agent 改它，应用几秒内自己跟进 —— 不用重启，也不用在这个页面里点。终端配色也随主题实时同步，无需重启后台 Shell。"
       >
         <div className="space-y-4">
           <div className="rounded-btn border border-line bg-canvas p-3">
@@ -943,49 +944,6 @@ export function AppearanceSettingsSection() {
             )}
           </div>
 
-          <div className="rounded-btn border border-line/60 bg-line-soft/30 p-3 text-caption leading-relaxed text-graphite">
-            <p className="font-medium text-ink">让 agent 改外观时，它会看到什么</p>
-            <ul className="mt-1.5 list-inside list-disc space-y-0.5 text-ash">
-              <li>
-                <span className="font-mono">mode</span> — auto / light / dark
-              </li>
-              <li>
-                <span className="font-mono">profiles.light|dark.palette</span> — 十组颜色，
-                键名与 DS theme.json 一致
-              </li>
-              <li>
-                <span className="font-mono">profiles.*.transparency</span> — null 表示跟随默认（无壁纸 0%，有壁纸 30%）
-            <span className="font-mono">profiles.*.overlayTransparency</span> — 设置页底色透明度，默认 0%
-              </li>
-              <li>
-                <span className="font-mono">profiles.*.surface</span> — 圆角 / 不透明度 / 模糊 / 边框 /
-                投影 / 字体 / 字号 / 密度 / 动效
-              </li>
-              <li>
-                <span className="font-mono">art</span> — focusX / focusY / safeArea / taskMode
-              </li>
-              <li>
-                <span className="font-mono">wallpaper.path</span> — 相对家目录或绝对路径；把图丢进
-                wallpapers/ 再改这里即可
-              </li>
-            </ul>
-            <p className="mt-2 text-ash">
-              改完保存即可，不用管谁写的。应用每 4 秒核对一次文件内容，变了就换新外观；
-              窗口重新获得焦点时也会立刻查一次。
-            </p>
-          </div>
-
-          <div className="rounded-btn border border-line/60 bg-line-soft/30 p-3 text-caption leading-relaxed text-graphite">
-            <p className="flex items-center gap-1.5 font-medium text-ink">
-              <Type size={12} className="text-teal" />
-              终端画布实时同步
-            </p>
-            <p className="mt-1 text-ash">
-              内置 xterm 终端的前景、背景、光标与 ANSI 十六色全部取自当前配色档案，切换主题时无需重启后台 Shell
-              会话。历史输出与运行进程完整保留。
-            </p>
-          </div>
-
           {store.lastError && (
             <p className="rounded-btn border border-loss/40 bg-loss/10 px-3 py-2 text-caption text-loss">
               上次写入失败：{store.lastError}
@@ -1000,6 +958,29 @@ export function AppearanceSettingsSection() {
             >
               <RefreshCw size={13} />
               重新读取文件
+            </button>
+            {/* 一个按钮胜过一串 schema 说明：跳到对话页（总管优先，否则第一个
+                bot），预填一条带文件路径与取值域指引的提示词，待发送 */}
+            <button
+              type="button"
+              onClick={() => {
+                const wb = useWorkbench.getState();
+                const target = wb.units.find((u) => u.id === "steward") ?? wb.units.find((u) => u.rootPath !== "") ?? null;
+                if (target === null) {
+                  wb.pushNotice("还没有可用的 bot", "先在左侧栏新建一个 bot，再回来点「让 agent 改外观」。", { level: "warn" });
+                  return;
+                }
+                const path = store.filePath ?? "~/.agent-workbench/appearance.json";
+                wb.selectUnit(target.id);
+                wb.setDraft(
+                  `帮我调整工作台外观。外观的唯一真相是 ${path}：先读这个文件，各字段（mode、profiles.light|dark 的 palette / transparency / overlayTransparency / surface、art、wallpaper）的取值域见 prototype/src/core/appearance.ts。改完保存即可——应用每 4 秒核对一次文件，变了就自动换新外观，无需重启。我的要求：`,
+                );
+                useShellState.getState().closeSettings();
+              }}
+              className="flex items-center gap-1.5 rounded-btn bg-teal-tint px-3 py-1.5 text-body-sm font-medium text-teal transition hover:bg-teal/15"
+            >
+              <Bot size={13} />
+              让 agent 改外观
             </button>
             <button
               type="button"

@@ -144,6 +144,8 @@ function persist(next: AppearanceState): void {
       lastKnownHash = result.hash;
       lastPath = result.path;
       lastSource = "file";
+      // 写成功即文件已接管：立刻翻掉可能挂着的「daemon 没连上」警告，不等下一轮轮询
+      useAppearance.setState({ source: "file", filePath: result.path } as Partial<AppearanceStore>);
     })
     .catch(() => {
       // 写失败（daemon 没起 / hash 冲突 / 磁盘满）：界面已经变了，不回滚，
@@ -444,7 +446,16 @@ async function pollExternalChanges(): Promise<void> {
   } catch {
     return;
   }
-  if (result.hash === lastKnownHash) return;
+  if (result.hash === lastKnownHash) {
+    // 文件没变，提前返回；但 source 若曾被一次瞬断（或首启播种）挂在
+    // fallback/defaults，必须在这里修回 file —— 之后 hash 不会再变，
+    // 没有别的分支能撤下「daemon 没连上」的警告
+    if (useAppearance.getState().source !== result.source) {
+      lastSource = result.source;
+      useAppearance.setState({ source: result.source, filePath: result.path } as Partial<AppearanceStore>);
+    }
+    return;
+  }
 
   // 兜底层降级时 hash 恒为空字符串，这种"变化"不是外部编辑，别覆盖用户在界面上的即时调整
   if (!result.hash) {
