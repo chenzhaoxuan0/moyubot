@@ -324,6 +324,18 @@
 |---|---|---|---|
 | `rpc.methods` | 方法自描述：全量方法与元数据（说明/params 形状/danger）清单 | null | — |
 
+### search
+
+| 方法 | 说明 | params | 危险 |
+|---|---|---|---|
+| `search.configure` | 配置某个 bot 的搜索（密钥存 daemon 侧 search-keys.json；apiKey 缺省=不动，空串=清除，换家自动清旧 key） | {botId, provider: tavily|deepseek|doubao|yuanbao|none, apiKey?} | — |
+| `search.overview` | 搜索总览：全部 bot 的配置状态 + 桥条目扇出结果 + 动作日志 | null | — |
+| `search.providers` | 搜索提供商目录（tavily/deepseek/doubao/yuanbao：key 提示、文档、免费额度说明） | null | — |
+| `search.query` | 执行一次 web 搜索（daemon 定位 bot → 用该 bot 的提供商与密钥；bridge 的工具面） | {cwd|root, query, maxResults?} | — |
+| `search.quota` | 查余量/余额：{botId}（60s 缓存，force 绕过）或 {provider, apiKey}（保存前草稿预检） | {botId} 或 {provider, apiKey} | — |
+| `search.sessionTools` | 搜索桥 tools/list 收口：这个工作区（cwd/--root）配了搜索才暴露 web_search | {cwd, root?} | — |
+| `search.status` | 单个 bot 的搜索状态（提供商 / 密钥掩码 / 本月本机调用次数 / 缓存配额） | {botId} | — |
+
 ### session
 
 | 方法 | 说明 | params | 危险 |

@@ -9,7 +9,10 @@
 提议 + 确认门 + 验收闭环）、**上下文清单**（每 bot 一份注入矩阵：SOUL.md /
 USER.md / MEMORY.md / 技能目录默认全关、按需打开，AGENTS.md 三态防双注——见
 [docs/20](docs/20-context-manifest.md)）、记忆系统、出图工作台，以及多执行器统一的
-浏览器控制（playwright-mcp 扇出）与电脑控制（总闸 + 急停）。
+浏览器控制（playwright-mcp 扇出）与电脑控制（总闸 + 急停）、**bot 级联网搜索**
+（Tavily / DeepSeek / 豆包 / 元宝四家适配，`workbench-search` 桥按会话目录收口
+`web_search` 工具，密钥 daemon 侧分槽、免费余量设置页可视——见
+[docs/22](docs/22-bot-search.md)）。
 **AI-native（docs/21）**：全部操作既可由人经 GUI、也可由 agent 经 `aw` CLI /
 `POST /rpc`（`aw methods` 自描述）驱动——聊天编排（`session.chat`，附件路径
 daemon 内联）、通知事实源、出图（`image.generate`）GUI 与 headless 同一条代码路径。
@@ -138,6 +141,7 @@ agent-workbench/
 | 凭证 | 位置 |
 |---|---|
 | 出图供应商 API Key | `<homeDir>/image-profiles.json`（设置页「出图」编辑，密钥不回显；或 `env:` 引用） |
+| 搜索供应商 API Key（Tavily / DeepSeek / 豆包 / 元宝） | `<homeDir>/search-keys.json`（bot 设置「搜索」按 bot 分槽编辑，密钥只回掩码；或 `env:` 引用） |
 | WeKnora（语义记忆检索） | `<homeDir>/state.db` kv（设置页「记忆」配置；或 `env:` 引用） |
 | 飞书 appId/appSecret | 经 lark-cli 进**系统钥匙串**；bot.json 里的旧明文重绑一次即迁移 |
 | Telegram botToken | 各 bot 的 `bot.json`（支持 env 引用） |
