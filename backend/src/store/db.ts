@@ -14,7 +14,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import type { DispatchTarget, ScheduleRule } from "../../../prototype/src/core/automation.ts";
+import type { DispatchTarget, LaunchMode, ScheduleRule } from "../../../prototype/src/core/automation.ts";
 import { log } from "../log.ts";
 
 export interface SessionRow {
@@ -80,8 +80,8 @@ export interface BacklogRow {
   model: string | null;
   mode: string | null;
   size: string | null;
-  /** 执行方式：terminal = 前端 TUI（缺省）；headless = 纯后台 host 会话 */
-  launchMode: "terminal" | "headless";
+  /** 执行方式：terminal = 前端 TUI（缺省）；chat = 对话页前台；headless = 纯后台 host 会话 */
+  launchMode: LaunchMode;
   status: string;
   ignoreCount: number;
   lastProposedAt: number | null;
@@ -528,7 +528,7 @@ export class Store {
       lastRunAt: r["last_run_at"] === null || r["last_run_at"] === undefined ? null : Number(r["last_run_at"]),
       lastError: r["last_error"] === null || r["last_error"] === undefined ? null : String(r["last_error"]),
       lastErrorAt: r["last_error_at"] === null || r["last_error_at"] === undefined ? null : Number(r["last_error_at"]),
-      launchMode: r["launch_mode"] === "headless" ? "headless" : "terminal",
+      launchMode: r["launch_mode"] === "headless" || r["launch_mode"] === "chat" ? r["launch_mode"] : "terminal",
       // 旧行 dispatch_target 为 NULL —— 按 new_session 读，保持 v2 行为不变
       dispatchTarget: r["dispatch_target"] === "existing_session" ? "existing_session" : "new_session",
       targetSessionId: r["target_session_id"] === null || r["target_session_id"] === undefined ? null : String(r["target_session_id"]),
@@ -551,7 +551,7 @@ export class Store {
     recurring: boolean;
     maxRuns: number | null;
     nextRunAt: number | null;
-    launchMode: "terminal" | "headless";
+    launchMode: LaunchMode;
     dispatchTarget?: DispatchTarget;
     targetSessionId?: string | null;
     origin?: "manual" | "quota_resume";
@@ -606,7 +606,7 @@ export class Store {
     lastRunAt: number | null;
     lastError: string | null;
     lastErrorAt: number | null;
-    launchMode: "terminal" | "headless";
+    launchMode: LaunchMode;
     dispatchTarget: DispatchTarget;
     targetSessionId: string | null;
     origin: "manual" | "quota_resume";
@@ -643,7 +643,7 @@ export class Store {
       enabled: boolean;
       nextRunAt: number | null;
       lastRunAt: number | null;
-      launchMode: "terminal" | "headless";
+      launchMode: LaunchMode;
       dispatchTarget?: DispatchTarget;
       targetSessionId?: string | null;
     }>,
@@ -776,7 +776,7 @@ export class Store {
       model: r["model"] === null || r["model"] === undefined ? null : String(r["model"]),
       mode: r["mode"] === null || r["mode"] === undefined ? null : String(r["mode"]),
       size: r["size"] === null || r["size"] === undefined ? null : String(r["size"]),
-      launchMode: r["launch_mode"] === "headless" ? "headless" : "terminal",
+      launchMode: r["launch_mode"] === "headless" || r["launch_mode"] === "chat" ? r["launch_mode"] : "terminal",
       status: String(r["status"]),
       ignoreCount: Number(r["ignore_count"] ?? 0),
       lastProposedAt: nOrNull(r["last_proposed_at"]),
@@ -801,7 +801,7 @@ export class Store {
     model?: string | null;
     mode?: string | null;
     size?: string | null;
-    launchMode?: "terminal" | "headless";
+    launchMode?: LaunchMode;
     source?: "manual" | "inbox";
     sortPos?: number;
   }): number {
@@ -859,7 +859,7 @@ export class Store {
       model: string | null;
       mode: string | null;
       size: string | null;
-      launchMode: "terminal" | "headless";
+      launchMode: LaunchMode;
       status: string;
       ignoreCount: number;
       lastProposedAt: number | null;

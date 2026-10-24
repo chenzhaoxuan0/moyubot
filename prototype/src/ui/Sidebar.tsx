@@ -3,10 +3,12 @@ import {
   AlarmClock,
   Archive,
   ArchiveRestore,
+  CalendarClock,
   Check,
   CheckCircle2,
   ChevronLeft,
   CircleDot,
+  Clock,
   EyeOff,
   FolderGit2,
   FolderPlus,
@@ -31,8 +33,8 @@ import { useShell } from "../store/useShell.ts";
 import { useGit } from "../store/useGit.ts";
 import { useAppearance } from "../store/useAppearance.ts";
 import type { AvatarFrame } from "../core/appearance.ts";
-import { formatRelative } from "../core/automation.ts";
-import { DaemonClient, defaultDaemonEndpoint, dispatchTerminal, fetchUnitHistory, renameHistoryEntry, type UnitHistoryEntry } from "../adapters/daemon/client.ts";
+import { describeRule, formatAbsolute, formatAbsoluteHuman, formatRelative, type Automation } from "../core/automation.ts";
+import { DaemonClient, defaultDaemonEndpoint, dispatchTerminal, fetchAutomations, fetchUnitHistory, renameHistoryEntry, type UnitHistoryEntry } from "../adapters/daemon/client.ts";
 import {
   asModelId,
   asRuntimeId,
@@ -752,6 +754,12 @@ function UnitRow({
   /** 历史详情走右侧标签页（点子列表条目预展开那一条）—— 状态在 useSidePane */
   const [histEntries, setHistEntries] = useState<readonly UnitHistoryEntry[] | null>(null);
   const [histErr, setHistErr] = useState<string | null>(null);
+  /**
+   * 待触发的定时任务（docs/23）：子列表顶部的「将要发生什么」，与历史行的
+   * 「发生过什么」上下互补 —— 可追溯性的另一半。与 histEntries 同节奏拉取。
+   */
+  const [schedTasks, setSchedTasks] = useState<readonly Automation[]>([]);
+  const openAutomationDialog = useShell((s) => s.openAutomationDialog);
   /** 历史列表分页：每轮显示 6 条，超过 6 条折叠成「更多」 */
   const [visibleCount, setVisibleCount] = useState(6);
   /** 行内重命名中的 entry key（右键「重命名」进入，Enter/失焦保存、Esc 取消） */
@@ -805,14 +813,35 @@ function UnitRow({
           if (alive) setHistErr(e instanceof Error ? e.message : String(e));
         });
     };
+    // 待触发任务与历史同节奏：拉全量自动化后按 bot 过滤（SQLite 小表，客户端筛足够）
+    const loadSched = (): void => {
+      if (!alive) return;
+      void fetchAutomations()
+        .then((list) => {
+          if (alive) {
+            setSchedTasks(
+              list
+                .filter((a) => a.unitId === String(unit.id) && a.enabled && a.nextRunAt !== undefined)
+                .sort((x, y) => (x.nextRunAt ?? 0) - (y.nextRunAt ?? 0)),
+            );
+          }
+        })
+        .catch(() => {
+          /* 拉不到就不显示待触发行，历史行不受影响 */
+        });
+    };
     load();
+    loadSched();
     let debounce: ReturnType<typeof setTimeout> | null = null;
     const scheduleLoad = (): void => {
       if (!alive) return;
       if (debounce !== null) clearTimeout(debounce);
       debounce = setTimeout(load, 300);
     };
-    const poll = setInterval(load, 30_000);
+    const poll = setInterval(() => {
+      load();
+      loadSched();
+    }, 30_000);
     const client = DaemonClient.get(defaultDaemonEndpoint());
     const unsubFrame = client.onTerminalFrame((f) => {
       if (f.kind === "created" || f.kind === "exit") scheduleLoad();
@@ -995,6 +1024,15 @@ function UnitRow({
       {historyOpen && (
         <div data-no-drag draggable={false} onMouseDown={(e) => e.stopPropagation()} className="space-y-px py-0.5 px-0.5">
           {histErr !== null && <p className="px-1.5 py-1 text-[10px] text-loss">读取失败：{histErr}</p>}
+          {/* 待触发定时任务行（docs/23）：排在一切历史行之前 —— 子列表先答「将要
+              发生什么」，再列「发生过什么」。点击直接打开该任务的编辑弹窗 */}
+          {schedTasks.map((t) => (
+            <ScheduledTaskRow
+              key={`sched-${t.id}`}
+              task={t}
+              onOpen={() => openAutomationDialog({ mode: "edit", automation: t })}
+            />
+          ))}
           {histEntries === null && histErr === null && <p className="px-1.5 py-1 text-[10px] text-ash">加载中…</p>}
           {histEntries !== null && histEntries.length === 0 && (
             <p className="px-1.5 py-1 text-[10px] text-ash">还没有执行记录 —— 自动化、待办或会话跑过之后出现在这里</p>
@@ -1582,7 +1620,12 @@ function HistoryListRow({
         </span>
       </span>
 
-      {/* 3. 标题：正常情况下直接跟在执行器后面，横向独占剩余所有空间，保证最完整展示 */}
+      {/* 3. 标题：正常情况下直接跟在执行器后面，横向独占剩余所有空间，保证最完整展示。
+              自动化产生的行常显一枚小时钟（对齐 ZCode 的 cron task 图标）：不 hover
+              也能认出「这条是定时任务跑出来的」，来源 tag 只是 hover 补充说明 */}
+      {(entry.kind === "automation" || entry.source === "automation") && (
+        <Clock size={9} className="shrink-0 text-teal/80" aria-label="定时任务产生" />
+      )}
       <span className="min-w-0 flex-1 truncate text-[11px] text-graphite">{entry.title}</span>
 
       {/* 4. 悬停元信息标签组（手动/定时/待办来源、分叉血缘、打开方式切换）：
@@ -1679,8 +1722,56 @@ function HistoryListRow({
   );
 }
 
-
-
+/**
+ * 待触发的定时任务行（docs/23）—— 与 HistoryListRow 同构（同高度 / 同 hover /
+ * 同左缘退格），排在子列表最顶部。与历史行的分工：这里答「将要发生什么」
+ * （时钟图标 + 下次触发时间），历史行答「发生过什么」。点击打开编辑弹窗。
+ */
+function ScheduledTaskRow({ task, onOpen }: { task: Automation; onOpen: () => void }): ReactElement {
+  const next = task.nextRunAt ?? null;
+  const modeLabel = task.launchMode === "terminal" ? "TUI" : task.launchMode === "chat" ? "对话页" : "后台";
+  const sendLabel = task.dispatchTarget === "existing_session" ? "发到已有对话" : "新对话";
+  // 下次时间显示口径对齐 ZCode：30 天内相对时间，更远绝对日期
+  const withinMonth = next !== null && next - Date.now() <= 30 * 86_400_000;
+  return (
+    <button
+      type="button"
+      data-no-drag
+      draggable={false}
+      onClick={onOpen}
+      title={[
+        `待触发 · ${task.name}`,
+        `${describeRule(task.rule)} · ${modeLabel} · ${sendLabel}`,
+        next !== null ? `下次：${formatAbsolute(next)}` : null,
+        task.lastFailure ? `最近失败：${task.lastFailure.reason}` : null,
+        "点击编辑这条定时任务",
+      ]
+        .filter((line) => line !== null)
+        .join("\n")}
+      className="group/srow flex min-h-[30px] w-full cursor-pointer items-center gap-1 rounded-btn px-2 py-1.5 text-left transition hover:bg-line-soft"
+    >
+      {/* 灯槽：仅最近失败亮红点（对齐历史行灯位，正常待触发不亮灯） */}
+      <span className="flex h-3.5 w-2.5 shrink-0 items-center justify-center" aria-hidden>
+        {task.lastFailure ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-loss" /> : null}
+      </span>
+      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center" title="定时任务（待触发）">
+        <CalendarClock size={13} className="text-teal" />
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[11px] text-graphite">{task.name}</span>
+      <span className="hidden shrink-0 items-center gap-1 group-hover/srow:flex">
+        <span className="shrink-0 rounded-full bg-teal-tint px-1 py-px text-[9px] font-medium text-teal" title="到点将自动执行">
+          待触发
+        </span>
+      </span>
+      <span
+        className="w-[54px] shrink-0 truncate text-right font-mono text-[9px] tnum text-teal/80"
+        title={next !== null ? formatAbsolute(next) : undefined}
+      >
+        {next === null ? "—" : withinMonth ? formatRelative(next) : formatAbsoluteHuman(next)}
+      </span>
+    </button>
+  );
+}
 
 /* ------------------------------------------------------------- 小组件 */
 

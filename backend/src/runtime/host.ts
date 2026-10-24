@@ -196,6 +196,8 @@ interface HostSession {
     text: string;
     loop?: SendLoopParams;
     contextInject?: { readonly manifest?: ContextManifest };
+    /** 消息来源标记（如 "automation"）：出队派发时随 message.delta 进账本 */
+    origin?: string;
   }>;
   /** 队列 id 发号器（会话内单调） */
   queueSeq: number;
@@ -1603,6 +1605,7 @@ export class RuntimeHost {
     text: string,
     loop?: SendLoopParams,
     contextInject?: { readonly manifest?: ContextManifest },
+    origin?: string,
   ): void {
     const h = this.sessions.get(sessionId);
     if (h === undefined) throw adapterError("unknown_session", `no such session: ${sessionId}`);
@@ -1612,7 +1615,7 @@ export class RuntimeHost {
       if (h.pendingSends.length >= 10) {
         throw adapterError("send_queue_full", "该会话已有 10 条排队消息 —— 等当前轮完成再发");
       }
-      this.enqueueSend(h, text, loop, contextInject);
+      this.enqueueSend(h, text, loop, contextInject, origin);
       return;
     }
     // 暂停中的队列还挂着（用户停止 / 轮失败后）：新消息排到队尾并恢复出队 ——
@@ -1620,12 +1623,12 @@ export class RuntimeHost {
     // 先解除暂停再入队：enqueueSend 内的快照一次到位，不用补发第二份。
     if (h.pendingSends.length > 0) {
       h.queuePaused = false;
-      this.enqueueSend(h, text, loop, contextInject);
+      this.enqueueSend(h, text, loop, contextInject, origin);
       this.flushPendingSends(h);
       return;
     }
 
-    this.dispatchSend(h, text, loop, contextInject);
+    this.dispatchSend(h, text, loop, contextInject, origin);
   }
 
   /** 入队（发号 + steer.queued 通知 + 权威快照）。调用方负责 flush/暂停语义 */
@@ -1634,9 +1637,10 @@ export class RuntimeHost {
     text: string,
     loop?: SendLoopParams,
     contextInject?: { readonly manifest?: ContextManifest },
+    origin?: string,
   ): void {
     const id = `q${++h.queueSeq}`;
-    h.pendingSends.push({ id, text, loop, contextInject });
+    h.pendingSends.push({ id, text, loop, contextInject, origin });
     // 轮进行中入队是常态，但暂停队列续排也走这里 —— 日志不预设「turn in flight」
     log.info("message queued (steer)", { sessionId: h.id, queueDepth: h.pendingSends.length });
     // WP-10：插话入队对客户端可见（steer.queued）
@@ -1712,6 +1716,7 @@ export class RuntimeHost {
     text: string,
     loop?: SendLoopParams,
     contextInject?: { readonly manifest?: ContextManifest },
+    origin?: string,
   ): void {
     h.turnBusy = true;
     h.status = "running";
@@ -1719,7 +1724,14 @@ export class RuntimeHost {
     h.turnCount += 1;
     h.turnOpen = true;
     this.emitStamped(h, { type: "turn.started", sessionId: h.id, turn: h.turnCount });
-    this.emitStamped(h, { type: "message.delta", sessionId: h.id, messageId: `user-${h.turnCount}`, role: "user", text });
+    this.emitStamped(h, {
+      type: "message.delta",
+      sessionId: h.id,
+      messageId: `user-${h.turnCount}`,
+      role: "user",
+      text,
+      ...(origin !== undefined ? { origin } : {}),
+    });
     this.store.insertMessage(h.id, Date.now(), "user", text);
 
     void (async () => {
@@ -1981,7 +1993,7 @@ export class RuntimeHost {
     // WP-10：注入点事件化——前端据此把 pre/post-steer 的助手消息分行
     this.emitStamped(h, { type: "steer.boundary", sessionId: h.id, id: next.id, text: next.text });
     this.emitQueueSnapshot(h);
-    this.dispatchSend(h, next.text, next.loop, next.contextInject);
+    this.dispatchSend(h, next.text, next.loop, next.contextInject, next.origin);
   }
 
   /**

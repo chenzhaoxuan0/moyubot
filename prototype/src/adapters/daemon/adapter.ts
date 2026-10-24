@@ -146,8 +146,11 @@ class DaemonRuntimeAdapter implements RuntimeAdapter {
     this.#pumpInstalled = true;
     this.#client.onEvent((event, seq) => {
       // git.changed 是仓库级事件（无 sessionId，docs/16）：会话泵不处理，
-      // 消费方（useGit 的自动刷新安装器）直接订阅 DaemonClient
-      if (event.type === "git.changed") return;
+      // 消费方（useGit 的自动刷新安装器）直接订阅 DaemonClient。
+      // session.foreground 同理（docs/23）：它带 sessionId 但用的是全局广播序号，
+      // 不是会话账本 seq —— 进判重会污染 #lastSeq（假游标挡掉真账本帧，时间线丢事件），
+      // 消费方（sessionForeground 安装器）也直接订阅 DaemonClient
+      if (event.type === "git.changed" || event.type === "session.foreground") return;
       // WP-2 按 seq 判重：daemon 广播全量事件，重放/补拉的重叠在此挡住。
       // 补拉进行中的会话（评审 P1）帧进 stash——若照常推进游标，补拉响应会被整体判重丢洞
       if (seq !== undefined) {

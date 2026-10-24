@@ -1330,8 +1330,8 @@ export interface DaemonAutomation {
   readonly lastRunAt: number | null;
   readonly lastError: string | null;
   readonly lastErrorAt: number | null;
-  /** terminal = 到点在前端拉执行器 TUI；headless = 原 host 会话。旧行缺省按 terminal 读 */
-  readonly launchMode?: "terminal" | "headless";
+  /** 执行方式三形态（terminal / chat / headless，语义见 core/automation.ts 的 LaunchMode）。旧行缺省按 terminal 读 */
+  readonly launchMode?: "terminal" | "chat" | "headless";
   /** 到点把消息投到哪里。旧行缺省 = new_session */
   readonly dispatchTarget?: "new_session" | "existing_session";
   readonly targetSessionId?: string | null;
@@ -1358,8 +1358,8 @@ export interface AutomationWriteInput {
   readonly delayMinutes?: number;
   /** 绝对时刻（epoch ms）「到 2026-10-20 15:09 只跑一次」。与 delayMinutes 互斥 */
   readonly runAt?: number;
-  /** 执行方式：缺省 = terminal（前端可见 TUI） */
-  readonly launchMode?: "terminal" | "headless";
+  /** 执行方式：terminal（TUI）/ chat（对话页前台）/ headless（纯后台）。缺省 = terminal */
+  readonly launchMode?: "terminal" | "chat" | "headless";
   /** 定时发送到已有对话。缺省 targetSessionId = 发火时按最新的可续接会话定 */
   readonly dispatchTarget?: "new_session" | "existing_session";
   readonly targetSessionId?: string | null;
@@ -1396,6 +1396,7 @@ export function daemonAutomationToAutomation(a: DaemonAutomation): Automation {
     enabled: a.enabled,
     recurring: a.recurring,
     maxRuns: a.maxRuns ?? undefined,
+    runCount: a.runCount,
     runs: [...a.runs].sort((x, y) => x.startedAt - y.startedAt).map(mapAutomationRun),
     deliverableIds: [],
     createdAt: a.createdAt,
@@ -1403,7 +1404,7 @@ export function daemonAutomationToAutomation(a: DaemonAutomation): Automation {
     mode: a.mode,
     cron: a.cron,
     scheduleSource: a.scheduleRule === null ? "cron" : "rule",
-    launchMode: a.launchMode === "headless" ? "headless" : "terminal",
+    launchMode: a.launchMode === "headless" || a.launchMode === "chat" ? a.launchMode : "terminal",
     dispatchTarget: a.dispatchTarget === "existing_session" ? "existing_session" : "new_session",
     targetSessionId: a.targetSessionId ?? null,
     origin: a.origin === "quota_resume" ? "quota_resume" : "manual",
@@ -1448,6 +1449,8 @@ export interface ResumableSession {
   readonly startedAt: number;
   readonly endedAt: number | null;
   readonly lastActiveAt: number;
+  /** 会话来源（workbench/automation/feishu…）：目标选择器的来源徽标用，旧行可能缺省 */
+  readonly source?: string | null;
 }
 
 /**
@@ -1552,7 +1555,8 @@ export interface UnitHistoryEntry {
   readonly title: string;
   readonly subtitle: string | null;
   readonly runtimeId: string;
-  readonly launchMode: "terminal" | "headless";
+  /** 执行方式（terminal=TUI / chat=对话页前台 / headless=纯后台） */
+  readonly launchMode: "terminal" | "chat" | "headless";
   readonly status: string;
   readonly trigger: string | null;
   readonly startedAt: number;
@@ -1796,8 +1800,8 @@ export interface BacklogWriteInput {
   readonly model?: string | null;
   readonly mode?: string | null;
   readonly size?: string | null;
-  /** 执行方式：缺省 = terminal（前端可见 TUI） */
-  readonly launchMode?: "terminal" | "headless";
+  /** 执行方式：terminal（TUI）/ chat（对话页前台）/ headless（纯后台）。缺省 = terminal */
+  readonly launchMode?: "terminal" | "chat" | "headless";
 }
 
 export async function fetchBacklog(endpoint: string = defaultDaemonEndpoint()): Promise<BacklogListResult> {

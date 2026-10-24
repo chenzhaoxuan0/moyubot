@@ -1,5 +1,8 @@
 import { create } from "zustand";
 import type { UnitId } from "../core/units.ts";
+// 类型引入（编译期擦除，无运行时环）：请求形状的定义权在弹窗组件那里，
+// store 只存它 —— 放 core 会把 UI 概念（模板预填）漏进领域层
+import type { AutomationDialogRequest } from "../ui/AutomationDialog.tsx";
 
 /**
  * 外壳状态 —— 和业务状态（工作单元 / 会话 / 事件流）分离。
@@ -250,6 +253,12 @@ interface ShellState {
   mainView: MainView;
   settingsOpen: boolean;
   settingsSection: SettingsSectionId;
+  /**
+   * 自动化编辑弹窗的打开请求（docs/23）。放 store 而不是 AutomationsPage 局部
+   * 状态：侧栏的待触发行、自动化页的新建/编辑按钮共用一个弹窗 —— 从侧栏点
+   * 待触发任务直接弹编辑窗，不必先跳页。
+   */
+  automationDialog: AutomationDialogRequest | null;
   /** 新建 bot 对话框（AGENTS.md 岗位说明书）。放 store 而不是 Sidebar 局部状态：
    *  「添加 bot」的按钮收进了侧栏 ⋯ 之后，单元区的空态要能当第二个入口，
    *  两处共用一个开关。新建＝新建＋认领单轨：指向已有文件夹时原地注册，
@@ -272,6 +281,9 @@ interface ShellState {
   openSettings: (section?: SettingsSectionId) => void;
   /** 关闭设置覆盖层。对齐 ZCode：退出设置统一回到 chat 主视图 */
   closeSettings: () => void;
+  /** 打开自动化弹窗（新建可带模板预填 / 编辑某条）。全局唯一挂载点在 WorkspaceShell */
+  openAutomationDialog: (req: AutomationDialogRequest) => void;
+  closeAutomationDialog: () => void;
 
   setCommandOpen: (open: boolean) => void;
 }
@@ -288,11 +300,15 @@ export const useShell = create<ShellState>((set, get) => ({
   mainView: "chat",
   settingsOpen: false,
   settingsSection: "models",
+  automationDialog: null,
   conversationView: "chat",
 
   setMainView: (mainView) => set({ mainView }),
 
   setConversationView: (conversationView) => set({ conversationView }),
+
+  openAutomationDialog: (req) => set({ automationDialog: req }),
+  closeAutomationDialog: () => set({ automationDialog: null }),
 
   openSettings: (section) =>
     set((s) => ({

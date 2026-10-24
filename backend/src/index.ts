@@ -78,6 +78,7 @@ import {
   buildRelativeDelaySchedule,
   computeScheduleNextRunAt,
   scheduleRuleToCron,
+  type LaunchMode,
   type ScheduleRule,
 } from "../../prototype/src/core/automation.ts";
 import { MemoryService } from "./memory/memory.ts";
@@ -627,17 +628,48 @@ function resolveSendTarget(
   return null;
 }
 
+/**
+ * 「对话页」形态（launchMode=chat）的前台拉起广播：会话已由 daemon 开好（或
+ * 接回），请前端把它打开到聊天时间线前台。与 git.changed 同款 broadcast-only
+ * 口径（独立 seq、不落账本）—— 漏发的代价只是不自动跳前台，会话仍在历史
+ * 列表/底栏任务条里可点开，不构成功能缺失。
+ */
+let foregroundSeq = 0;
+
+function broadcastForeground(
+  sessionId: string,
+  unitId: string,
+  runtimeId: string,
+  cause: "automation" | "backlog",
+  title?: string,
+): void {
+  broadcastEvent(
+    wss,
+    {
+      type: "session.foreground",
+      sessionId: asSessionId(sessionId),
+      unitId: asUnitId(unitId),
+      runtimeId,
+      cause,
+      ...(title !== undefined ? { title } : {}),
+    },
+    ++foregroundSeq,
+  );
+}
+
 async function runAutomation(
   a: {
     id: number;
     unitId: string;
     unitName: string;
+    /** 卡片名 —— chat 派发的前台广播带它做提示标题 */
+    name: string;
     runtimeId: string;
     rootPath: string;
     prompt: string;
     model: string | null;
     mode: string | null;
-    launchMode: "terminal" | "headless";
+    launchMode: LaunchMode;
     dispatchTarget?: "new_session" | "existing_session";
     targetSessionId?: string | null;
   },
@@ -657,7 +689,9 @@ async function runAutomation(
       const runId = store.startAutomationRun(a.id, targetId, opts.trigger);
       try {
         host.resumeSession(asSessionId(targetId));
-        host.sendMessage(asSessionId(targetId), a.prompt);
+        // origin="automation"：这条用户消息是定时任务代发的 —— 时间线气泡上的
+        // 「定时」徽标与账本回放都凭这个字段点亮（docs/23）
+        host.sendMessage(asSessionId(targetId), a.prompt, undefined, undefined, "automation");
         // 投递成功只回填 sessionId，status 留在 running —— 终态由 session.ended 回灌
         const ended = store.getSession(targetId);
         const endedFailed = ended !== undefined && ended.endedAt !== null && ended.status === "failed";
@@ -668,6 +702,8 @@ async function runAutomation(
         }
         if (endedFailed) store.setAutomationError(a.id, `ended: ${ended!.status}`, Date.now());
         else store.setAutomationError(a.id, null, null);
+        // 对话页形态：把收件对话拉到聊天页前台（launchMode=chat 才拉，headless 只投不打扰）
+        if (a.launchMode === "chat") broadcastForeground(targetId, a.unitId, a.runtimeId, "automation", a.name);
         log.info("automation message sent to existing session", { automationId: a.id, runId, sessionId: targetId, trigger: opts.trigger });
         return { runId, sessionId: targetId };
       } catch (err: unknown) {
@@ -737,6 +773,9 @@ async function runAutomation(
     // —— 但 dispatchNote（回退说明）要留下，它不是失败徽章，别被当成旧账清掉
     if (endedFailed) store.setAutomationError(a.id, `ended: ${ended!.status}`, Date.now());
     else store.setAutomationError(a.id, dispatchNote, dispatchNote === null ? null : Date.now());
+    // 对话页形态：会话已开好，把前端拉到它的聊天时间线（已秒完的会话也拉——
+    // 打开即回看结果，同样是前台语义）
+    if (a.launchMode === "chat") broadcastForeground(String(session.id), a.unitId, a.runtimeId, "automation", a.name);
     log.info("automation session launched", { automationId: a.id, runId, sessionId: session.id, trigger: opts.trigger });
     return { runId, sessionId: session.id };
   } catch (err: unknown) {
@@ -1225,6 +1264,8 @@ backlogEngine = new BacklogEngine({
   },
   // 待办 launchMode=terminal 的 TUI 派发（与自动化共用 launchExecutorTerminal）
   launchTerminal: (o) => launchExecutorTerminal(o),
+  // 待办 launchMode=chat 的前台拉起（与自动化共用 broadcastForeground）
+  foreground: (sessionId, unitId, runtimeId, cause, title) => broadcastForeground(sessionId, unitId, runtimeId, cause, title),
   notify: async (text) => {
     const cfg = getBacklogConfig(store);
     if (!cfg.feishu.enabled || cfg.feishu.receiveId === "") return;
@@ -1476,6 +1517,14 @@ registerMethod("automation.create", (params) => {
       typeof p.rootPath !== "string" || typeof p.prompt !== "string") {
     throw badAutomation("unitId, runtimeId, rootPath, prompt are required");
   }
+  // 创建上限（对齐 ZCode AUTOMATION_CREATE_LIMIT = 20）：agent 能经 aw CLI 自建
+  // 定时任务，没有上限就是递归滥建的下限 —— 先到 20 条就让人工清理再建
+  if (store.listAutomations().length >= 20) {
+    throw Object.assign(
+      new Error("定时任务已达上限（20 条）—— 删掉不需要的再建"),
+      { code: "automation_limit_reached" },
+    );
+  }
   if (p.dispatchTarget !== undefined && p.dispatchTarget !== "new_session" && p.dispatchTarget !== "existing_session") {
     throw badAutomation("dispatchTarget 只能是 new_session 或 existing_session");
   }
@@ -1483,8 +1532,8 @@ registerMethod("automation.create", (params) => {
   if (typeof p.runAt === "number" && typeof p.delayMinutes === "number") {
     throw badAutomation("runAt 与 delayMinutes 只能给一个");
   }
-  if (p.launchMode !== undefined && p.launchMode !== "terminal" && p.launchMode !== "headless") {
-    throw badAutomation("launchMode 只能是 terminal 或 headless");
+  if (p.launchMode !== undefined && p.launchMode !== "terminal" && p.launchMode !== "chat" && p.launchMode !== "headless") {
+    throw badAutomation("launchMode 只能是 terminal、chat 或 headless");
   }
   // 绝对时刻与相对延迟同属「一次性」表达：调度/次数口径必须一致，
   // 否则 runAt 建出来的任务会被当成循环任务，一到点就永远跑下去
@@ -1522,7 +1571,7 @@ registerMethod("automation.create", (params) => {
     recurring,
     maxRuns,
     nextRunAt,
-    launchMode: p.launchMode === "headless" ? "headless" : "terminal",
+    launchMode: p.launchMode === "headless" || p.launchMode === "chat" ? p.launchMode : "terminal",
     // 定时发送到已有对话：目标会话可以留空 —— 发火时按执行器最近一个可 resume 的会话回退
     dispatchTarget: p.dispatchTarget === "existing_session" ? "existing_session" : "new_session",
     targetSessionId: typeof p.targetSessionId === "string" && p.targetSessionId !== "" ? p.targetSessionId : null,
@@ -1542,8 +1591,8 @@ registerMethod("automation.update", (params) => {
     runAt?: number | null;
   };
   if (typeof p.id !== "number") throw badAutomation("id is required");
-  if (p.launchMode !== undefined && p.launchMode !== "terminal" && p.launchMode !== "headless") {
-    throw badAutomation("launchMode 只能是 terminal 或 headless");
+  if (p.launchMode !== undefined && p.launchMode !== "terminal" && p.launchMode !== "chat" && p.launchMode !== "headless") {
+    throw badAutomation("launchMode 只能是 terminal、chat 或 headless");
   }
   if (p.dispatchTarget !== undefined && p.dispatchTarget !== "new_session" && p.dispatchTarget !== "existing_session") {
     throw badAutomation("dispatchTarget 只能是 new_session 或 existing_session");
@@ -1554,7 +1603,7 @@ registerMethod("automation.update", (params) => {
 
   const patch: Partial<Parameters<Store["updateAutomation"]>[1]> = {};
   if (typeof p.name === "string") patch.name = p.name;
-  if (p.launchMode === "terminal" || p.launchMode === "headless") patch.launchMode = p.launchMode;
+  if (p.launchMode === "terminal" || p.launchMode === "chat" || p.launchMode === "headless") patch.launchMode = p.launchMode;
   if (typeof p.prompt === "string") patch.prompt = p.prompt;
   if (p.model !== undefined) patch.model = typeof p.model === "string" ? p.model : null;
   if (p.mode !== undefined) patch.mode = typeof p.mode === "string" ? p.mode : null;
@@ -1717,7 +1766,7 @@ interface UnitHistoryEntry {
   title: string;
   subtitle: string | null;
   runtimeId: string;
-  launchMode: "terminal" | "headless";
+  launchMode: LaunchMode;
   status: string;
   trigger: string | null;
   startedAt: number;
@@ -1848,7 +1897,9 @@ registerMethod("unit.history", async (params) => {
     const autoRootPath = (botMap.get(a.unitId)?.rootPath ? String(botMap.get(a.unitId)?.rootPath) : "") || defaultBotRootPath;
     for (const r of store.listAutomationRuns(a.id, limit)) {
       const isTerminal = r.sessionId !== null && r.sessionId.startsWith("autoterm_");
-      const launchMode: "terminal" | "headless" = isTerminal ? "terminal" : (r.sessionId !== null ? "headless" : a.launchMode);
+      // host 会话运行按定义行的 launchMode 展示（chat = 对话页前台拉起过）；
+      // sessionId 为 null 的失败行只能信定义行本身
+      const launchMode: LaunchMode = isTerminal ? "terminal" : (r.sessionId !== null && a.launchMode !== "chat" ? "headless" : a.launchMode);
       // terminal 模式的自动化行同样回溯原生 ref（automation_runs 没有 resume_ref
       // 列，不落库 —— 每调用按 TTL 缓存现匹配，命中的成本只是内存过滤）
       let terminalResumeRef: string | null = null;
@@ -1900,7 +1951,7 @@ registerMethod("unit.history", async (params) => {
         title: item.title,
         subtitle: item.goal.length > 80 ? `${item.goal.slice(0, 80)}…` : item.goal,
         runtimeId: r.runtimeId,
-        launchMode: isTerminal ? "terminal" : "headless",
+        launchMode: isTerminal ? "terminal" : (item.launchMode === "chat" ? "chat" : "headless"),
         status: r.status,
         trigger: r.trigger,
         startedAt: r.startedAt,
@@ -2225,8 +2276,8 @@ registerMethod("backlog.create", (params) => {
   if (typeof p.unitId !== "string" || typeof p.rootPath !== "string" || p.rootPath === "") {
     throw badBacklog("unitId and rootPath are required");
   }
-  if (p.launchMode !== undefined && p.launchMode !== "terminal" && p.launchMode !== "headless") {
-    throw badBacklog("launchMode 只能是 terminal 或 headless");
+  if (p.launchMode !== undefined && p.launchMode !== "terminal" && p.launchMode !== "chat" && p.launchMode !== "headless") {
+    throw badBacklog("launchMode 只能是 terminal、chat 或 headless");
   }
   const goal = p.goal.trim();
   const title = typeof p.title === "string" && p.title.trim() !== "" ? p.title.trim() : goal.split(/\r?\n/)[0]!.slice(0, 40);
@@ -2241,7 +2292,7 @@ registerMethod("backlog.create", (params) => {
     model: typeof p.model === "string" && p.model !== "" ? p.model : null,
     mode: typeof p.mode === "string" && p.mode !== "" ? p.mode : null,
     size: p.size === "big" || p.size === "small" ? p.size : null,
-    launchMode: p.launchMode === "headless" ? "headless" : "terminal",
+    launchMode: p.launchMode === "headless" || p.launchMode === "chat" ? p.launchMode : "terminal",
     source: "manual",
   });
   const item = store.getBacklogItem(id);
@@ -2256,8 +2307,8 @@ registerMethod("backlog.update", (params) => {
     launchMode?: string;
   };
   if (typeof p.id !== "number") throw badBacklog("id is required");
-  if (p.launchMode !== undefined && p.launchMode !== "terminal" && p.launchMode !== "headless") {
-    throw badBacklog("launchMode 只能是 terminal 或 headless");
+  if (p.launchMode !== undefined && p.launchMode !== "terminal" && p.launchMode !== "chat" && p.launchMode !== "headless") {
+    throw badBacklog("launchMode 只能是 terminal、chat 或 headless");
   }
   const hit = store.getBacklogItem(p.id);
   if (hit === undefined) throw Object.assign(new Error(`没有这个待办：${p.id}`), { code: "unknown_item" });
@@ -2273,7 +2324,7 @@ registerMethod("backlog.update", (params) => {
     ...(p.model !== undefined ? { model: typeof p.model === "string" && p.model !== "" ? p.model : null } : {}),
     ...(p.mode !== undefined ? { mode: typeof p.mode === "string" && p.mode !== "" ? p.mode : null } : {}),
     ...(p.size !== undefined ? { size: p.size === "big" || p.size === "small" ? p.size : null } : {}),
-    ...(p.launchMode === "terminal" || p.launchMode === "headless" ? { launchMode: p.launchMode } : {}),
+    ...(p.launchMode === "terminal" || p.launchMode === "chat" || p.launchMode === "headless" ? { launchMode: p.launchMode } : {}),
   });
   const item = store.getBacklogItem(p.id);
   return { item: item === undefined ? null : requireEngine().toItem(item) };
@@ -3538,6 +3589,9 @@ registerMethod("session.resumable", (params) => {
       startedAt: s.startedAt,
       endedAt: s.endedAt,
       lastActiveAt: s.endedAt ?? s.startedAt,
+      // 来源透出：定时发送的目标选择器据此标「来自自动化/飞书/工作台…」，
+      // 用户不用靠标题猜这是哪个渠道的对话
+      source: s.source ?? null,
     }));
   return { sessions: out };
 });

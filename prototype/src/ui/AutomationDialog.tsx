@@ -11,6 +11,7 @@ import {
 } from "../core/automation.ts";
 import type { AutomationWriteInput, ResumableSession } from "../adapters/daemon/client.ts";
 import { fetchResumableSessions } from "../adapters/daemon/client.ts";
+import { SESSION_SOURCE_LABEL, type SessionSource } from "../core/units.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { ModelSelect } from "./ModelSelect.tsx";
 import { cn } from "./cn.ts";
@@ -24,6 +25,15 @@ import { cn } from "./cn.ts";
  */
 
 export type FreqTab = "delay" | "hourly" | "daily" | "weekly" | "monthly" | "custom";
+
+/**
+ * 弹窗打开请求（docs/23）：新建（可带模板预填）或编辑。全局唯一份，存于
+ * useShell.automationDialog —— 侧栏待触发行、自动化页新建/编辑共用，挂载点
+ * 在 WorkspaceShell（不依赖当前 mainView）。
+ */
+export type AutomationDialogRequest =
+  | { mode: "create"; prefill?: AutomationDialogPrefill }
+  | { mode: "edit"; automation: Automation };
 
 /** 模板预填：名称 + 描述 + 提示词 + 重复规则草稿（空态宫格点进来的半成品表单） */
 export interface AutomationDialogPrefill {
@@ -65,9 +75,20 @@ const MODE_OPTIONS: readonly { id: string; label: string }[] = [
   { id: "yolo", label: "yolo（免审批）" },
 ];
 
-const LAUNCH_MODE_OPTIONS: readonly { id: "terminal" | "headless"; label: string; hint: string }[] = [
-  { id: "terminal", label: "终端 TUI（默认）", hint: "到点在前端拉起执行器终端界面，可看可插手（自动配免审批）" },
-  { id: "headless", label: "纯后台", hint: "原 headless 会话：不弹终端、走会话台账，适合例行任务" },
+const LAUNCH_MODE_OPTIONS: readonly { id: "terminal" | "chat" | "headless"; label: string; hint: string }[] = [
+  { id: "chat", label: "对话页（默认）", hint: "到点把会话开在主聊天页前台 —— 可看可插话，GUI 原生形态" },
+  { id: "terminal", label: "终端 TUI", hint: "到点在前端拉起执行器终端界面，可看可插手（自动配免审批）" },
+  { id: "headless", label: "纯后台", hint: "headless 会话：不弹任何界面、走会话台账，适合例行任务" },
+];
+
+/**
+ * 「已有对话」的执行方式子集：终端 TUI 不是定时收件对象（终端与会话是两套
+ * 体系，TUI 里跑的对话没有会话台账可续接），所以这里只剩一个决定 ——
+ * 到点发消息时，要不要把那个对话顺手拉到聊天页前台。
+ */
+const EXISTING_LAUNCH_MODE_OPTIONS: readonly { id: "chat" | "headless"; label: string; hint: string }[] = [
+  { id: "chat", label: "对话页（到点打开该对话）", hint: "到点把消息发进老对话，并把它打开到聊天页前台" },
+  { id: "headless", label: "纯后台（只发不打开）", hint: "到点只发消息，不动你当前看的页面" },
 ];
 
 /**
@@ -227,7 +248,8 @@ export function AutomationDialog({
   const [prompt, setPrompt] = useState(initial?.description ?? prefill?.prompt ?? "");
   const [model, setModel] = useState(initial?.model ?? "");
   const [mode, setMode] = useState(initial?.mode ?? "");
-  const [launchMode, setLaunchMode] = useState<"terminal" | "headless">(initial?.launchMode === "headless" ? "headless" : "terminal");
+  // 新建默认「对话页」；编辑沿用定义行的值（旧行缺省按 terminal 读，映射层已归一）
+  const [launchMode, setLaunchMode] = useState<"terminal" | "chat" | "headless">(initial?.launchMode ?? "chat");
   const [dispatchTarget, setDispatchTarget] = useState<DispatchTarget>(initial?.dispatchTarget === "existing_session" ? "existing_session" : "new_session");
   /** 定时发送的收件对话：空串 = 发火时自动挑最近一个能接回来的 */
   const [targetSessionId, setTargetSessionId] = useState<string>(initial?.targetSessionId ?? "");
@@ -389,7 +411,8 @@ export function AutomationDialog({
       // delay 分支不发 maxRuns：delayMinutes 本身就定性一次性（跑一次收口），
       // 后端 create 明确拒绝「delayMinutes + maxRuns」组合，带上就是必报错
       maxRuns: draft.freq === "delay" ? undefined : (draft.recurring ? null : Math.max(1, Math.round(draft.maxRuns))),
-      launchMode: dispatchTarget === "existing_session" ? "headless" : launchMode,
+      // 已有对话不认 TUI（终端不是收件对象）：terminal 兜底归一成 chat
+      launchMode: dispatchTarget === "existing_session" ? (launchMode === "headless" ? "headless" : "chat") : launchMode,
       dispatchTarget,
       // 留空 = 发火时自动挑该执行器最近一个能接回来的对话（daemon 侧回退）。
       // 选了具体某个就钉死它 —— 用户能看见选了谁，才可能发现选错了。
@@ -476,7 +499,13 @@ export function AutomationDialog({
           <Field label="发到哪里" hint={DISPATCH_TARGET_OPTIONS.find((m) => m.id === dispatchTarget)?.hint}>
             <select
               value={dispatchTarget}
-              onChange={(e) => setDispatchTarget(e.target.value === "existing_session" ? "existing_session" : "new_session")}
+              onChange={(e) => {
+                const next = e.target.value === "existing_session" ? "existing_session" : "new_session";
+                setDispatchTarget(next);
+                // 往老对话发不认 TUI（终端不是收件对象）：切过来时把 terminal 归一成 chat，
+                // 执行方式控件才不会出现「选了个发不出去的值」
+                if (next === "existing_session" && launchMode === "terminal") setLaunchMode("chat");
+              }}
               className={inputCls}
             >
               {DISPATCH_TARGET_OPTIONS.map((m) => (
@@ -494,7 +523,7 @@ export function AutomationDialog({
               hint={
                 resumable.length === 0 && !resumableLoading
                   ? `${runtimeBare} 还没有能续接的对话（只有跑过至少一轮、执行器留了引用的才能续）`
-                  : "到点把提示词发进这个对话；对话已结束会自动接回来"
+                  : "列表均为对话页会话（终端 TUI 不是定时收件对象）；已结束的会自动接回来"
               }
             >
               {resumableLoading ? (
@@ -512,7 +541,11 @@ export function AutomationDialog({
                   <option value="">自动选最近一个能续接的（推荐）</option>
                   {resumable.map((s) => (
                     <option key={s.id} value={s.id}>
-                      {s.title !== "" ? s.title : s.id} ·{" "}
+                      {/* 来源跟着条目走：自动化的、飞书的、工作台手开的对话在这里长得一样，
+                          不标出来用户只能靠标题猜这条是谁家的 */}
+                      [{SESSION_SOURCE_LABEL[(s.source ?? "workbench") as SessionSource] ?? s.source}]{" "}
+                      {s.title !== "" ? s.title : s.id}
+                      {s.endedAt === null ? " · 运行中" : ""} ·{" "}
                       {new Date(s.lastActiveAt).toLocaleString("zh-CN", {
                         month: "2-digit",
                         day: "2-digit",
@@ -526,12 +559,16 @@ export function AutomationDialog({
             </Field>
           )}
 
-          {/* 往老对话发消息不需要决定「怎么起会话」—— 这个控件对新对话才有意义 */}
-          {dispatchTarget === "new_session" && (
+          {/* 执行方式两个目标都要有：新对话 = 怎么起（TUI / 对话页 / 纯后台），
+              已有对话 = 到点要不要把那个对话拉到前台（TUI 不是收件对象） */}
+          {dispatchTarget === "new_session" ? (
             <Field label="执行方式" hint={LAUNCH_MODE_OPTIONS.find((m) => m.id === launchMode)?.hint}>
               <select
                 value={launchMode}
-                onChange={(e) => setLaunchMode(e.target.value === "headless" ? "headless" : "terminal")}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setLaunchMode(v === "terminal" || v === "chat" || v === "headless" ? v : "chat");
+                }}
                 className={inputCls}
               >
                 {LAUNCH_MODE_OPTIONS.map((m) => (
@@ -541,9 +578,33 @@ export function AutomationDialog({
                 ))}
               </select>
             </Field>
+          ) : (
+            <Field
+              label="执行方式"
+              hint={EXISTING_LAUNCH_MODE_OPTIONS.find((m) => m.id === (launchMode === "headless" ? "headless" : "chat"))?.hint}
+            >
+              <select
+                value={launchMode === "headless" ? "headless" : "chat"}
+                onChange={(e) => setLaunchMode(e.target.value === "headless" ? "headless" : "chat")}
+                className={inputCls}
+              >
+                {EXISTING_LAUNCH_MODE_OPTIONS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
           )}
 
-          <Field label="提示词" hint={dispatchTarget === "existing_session" ? "到点后原样发进那个老对话里的一段话" : "到点后原样发给执行器的一段话"}>
+          <Field
+            label="提示词"
+            hint={
+              dispatchTarget === "existing_session"
+                ? "到点后原样发进那个老对话里 —— 写清最终要做什么，运行期间无人回答问题"
+                : "到点后原样发给执行器 —— 自包含、直接描述最终工作；无人值守运行，别要求它再建定时任务"
+            }
+          >
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}

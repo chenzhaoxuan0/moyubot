@@ -332,9 +332,15 @@ function BacklogCard({
                 "shrink-0 rounded-chip px-1.5 py-px text-caption",
                 item.launchMode === "headless" ? "bg-line-soft text-ash" : "bg-teal-tint text-teal",
               )}
-              title={item.launchMode === "headless" ? "纯后台 headless 会话执行" : "确认后在前端拉起执行器 TUI（免审批）"}
+              title={
+                item.launchMode === "headless"
+                  ? "纯后台 headless 会话执行"
+                  : item.launchMode === "chat"
+                    ? "确认后把会话开在主聊天页前台（可看可插话）"
+                    : "确认后在前端拉起执行器 TUI（免审批）"
+              }
             >
-              {item.launchMode === "headless" ? "后台" : "TUI"}
+              {item.launchMode === "headless" ? "后台" : item.launchMode === "chat" ? "对话页" : "TUI"}
             </span>
           </dd>
         </div>

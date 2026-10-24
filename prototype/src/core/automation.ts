@@ -57,6 +57,15 @@ export type RunStatus = "idle" | "running" | "completed" | "failed" | "paused";
  */
 export type DispatchTarget = "new_session" | "existing_session";
 
+/**
+ * 执行方式三形态（自动化与待办共用；docs/23）：
+ * - `terminal`：到点在前端 PTY 里拉执行器 TUI 本尊（免审批），人可看可插手
+ * - `chat`：到点走 headless 派发 + 广播 `session.foreground` 把前端拉到该会话 ——
+ *   对话开在主聊天页前台，可看可插话（steer 队列天然支持），GUI 原生形态
+ * - `headless`：纯后台 host 会话，不拉前台（历史/任务栏/监控里事后可看）
+ */
+export type LaunchMode = "terminal" | "chat" | "headless";
+
 
 export interface AutomationRun {
   readonly startedAt: number;
@@ -84,6 +93,8 @@ export interface Automation {
   /** 一次性任务跑完即停 */
   readonly recurring: boolean;
   readonly maxRuns?: number;
+  /** 累计已发火次数（含手动，ZCode「Ran N times」口径；与 maxRuns 分母分离） */
+  readonly runCount?: number;
   readonly runs: readonly AutomationRun[];
   /** 跑出来的产出，指向 deliverables */
   readonly deliverableIds: readonly string[];
@@ -94,8 +105,8 @@ export interface Automation {
   readonly mode?: string | null;
   /** daemon 权威行上的 cron 原文（兼容展示；scheduleSource="cron" 时编辑未动调度要原样回传） */
   readonly cron?: string;
-  /** 执行方式：terminal = 到点在前端拉执行器 TUI（缺省）；headless = 纯后台 host 会话 */
-  readonly launchMode?: "terminal" | "headless";
+  /** 执行方式（缺省 = terminal）：terminal / chat（对话页前台）/ headless（纯后台），见 LaunchMode */
+  readonly launchMode?: LaunchMode;
   /** 到点把消息投到哪里（缺省 = new_session，与 v2 旧行一致） */
   readonly dispatchTarget?: DispatchTarget;
   /** dispatchTarget=existing_session 时的收件对话 id */

@@ -60,10 +60,16 @@
   `docs/internals/overview.md`。
 - `terminal` 帧是终端数据流（`kind: "data" | "exit"`，exit 带 `exitCode`）——高频且非契约事件，独立于 `event` 流，不落轨迹。
 - **`notifications` 帧是 daemon 聚合的通知推流**（docs/21 P4b）：`{v:1, type:"notifications", row}`，行形状即 `notifications.list` 的条目（自然键去重、**无 read 字段**——已读是客户端呈现）。无订阅者即丢弃，历史以 `notifications.list` 拉取为准，daemon 侧落 `<homeDir>/notifications.json`。
-- **`git.changed`（docs/16）是唯一无 `sessionId` 的 RuntimeEvent**：daemon 侧文件监听发现某仓库
+- **`git.changed`（docs/16）是无 `sessionId` 的 RuntimeEvent**：daemon 侧文件监听发现某仓库
   （`git.status` 心跳到达过的）工作树 / .git 有变化，节流后（默认 60s 一条，前沿即发、尾沿合并）
   广播 `{type:"git.changed", rootPath}`。它是「该刷新了」的信号不是数据本身，前端拉 `git.status` /
   `git.changes` 收敛；不落盘、不参与 `(sessionId, seq)` 判重补拉（seq 由独立计数器填充）。
+- **`session.foreground`（docs/23）是前台拉起信号，broadcast-only**：`launchMode=chat` 的
+  自动化/待办到点派发成功后广播 `{type:"session.foreground", sessionId, unitId, runtimeId,
+  cause:"automation"|"backlog", title?}`，前端据此把该会话打开到聊天时间线前台
+  （`installSessionForeground`）。与 `git.changed` 同款口径：带 `sessionId` 但用独立计数器
+  填 seq，**不是会话账本 seq**——适配器会话泵显式跳过它，否则会污染判重游标；
+  漏发的代价只是不自动跳前台（会话仍在历史/任务栏可点开）。
 - **解析不出 `id` 的帧**（非 JSON / envelope 不合法）回 `id: null` 的错误帧——这是唯一允许 `id` 为 null 的场景。
 
 ## 三、错误码
@@ -116,13 +122,13 @@
 
 | 方法 | 说明 | params | 危险 |
 |---|---|---|---|
-| `automation.create` | 新建定时任务（5 字段 cron，创建时即校验） | {unitId, unitName?, runtimeId, rootPath, prompt, model?, mode?, cron} | — |
+| `automation.create` | 新建定时任务（5 字段 cron，创建时即校验；总量上限 20 条。prompt 须自包含、直接描述最终工作、无人值守不问问题、不得要求再建定时任务 —— ZCode CronCreate 口径；launchMode：terminal=TUI / chat=对话页前台 / headless=纯后台；dispatchTarget：new_session / existing_session） | {unitId, unitName?, runtimeId, rootPath, prompt, model?, mode?, cron} | — |
 | `automation.delete` | 删除定时任务 | {id} | — |
 | `automation.list` | 定时任务定义清单 | null | — |
 | `automation.runNow` | 立即跑一次定时任务（runId + sessionId，终态回灌运行记录） | {id} | — |
 | `automation.runs` | 指定定时任务的运行记录（一行一次，含 sessionId 与终态） | {id} | — |
 | `automation.setEnabled` | 启停定时任务 | {id, enabled} | — |
-| `automation.update` | 按 id 更新定时任务定义（cron/prompt/模型/调度规则/派发目标等） | {id, ...定义字段} | — |
+| `automation.update` | 按 id 更新定时任务定义（cron/prompt/模型/调度规则/派发目标/执行方式等） | {id, ...定义字段} | — |
 
 ### backlog
 
@@ -131,7 +137,7 @@
 | `backlog.config.get` | 读待办引擎配置 | null | — |
 | `backlog.config.set` | 以补丁更新待办引擎配置并落盘 | {patch} | — |
 | `backlog.consolidate.run` | 立即跑一次待办清单归并整理，默认强制 | {force?} | — |
-| `backlog.create` | 新建待办项并落库 | {goal, unitId, rootPath, title?, prompt?, unitName?, runtimeId?, model?, mode?, size?, launchMode?} | — |
+| `backlog.create` | 新建待办项并落库（launchMode：terminal=TUI / chat=对话页前台 / headless=纯后台；prompt 无人值守口径同 automation.create） | {goal, unitId, rootPath, title?, prompt?, unitName?, runtimeId?, model?, mode?, size?, launchMode?} | — |
 | `backlog.delete` | 按 id 删待办，执行中的不可删 | {id} | — |
 | `backlog.heartbeat.force` | 手动触发一跳待办心跳，受理即返 | null | — |
 | `backlog.list` | 拉待办全量视图：条目、提议、状态、配置、配额 | null | — |
@@ -143,7 +149,7 @@
 | `backlog.runNow` | 立即派发执行某条待办 | {id, runtimeId?, model?} | — |
 | `backlog.sleep` | 让某条待办休眠暂停调度 | {id} | — |
 | `backlog.state.forceBusy` | 设强制忙碌开关，暂停待办自动派发 | {on} | — |
-| `backlog.update` | 按 id 编辑待办字段（执行中的禁改） | {id, title?, goal?, prompt?, unitId?, unitName?, rootPath?, runtimeId?, model?, mode?, size?, launchMode?} | — |
+| `backlog.update` | 按 id 编辑待办字段（执行中的禁改；launchMode 三选 terminal/chat/headless） | {id, title?, goal?, prompt?, unitId?, unitName?, rootPath?, runtimeId?, model?, mode?, size?, launchMode?} | — |
 | `backlog.wake` | 唤醒休眠中的待办 | {id} | — |
 
 ### bot
@@ -350,7 +356,7 @@
 | `session.queue.remove` | 从会话待发送队列删一条 | {sessionId, id} | — |
 | `session.queue.resume` | 恢复会话的待发送队列投递 | {sessionId} | — |
 | `session.queue.sendNow` | 立即发送会话队列中的某条消息 | {sessionId, id} | — |
-| `session.resumable` | 列可续接的会话（有 cli_ref 的那些） | {runtimeId?, limit?} | — |
+| `session.resumable` | 列可续接的会话（有 cli_ref 的那些；行带 source 供目标选择器标来源） | {runtimeId?, limit?} | — |
 | `session.resume` | 按 cli_ref 续接既有会话，之后 send/cancel 照常 | {sessionId} | — |
 | `session.send` | 向既有会话续聊发一条文本（agent loop，上下文连续）；attachments 为本地文件路径，daemon 侧内联 | {sessionId, text, attachments?, reasoningLevel?, contextLength?} | — |
 | `session.start` | 起会话跑一轮：按 bot 的 contextManifest 注入上下文、spawn 执行器；worktree 命中则会话 rootPath 全程指向该工作树 | {runtimeId, unitId, rootPath, prompt, unitName?, model?, mode?, reasoningLevel?, worktree?, memoryOptions?} | — |

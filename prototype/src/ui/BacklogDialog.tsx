@@ -41,7 +41,8 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
   const [model, setModel] = useState(initial?.model ?? "");
   const [mode, setMode] = useState(initial?.mode ?? "");
   const [size, setSize] = useState<string>(initial?.size ?? "");
-  const [launchMode, setLaunchMode] = useState<"terminal" | "headless">(initial?.launchMode === "headless" ? "headless" : "terminal");
+  // 新建默认「对话页」（与自动化口径一致）；编辑沿用定义行的值
+  const [launchMode, setLaunchMode] = useState<"terminal" | "chat" | "headless">(initial?.launchMode ?? "chat");
   const [err, setErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -197,19 +198,29 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
 
           <Field
             label="执行方式"
-            hint={launchMode === "terminal" ? "确认后在前端拉执行器 TUI（免审批，可看可插手）" : "纯后台执行：不弹终端，走会话台账"}
+            hint={
+              launchMode === "terminal"
+                ? "确认后在前端拉执行器 TUI（免审批，可看可插手）"
+                : launchMode === "chat"
+                  ? "确认后把会话开在主聊天页前台 —— 可看可插话"
+                  : "纯后台执行：不弹终端，走会话台账"
+            }
           >
             <select
               value={launchMode}
-              onChange={(e) => setLaunchMode(e.target.value === "headless" ? "headless" : "terminal")}
+              onChange={(e) => {
+                const v = e.target.value;
+                setLaunchMode(v === "terminal" || v === "chat" || v === "headless" ? v : "chat");
+              }}
               className={inputCls}
             >
-              <option value="terminal">终端 TUI（默认）</option>
+              <option value="chat">对话页（默认）</option>
+              <option value="terminal">终端 TUI</option>
               <option value="headless">纯后台</option>
             </select>
           </Field>
 
-          <Field label="启动 prompt" hint="确认后原样发给执行器 —— 由目标模板生成，可手改">
+          <Field label="启动 prompt" hint="确认后原样发给执行器（由目标模板生成，可手改）—— 无人值守执行，写清预期产出，运行期间无人回答问题">
             <textarea
               value={prompt}
               onChange={(e) => {

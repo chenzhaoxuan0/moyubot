@@ -28,7 +28,7 @@ import type {
 import type { BacklogRow, Store } from "../store/db.ts";
 import type { RuntimeHost } from "../runtime/host.ts";
 import type { SessionId } from "../../../prototype/src/core/units.ts";
-import { asModelId, asUnitId } from "../../../prototype/src/core/units.ts";
+import { asModelId, asSessionId, asUnitId } from "../../../prototype/src/core/units.ts";
 import { QuotaProbe } from "./probe.ts";
 import { consolidateInboxes, type ConsolidateResult } from "./consolidate.ts";
 import { log } from "../log.ts";
@@ -36,6 +36,13 @@ import { log } from "../log.ts";
 const TICK_MS = 20_000;
 /** 心跳会话一跳的总预算：超时按沉默收场，绝不让一跳挂住调度器 */
 const BEAT_BUDGET_MS = 3 * 60_000;
+/**
+ * 时间盒续跑提示词（对齐 ZCode 闲时任务的 OFF_PEAK_RESUME_PROMPT 语义，docs/23）：
+ * 中断/失败后重新执行时 resume 原会话发这一句 —— 会话里带着原始目标与已完成
+ * 进度，不从头交代，也不重复原 prompt。
+ */
+const BACKLOG_RESUME_PROMPT =
+  "继续之前的任务，从中断处接着做，不要从头开始。先简要回顾已完成的部分，再完成剩余工作。";
 const KV_PROPOSAL = "backlog.proposal";
 const KV_HEARTBEAT = "backlog.heartbeat.status";
 const KV_FORCE_BUSY = "backlog.forceBusy";
@@ -66,6 +73,11 @@ export interface BacklogEngineDeps {
    * 终端 exit 帧回调调 onTerminalExited() 回灌。未提供时 terminal 模式降级 headless。
    */
   readonly launchTerminal?: (opts: { runtimeId: string; unitId: string; rootPath: string; prompt: string }) => Promise<string>;
+  /**
+   * 对话页前台拉起（待办 launchMode=chat）：会话开好后广播 session.foreground，
+   * 前端把它打开到聊天时间线。未提供时 chat 模式退化为纯后台（会话照跑，只是不跳前台）。
+   */
+  readonly foreground?: (sessionId: string, unitId: string, runtimeId: string, cause: "backlog", title?: string) => void;
 }
 
 export class BacklogEngine {
@@ -81,6 +93,13 @@ export class BacklogEngine {
   private readonly runByTerminal = new Map<string, { runId: number; itemId: number }>();
   private lastSnapshot: BacklogStateSnapshot | null = null;
   private lastLedger: HeartbeatLedger = { lastBeatAt: null, lastBeatOutcome: null };
+  /**
+   * 闲时边沿武装位（对齐 ZCode 闲时任务「空闲即跑」的时机语义，docs/23）：
+   * phase 从非 idle 跳进 idle 的那一拍置位，maybeBeat 见到它就放行周期门 ——
+   * 任务跑完/用户离开达到阈值的那一刻就提议，不等下一个 intervalMinutes。
+   * 消费即清零；beat 内的 idle 判定与确认门等全部护栏照旧（ADR-0001 不动）。
+   */
+  private idleEdgeArmed = false;
 
   constructor(private readonly deps: BacklogEngineDeps) {
     this.probe = new QuotaProbe(deps.homeDir);
@@ -213,8 +232,12 @@ export class BacklogEngine {
       lastBeatOutcome: this.lastLedger.lastBeatOutcome,
     };
     if (force || this.lastSnapshot === null || this.lastSnapshot.phase !== snap.phase || this.lastSnapshot.reason !== snap.reason) {
+      // 闲时边沿检测放在广播分支之外也要做（phase 没变时 lastSnapshot 也在更新）：
+      // 判定用的是更新前的缓存，跳变发生在这一拍
+      const enteredIdle = this.lastSnapshot !== null && this.lastSnapshot.phase !== "idle" && snap.phase === "idle";
       this.lastSnapshot = snap;
       this.deps.broadcast({ kind: "state", snapshot: snap });
+      if (enteredIdle) this.idleEdgeArmed = true;
     } else {
       // phase/reason 没变也更新缓存（nextBeat/lastOutcome 会动）
       this.lastSnapshot = snap;
@@ -230,10 +253,15 @@ export class BacklogEngine {
 
   private async maybeBeat(): Promise<void> {
     const cfg = this.deps.getConfig();
-    if (!cfg.heartbeat.enabled) return;
+    if (!cfg.heartbeat.enabled) {
+      this.idleEdgeArmed = false;
+      return;
+    }
     if (this.beating || this.activeProposal !== null) return;
     const last = this.lastLedger.lastBeatAt ?? 0;
-    if (Date.now() - last < cfg.heartbeat.intervalMinutes * 60_000) return;
+    // 闲时边沿放行：刚进入 idle 的那一拍不等周期（周期门只在常规轮询时生效）
+    if (Date.now() - last < cfg.heartbeat.intervalMinutes * 60_000 && !this.idleEdgeArmed) return;
+    this.idleEdgeArmed = false;
     await this.beat(false);
   }
 
@@ -261,6 +289,9 @@ export class BacklogEngine {
 
   private async beat(force = false): Promise<void> {
     if (this.beating) return; // 单飞
+    // 任何一跳（含手动 forceBeat）都消费闲时边沿：否则手动跳完，挂着的
+    // armed 位会让下一拍绕过周期门再跳一次（双跳）
+    this.idleEdgeArmed = false;
     // 硬过滤（ADR-0003）：规则层一分钱不花。
     // 强制忙碌压倒一切自动与手动判定（共识 Q18），最先判；
     // 挂起提议/执行中/待验证对心跳即"忙"。
@@ -573,8 +604,8 @@ export class BacklogEngine {
   // ---- 执行派发与终态回灌 ----------------------------------------------------
 
   /** 派发一条待办。terminal 模式：前端 PTY 拉执行器 TUI（yolo 免审批，人可看可插手），
-   *  终态由终端 exit 帧回灌；headless：复用 automation 的会话语义（source=automation →
-   *  权限全放行，deny 仍优先）。 */
+   *  终态由终端 exit 帧回灌；chat / headless：复用 automation 的会话语义
+   *  （source=automation → 权限全放行，deny 仍优先），chat 额外把前端拉到该会话。 */
   async dispatch(item: BacklogRow, runtimeId: string, model: string | null, trigger: "gtd" | "manual" = "gtd"): Promise<{ runId: number; sessionId: string }> {
     if (item.launchMode === "terminal" && this.deps.launchTerminal !== undefined) {
       const runId = this.deps.store.startBacklogRun(item.id, null, runtimeId, trigger);
@@ -604,28 +635,42 @@ export class BacklogEngine {
     this.deps.store.updateBacklogItem(item.id, { status: "executing", runtimeId, model, lastError: null, lastRunAt: Date.now() });
     this.deps.broadcast({ kind: "items" });
     try {
-      const session = await this.deps.host.startSession({
-        runtimeId,
-        unitId: asUnitId(item.unitId),
-        unitName: item.unitName,
-        rootPath: item.rootPath,
-        prompt: item.prompt,
-        model: model === null || model === "" ? null : asModelId(model),
-        mode: (item.mode ?? undefined) as "plan" | "build" | "edit" | "yolo" | undefined,
-        source: "automation",
-      });
-      this.deps.store.setBacklogRunSession(runId, session.id);
+      // 时间盒续跑（docs/23）：上次失败且会话接得回来 → resume 原会话发续跑
+      // 提示词，不从头开始；首跑 / 上次成功 / TUI 中断 / 换过执行器都走新开
+      const resumeSid = this.resumeTargetFor(item.id, runtimeId);
+      let sessionId: string;
+      if (resumeSid !== null) {
+        this.deps.host.resumeSession(asSessionId(resumeSid));
+        this.deps.host.sendMessage(asSessionId(resumeSid), BACKLOG_RESUME_PROMPT, undefined, undefined, "automation");
+        sessionId = resumeSid;
+        log.info("backlog item resumed previous session", { itemId: item.id, runId, sessionId });
+      } else {
+        const session = await this.deps.host.startSession({
+          runtimeId,
+          unitId: asUnitId(item.unitId),
+          unitName: item.unitName,
+          rootPath: item.rootPath,
+          prompt: item.prompt,
+          model: model === null || model === "" ? null : asModelId(model),
+          mode: (item.mode ?? undefined) as "plan" | "build" | "edit" | "yolo" | undefined,
+          source: "automation",
+        });
+        sessionId = String(session.id);
+      }
+      this.deps.store.setBacklogRunSession(runId, sessionId);
       // 快执行器可能在 startSession 的 promise 落定前就已 ended（automation 同款坑）
-      const ended = this.deps.store.getSession(session.id);
+      const ended = this.deps.store.getSession(sessionId);
       if (ended !== undefined && ended.endedAt !== null) {
         const failed = ended.status === "failed";
         this.deps.store.finishBacklogRun(runId, failed ? "failed" : "done", `ended: ${ended.status}`);
         this.settleExecution(item.id, failed ? "failed" : "done", `ended: ${ended.status}`);
       } else {
-        this.runBySession.set(session.id, { runId, itemId: item.id });
+        this.runBySession.set(sessionId, { runId, itemId: item.id });
       }
-      log.info("backlog item dispatched", { itemId: item.id, runId, sessionId: session.id, runtimeId });
-      return { runId, sessionId: session.id };
+      // 对话页形态：把会话拉到前端聊天页前台（chat 与 headless 共用上面的派发路径）
+      if (item.launchMode === "chat") this.deps.foreground?.(sessionId, item.unitId, runtimeId, "backlog", item.title);
+      log.info("backlog item dispatched", { itemId: item.id, runId, sessionId, runtimeId });
+      return { runId, sessionId };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.store.finishBacklogRun(runId, "failed", message);
@@ -633,6 +678,25 @@ export class BacklogEngine {
       this.deps.broadcast({ kind: "items" });
       throw err;
     }
+  }
+
+  /**
+   * 时间盒续跑判定（docs/23）：最近一次运行失败、sessionId 是真会话（autoterm_
+   * 前缀 = TUI 运行，随 daemon 进程死，无会话可续）、执行器没换过、且接得回来
+   * （live 或有 cli_ref）→ 返回该会话 id；否则 null（首跑 / 上次成功 / TUI 中断 /
+   * 换执行器 / 接不回都走新开）。
+   */
+  private resumeTargetFor(itemId: number, runtimeId: string): string | null {
+    const last = this.deps.store.latestBacklogRun(itemId);
+    if (last === undefined || last.status !== "failed") return null;
+    const sid = last.sessionId;
+    if (sid === null || sid.startsWith("autoterm_")) return null;
+    const row = this.deps.store.getSession(sid);
+    if (row === undefined) return null;
+    // 会话是执行器私有的：换了执行器还 resume 老会话 = 把续跑指令发进另一家的上下文
+    if (row.runtimeId !== runtimeId) return null;
+    if (!this.deps.host.isLive(asSessionId(sid)) && row.cliRef === null) return null;
+    return sid;
   }
 
   /** 执行终态收口：done → 待验收；failed → 回就绪挂错误 */

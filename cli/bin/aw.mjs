@@ -33,7 +33,7 @@ const DANGER = new Set([
 const VALUE_FLAGS = new Set([
   "url", "token", "params", "params-file", "domain", "session", "since",
   "bot", "text", "file", "goal", "unit", "root", "id", "message", "paths", "wait", "attach",
-  "model", "runtime", "title",
+  "model", "runtime", "title", "name", "prompt", "in", "at", "cron", "note",
 ]);
 
 /** 布尔 flag：`--json=true` 这类 = 形式统一归一成 boolean（严格 === true 的消费点才不被静默绕过） */
@@ -95,8 +95,15 @@ const HELP = `aw ${VERSION} —— agent-workbench 命令行客户端（docs/21�
   aw session list | messages --id <sid> | send --id <sid> --text <t> | cancel --id <sid>
   aw session chat (--bot <id> | --unit <uid> --root <p>) --text <t> [--attach p1,p2]
                   [--model m] [--runtime r] [--session <sid>] [--new] [--wait <ms>]
+  aw automation list                                        #id 开关 下次触发 名字
+  aw automation add --unit <uid> --root <p> --runtime <r> --prompt <t>
+                    (--in <分钟> | --at <YYYY-MM-DDTHH:MM> | --cron <五段>) [--name <n>]
+  aw automation on|off --id <n>                             启用 / 停用（改定义走 aw call automation.update）
+  aw automation run|runs|rm --id <n>                        立即跑 / 运行记录 / 删除
   aw backlog list | add --goal <g> --unit <uid> --root <path> [--title <t>]
+  aw backlog run --id <n>                                   立即执行一条待办（确认门照旧）
   aw backlog done --id <n>          验收通过（仅「待验收」态；新建议先执行后验收）
+  aw backlog reject --id <n> [--note <原因>]        验收打回，回到就绪重新排队
   aw git status --root <path> | commit --root <path> --message <m> [--paths a,b]
 
 事件面：
@@ -342,7 +349,68 @@ async function cmdBacklog(flags, sub) {
     if (id === undefined) throw new UsageError("缺少 --id（待办 id）");
     return printJson(await call(flags, "backlog.review", { id, pass: true }));
   }
-  throw new UsageError("用法：aw backlog list | add --goal <g> --unit <uid> --root <path> [--title t] | done --id <n>");
+  if (sub === "reject") {
+    const id = numFlag(flags, "id", "待办 id");
+    if (id === undefined) throw new UsageError("缺少 --id（待办 id）");
+    return printJson(
+      await call(flags, "backlog.review", { id, pass: false, ...(typeof flags.note === "string" ? { note: flags.note } : {}) }),
+    );
+  }
+  if (sub === "run") {
+    const id = numFlag(flags, "id", "待办 id");
+    if (id === undefined) throw new UsageError("缺少 --id（待办 id）");
+    return printJson(await call(flags, "backlog.runNow", { id }));
+  }
+  throw new UsageError(
+    "用法：aw backlog list | add --goal <g> --unit <uid> --root <path> [--title t] | run --id <n> | done --id <n> | reject --id <n> [--note 原因]",
+  );
+}
+
+async function cmdAutomation(flags, sub) {
+  if (sub === "list") {
+    const list = await call(flags, "automation.list", null);
+    if (flags.json === true) return printJson(list);
+    for (const a of list ?? []) {
+      const next = a.nextRunAt === null || a.nextRunAt === undefined ? "—" : new Date(a.nextRunAt).toLocaleString();
+      process.stdout.write(`#${a.id}\t${a.enabled === false ? "off" : "on"}\t${next}\t${a.name ?? ""}\n`);
+    }
+    return;
+  }
+  if (sub === "add") {
+    const unitId = requireFlag(flags, "unit", "unit id");
+    const rootPath = requireFlag(flags, "root", "工作目录");
+    const runtimeId = requireFlag(flags, "runtime", "执行器裸 id（如 zcode）");
+    const prompt = requireFlag(flags, "prompt", "提示词（自包含、直接描述最终工作、无人值守）");
+    // 调度三选一（对齐 daemon 的 automation.create 口径）：
+    // --in N（分钟后，一次性）| --at 本地时刻（一次性）| --cron 五段（循环）
+    const inMin = numFlag(flags, "in", "N 分钟后");
+    const atRaw = typeof flags.at === "string" && flags.at !== "" ? flags.at : undefined;
+    const cron = typeof flags.cron === "string" && flags.cron !== "" ? flags.cron : undefined;
+    const given = [inMin !== undefined, atRaw !== undefined, cron !== undefined].filter(Boolean).length;
+    if (given !== 1) throw new UsageError("调度三选一：--in <分钟> | --at <YYYY-MM-DDTHH:MM> | --cron <五段表达式>");
+    const params = { unitId, rootPath, runtimeId, prompt, ...(typeof flags.name === "string" && flags.name !== "" ? { name: flags.name } : {}) };
+    if (inMin !== undefined) params.delayMinutes = inMin;
+    else if (atRaw !== undefined) {
+      const t = Date.parse(atRaw);
+      if (!Number.isFinite(t)) throw new UsageError(`--at 解析失败：${atRaw}（示例 2026-10-25T09:00，本地时区）`);
+      params.runAt = t;
+    } else params.cron = cron;
+    return printJson(await call(flags, "automation.create", params));
+  }
+  if (sub === "on" || sub === "off") {
+    const id = numFlag(flags, "id", "自动化 id");
+    if (id === undefined) throw new UsageError("缺少 --id（自动化 id，aw automation list 查）");
+    return printJson(await call(flags, "automation.setEnabled", { id, enabled: sub === "on" }));
+  }
+  if (sub === "run" || sub === "runs" || sub === "rm") {
+    const id = numFlag(flags, "id", "自动化 id");
+    if (id === undefined) throw new UsageError("缺少 --id（自动化 id，aw automation list 查）");
+    const method = sub === "run" ? "automation.runNow" : sub === "runs" ? "automation.runs" : "automation.delete";
+    return printJson(await call(flags, method, { id }));
+  }
+  throw new UsageError(
+    "用法：aw automation list | add --unit <uid> --root <p> --runtime <r> --prompt <t> (--in <分钟> | --at <时刻> | --cron <五段>) [--name <n>] | on|off|run|runs|rm --id <n>（改定义走 aw call automation.update）",
+  );
 }
 
 async function cmdGit(flags, sub) {
@@ -440,6 +508,7 @@ async function main() {
     case "bot": return cmdBot(flags, sub);
     case "session": return cmdSession(flags, sub);
     case "backlog": return cmdBacklog(flags, sub);
+    case "automation": return cmdAutomation(flags, sub);
     case "git": return cmdGit(flags, sub);
     case "events": return cmdEvents(flags);
     case "doctor": return cmdDoctor(flags);

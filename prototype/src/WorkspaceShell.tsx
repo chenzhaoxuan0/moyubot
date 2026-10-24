@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { PanelRightOpen } from "lucide-react";
 import { Group, Panel, Separator, type PanelImperativeHandle } from "react-resizable-panels";
 import { AutomationsPage } from "./ui/AutomationsPage.tsx";
+import { AutomationDialog } from "./ui/AutomationDialog.tsx";
 import { BacklogPage } from "./ui/BacklogPage.tsx";
 import { ProposalBanner } from "./ui/ProposalBanner.tsx";
 import { ImageStudioPage } from "./ui/ImageStudioPage.tsx";
@@ -51,6 +52,8 @@ import { cn } from "./ui/cn.ts";
  */
 export function WorkspaceShell() {
   const settingsOpen = useShell((s) => s.settingsOpen);
+  const automationDialog = useShell((s) => s.automationDialog);
+  const closeAutomationDialog = useShell((s) => s.closeAutomationDialog);
   const activeUnitId = useWorkbench((s) => s.activeUnitId);
   const { isMobile, preference, setPreference } = useIsMobile();
   useEffect(() => {
@@ -130,6 +133,17 @@ export function WorkspaceShell() {
 
       {/* 待办提议横幅 —— 确认门的载体，跨主视图常驻（任何视图下都能确认/拒绝） */}
       <ProposalBanner />
+
+      {/* 自动化编辑弹窗（docs/23）—— 全局唯一挂载点：侧栏待触发行与自动化页
+          共用 useShell.automationDialog 这一份状态，任何主视图下都能弹 */}
+      {automationDialog !== null && (
+        <AutomationDialog
+          key={automationDialog.mode === "edit" ? automationDialog.automation.id : (automationDialog.prefill?.name ?? "new")}
+          initial={automationDialog.mode === "edit" ? automationDialog.automation : null}
+          prefill={automationDialog.mode === "create" ? automationDialog.prefill : undefined}
+          onClose={closeAutomationDialog}
+        />
+      )}
 
       <CommandCenter />
     </div>

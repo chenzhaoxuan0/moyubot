@@ -42,7 +42,7 @@ export const METHOD_META: Record<string, MethodMeta> = {
   },
   "session.cancel": { description: "取消会话当前执行轮", paramsHint: "{sessionId}" },
   "session.list": { description: "列后端台账中的全部会话（按开始时间倒序，含累计 stats）", paramsHint: "null" },
-  "session.resumable": { description: "列可续接的会话（有 cli_ref 的那些）", paramsHint: "{runtimeId?, limit?}" },
+  "session.resumable": { description: "列可续接的会话（有 cli_ref 的那些；行带 source 供目标选择器标来源）", paramsHint: "{runtimeId?, limit?}" },
   "session.resume": { description: "按 cli_ref 续接既有会话，之后 send/cancel 照常", paramsHint: "{sessionId}" },
   "session.messages": { description: "读会话消息流（user/assistant，落盘事实）", paramsHint: "{sessionId}" },
   "session.trace": { description: "读会话轨迹 NDJSON 账本（跨日期落盘），afterSeq 游标续拉", paramsHint: "{sessionId, afterSeq?}" },
@@ -133,11 +133,11 @@ export const METHOD_META: Record<string, MethodMeta> = {
   // ---- 待办（GTD）与自动化 ------------------------------------------------------
   "backlog.list": { description: "拉待办全量视图：条目、提议、状态、配置、配额", paramsHint: "null" },
   "backlog.create": {
-    description: "新建待办项并落库",
+    description: "新建待办项并落库（launchMode：terminal=TUI / chat=对话页前台 / headless=纯后台；prompt 无人值守口径同 automation.create）",
     paramsHint: "{goal, unitId, rootPath, title?, prompt?, unitName?, runtimeId?, model?, mode?, size?, launchMode?}",
   },
   "backlog.update": {
-    description: "按 id 编辑待办字段（执行中的禁改）",
+    description: "按 id 编辑待办字段（执行中的禁改；launchMode 三选 terminal/chat/headless）",
     paramsHint: "{id, title?, goal?, prompt?, unitId?, unitName?, rootPath?, runtimeId?, model?, mode?, size?, launchMode?}",
   },
   "backlog.delete": { description: "按 id 删待办，执行中的不可删", paramsHint: "{id}" },
@@ -164,11 +164,11 @@ export const METHOD_META: Record<string, MethodMeta> = {
     paramsHint: "{botId? | rootPath?, force?}",
   },
   "automation.create": {
-    description: "新建定时任务（5 字段 cron，创建时即校验）",
+    description: "新建定时任务（5 字段 cron，创建时即校验；总量上限 20 条。prompt 须自包含、直接描述最终工作、无人值守不问问题、不得要求再建定时任务 —— ZCode CronCreate 口径；launchMode：terminal=TUI / chat=对话页前台 / headless=纯后台；dispatchTarget：new_session / existing_session）",
     paramsHint: "{unitId, unitName?, runtimeId, rootPath, prompt, model?, mode?, cron}",
   },
   "automation.update": {
-    description: "按 id 更新定时任务定义（cron/prompt/模型/调度规则/派发目标等）",
+    description: "按 id 更新定时任务定义（cron/prompt/模型/调度规则/派发目标/执行方式等）",
     paramsHint: "{id, ...定义字段}",
   },
   "automation.list": { description: "定时任务定义清单", paramsHint: "null" },

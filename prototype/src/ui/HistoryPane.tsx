@@ -976,12 +976,26 @@ function HistoryRow({
           </span>
           <span className="mt-0.5 flex items-center gap-2 text-caption">
             <span className="font-mono text-ash">{entry.runtimeId}</span>
-            <span className={cn("rounded-chip px-1 py-px", entry.launchMode === "terminal" ? "bg-teal-tint text-teal" : "bg-line-soft text-ash")}>
+            <span
+              className={cn(
+                "rounded-chip px-1 py-px",
+                entry.launchMode === "headless" ? "bg-line-soft text-ash" : "bg-teal-tint text-teal",
+              )}
+              title={
+                entry.launchMode === "headless"
+                  ? "纯后台 headless 会话"
+                  : entry.launchMode === "chat"
+                    ? "开在主聊天页前台的会话"
+                    : "终端 TUI 运行"
+              }
+            >
               {entry.launchMode === "terminal" ? (
                 <>
                   <Terminal size={9} className="mr-0.5 inline-block align-[-1px]" />
                   TUI
                 </>
+              ) : entry.launchMode === "chat" ? (
+                "对话页"
               ) : (
                 "后台"
               )}

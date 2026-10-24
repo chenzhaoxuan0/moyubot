@@ -27,11 +27,12 @@ import {
   type Weekday,
 } from "../core/automation.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
+import { useShell } from "../store/useShell.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { asUnitId } from "../core/units.ts";
 import { useBacklog } from "../store/useBacklog.ts";
 import { fetchResumableSessions, type ResumableSession } from "../adapters/daemon/client.ts";
-import { AutomationDialog, type AutomationDialogPrefill } from "./AutomationDialog.tsx";
+import type { AutomationDialogPrefill } from "./AutomationDialog.tsx";
 import { cn } from "./cn.ts";
 
 /**
@@ -51,11 +52,8 @@ import { cn } from "./cn.ts";
  * 新建/开关/删除/立即运行都是 daemon RPC，失败会在顶部横幅说实话。
  */
 
-/** 对话框的打开状态：新建（可带模板预填）或编辑 */
-type DialogState =
-  | { mode: "create"; prefill?: AutomationDialogPrefill }
-  | { mode: "edit"; automation: Automation }
-  | null;
+/** 对话框的打开状态已上收 useShell.automationDialog（docs/23）：侧栏待触发行
+ *  与本页共用一份弹窗，挂载点在 WorkspaceShell —— 这里只调 openAutomationDialog */
 
 export function AutomationsPage() {
   const automations = useWorkbench((s) => s.automations);
@@ -63,12 +61,12 @@ export function AutomationsPage() {
   const notice = useWorkbench((s) => s.automationNotice);
   const setNotice = useWorkbench((s) => s.setAutomationNotice);
   const refreshAutomations = useWorkbench((s) => s.refreshAutomations);
+  const openAutomationDialog = useShell((s) => s.openAutomationDialog);
   const quotaResume = useBacklog((s) => s.quotaResume);
   const refreshBacklog = useBacklog((s) => s.refresh);
   const [resumableSessions, setResumableSessions] = useState<readonly ResumableSession[]>([]);
 
   const [filter, setFilter] = useState<StatusFilter>("all");
-  const [dialog, setDialog] = useState<DialogState>(null);
 
   // 挂载即拉一次 + 30s 轻轮询：daemon 是唯一权威，下一次运行的倒计时、
   // 运行记录的终态都要跟着它走 —— 不然「3 分钟后」会永远停在 3 分钟前
@@ -162,7 +160,7 @@ export function AutomationsPage() {
             </h1>
           </div>
           <button
-            onClick={() => setDialog({ mode: "create" })}
+            onClick={() => openAutomationDialog({ mode: "create" })}
             className="flex shrink-0 items-center gap-1.5 rounded-btn bg-ink px-3 py-2 text-body-sm text-canvas hover:opacity-90 active:scale-95 transition"
           >
             <Plus size={12} />
@@ -240,7 +238,7 @@ export function AutomationsPage() {
             title={filter === "all" ? "还没有定时任务" : `没有${STATUS_FILTER_LABEL[filter]}的任务`}
             desc={filter === "all" ? "从下面的模板挑一个开始" : "换个筛选看看"}
             templates={filter === "all"}
-            onTemplate={(t) => setDialog({ mode: "create", prefill: t })}
+            onTemplate={(t) => openAutomationDialog({ mode: "create", prefill: t })}
           />
         ) : (
           <div className="grid grid-cols-2 gap-3">
@@ -250,21 +248,12 @@ export function AutomationsPage() {
                 a={a}
                 unitName={unitName(a.unitId, a.unitName)}
                 sessionTitles={sessionTitles}
-                onEdit={() => setDialog({ mode: "edit", automation: a })}
+                onEdit={() => openAutomationDialog({ mode: "edit", automation: a })}
               />
             ))}
           </div>
         )}
       </div>
-
-      {dialog !== null && (
-        <AutomationDialog
-          key={dialog.mode === "edit" ? dialog.automation.id : (dialog.prefill?.name ?? "new")}
-          initial={dialog.mode === "edit" ? dialog.automation : null}
-          prefill={dialog.mode === "create" ? dialog.prefill : undefined}
-          onClose={() => setDialog(null)}
-        />
-      )}
       </div>
     </div>
   );
@@ -391,6 +380,15 @@ function AutomationCard({
         {!a.enabled && (
           <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">已暂停</span>
         )}
+        {/* 已跑次数（ZCode「Ran N times」口径）：与 maxRuns 分母分离，只报事实 */}
+        {(a.runCount ?? 0) > 0 && (
+          <span
+            className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash"
+            title="累计已发火次数（含手动立即运行）"
+          >
+            已跑 {a.runCount} 次
+          </span>
+        )}
       </div>
 
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 border-t border-line-soft pt-2.5 text-caption">
@@ -400,7 +398,12 @@ function AutomationCard({
         </div>
         <div className="min-w-0">
           <dt className="text-ash">下次运行</dt>
-          <dd className={cn("truncate", next ? "text-graphite" : "text-ash")} title={next !== null ? formatAbsolute(next) : undefined}>
+          {/* 失败态弱化调度信息（ZCode hasAutomationFailureState 口径）：失败横幅
+              已在卡片区优先展示，下次时间降为次要色，不与失败抢注意力 */}
+          <dd
+            className={cn("truncate", next ? (a.lastFailure ? "text-ash" : "text-graphite") : "text-ash")}
+            title={next !== null ? formatAbsolute(next) : undefined}
+          >
             {next === null ? (a.enabled ? "已跑完" : "—") : `${formatAbsoluteHuman(next)}（${formatRelative(next)}）`}
           </dd>
         </div>
@@ -528,15 +531,21 @@ function AutomationCard({
               用量续跑
             </span>
           )}
-          {/* 执行方式标记：TUI = 到点在前端拉终端；后台 = headless 会话（不弹终端） */}
+          {/* 执行方式标记：TUI = 到点在前端拉终端；对话页 = 开在聊天页前台；后台 = headless 会话 */}
           <span
             className={cn(
               "shrink-0 whitespace-nowrap rounded-chip px-1.5 py-px text-caption",
               a.launchMode === "headless" ? "bg-line-soft text-ash" : "bg-teal-tint text-teal",
             )}
-            title={a.launchMode === "headless" ? "纯后台 headless 会话执行" : "到点在前端拉起执行器 TUI（免审批）"}
+            title={
+              a.launchMode === "headless"
+                ? "纯后台 headless 会话执行"
+                : a.launchMode === "chat"
+                  ? "到点把会话开在主聊天页前台（可看可插话）"
+                  : "到点在前端拉起执行器 TUI（免审批）"
+            }
           >
-            {a.launchMode === "headless" ? "后台" : "TUI"}
+            {a.launchMode === "headless" ? "后台" : a.launchMode === "chat" ? "对话页" : "TUI"}
           </span>
         </div>
         <div className="flex items-center gap-2">

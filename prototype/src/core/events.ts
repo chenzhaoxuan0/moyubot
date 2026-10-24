@@ -89,6 +89,12 @@ export type RuntimeEvent =
       readonly role: "user" | "assistant" | "system";
       readonly text: string;
       readonly attachments?: readonly ChatAttachment[];
+      /**
+       * 这条消息是谁投进来的（缺省 = 用户亲手在输入框发的）：
+       * "automation" = 定时任务到点代发（existing_session 续跑 / 定时发送）——
+       * 气泡上的「定时」徽标据此点亮，回放同样生效（字段随事件进账本）。
+       */
+      readonly origin?: string;
     }
   | {
       readonly type: "message.completed";
@@ -272,6 +278,22 @@ export type RuntimeEvent =
   | {
       readonly type: "git.changed";
       readonly rootPath: string;
+    }
+
+  // ---- 前台拉起（broadcast-only：拉前端视图，不落会话账本） ----
+  /**
+   * 「对话页」形态的自动化/待办到点：会话已由 daemon 开好（或接回），请前端
+   * 把它打开到聊天时间线前台（openSession 自带跨 bot 切换）。与 git.changed
+   * 同款口径 —— 不落盘、不参与 seq 判重补拉；漏一条的代价只是不自动跳前台，
+   * 会话本身仍在历史列表/底栏任务条里可点开，功能不因漏发而缺失。
+   */
+  | {
+      readonly type: "session.foreground";
+      readonly sessionId: SessionId;
+      readonly unitId: UnitId;
+      readonly runtimeId: string;
+      readonly cause: "automation" | "backlog";
+      readonly title?: string;
     };
 
 export type RuntimeEventType = RuntimeEvent["type"];

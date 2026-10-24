@@ -4,6 +4,7 @@ import {
   ArrowUp,
   Bot,
   Brain,
+  CalendarClock,
   Check,
   ChevronDown,
   ChevronRight,
@@ -241,6 +242,9 @@ function groupTimelineEvents(
             data: {
               text: event.text,
               attachments: event.attachments,
+              // 消息来源标记（docs/23）：origin="automation" = 定时任务代发 —— 气泡
+              // 「定时」徽标据此点亮，随事件进账本，回放同样生效
+              origin: event.origin,
               // fork 锚点要素（ADR 0013）：messageId 用于账本定位轮边界，
               // sessionId 标明锚点属于哪个段（时间线跨段时消息不都在活跃段里）
               messageId: event.messageId,
@@ -623,6 +627,7 @@ function UserMessageBubble({
   attachments,
   messageId,
   sessionId,
+  origin,
   isLatestUserTurn,
   busy,
 }: {
@@ -632,6 +637,8 @@ function UserMessageBubble({
   messageId: string;
   /** 这条消息所属的段 —— revision 的 ofSessionId */
   sessionId: string;
+  /** 消息来源（docs/23）："automation" = 定时任务到点代发 —— 气泡上方亮「定时」徽标 */
+  origin?: string;
   /** 时间线最后一条用户消息：编辑重发只对它开放（latestQueryEditOnly） */
   isLatestUserTurn: boolean;
   busy: boolean;
@@ -756,6 +763,17 @@ function UserMessageBubble({
     <div className="group/user flex items-end justify-end gap-1.5">
       {editEntry}
       <div className="flex min-w-0 flex-col items-end gap-1.5">
+        {/* 定时代发徽标（docs/23）：气泡上方一枚小 pill —— 这条不是用户亲手
+            发的，是定时任务到点投进来的；字段随事件进账本，回放同样可见 */}
+        {origin === "automation" && (
+          <span
+            className="flex shrink-0 items-center gap-0.5 rounded-full bg-teal-tint px-1.5 py-px text-[9px] font-medium text-teal"
+            title="定时任务到点代发（非用户手动发送）"
+          >
+            <CalendarClock size={9} />
+            定时
+          </span>
+        )}
         {attachments && attachments.length > 0 && (
           <AttachmentsBar attachments={[...attachments]} readOnly />
         )}
@@ -859,6 +877,7 @@ function TimelineItemRow({
           attachments={item.data.attachments}
           messageId={typeof item.data.messageId === "string" ? item.data.messageId : ""}
           sessionId={typeof item.data.sessionId === "string" ? item.data.sessionId : ""}
+          origin={typeof item.data.origin === "string" ? item.data.origin : undefined}
           isLatestUserTurn={item.id === lastUserTurnId}
           busy={busy}
         />

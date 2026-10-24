@@ -5,8 +5,9 @@
 ![主界面](docs/images/main-window.png)
 
 内置终端直接驱动各家 CLI（TUI 交互或 headless 驱动均可），每个 bot 绑定自己的
-默认执行器与模型；支持飞书/Telegram 渠道接入、定时自动化、待办（GTD：空闲心跳
-提议 + 确认门 + 验收闭环）、**上下文清单**（每 bot 一份注入矩阵：SOUL.md /
+默认执行器与模型；支持飞书/Telegram 渠道接入、定时自动化与待办（GTD：空闲心跳
+提议 + 确认门 + 验收闭环；三形态派发：终端 TUI / 对话页前台 / 纯后台，见
+[docs/23](docs/23-automation-chat-dispatch.md)）、**上下文清单**（每 bot 一份注入矩阵：SOUL.md /
 USER.md / MEMORY.md / 技能目录默认全关、按需打开，AGENTS.md 三态防双注——见
 [docs/20](docs/20-context-manifest.md)）、记忆系统、出图工作台，以及多执行器统一的
 浏览器控制（playwright-mcp 扇出）与电脑控制（总闸 + 急停）、**bot 级联网搜索**

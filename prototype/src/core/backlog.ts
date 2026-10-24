@@ -16,6 +16,8 @@
 // 状态机
 // ---------------------------------------------------------------------------
 
+import type { LaunchMode } from "./automation.ts";
+
 /**
  * 待办生命周期：
  *   draft → ready → awaiting_confirm → executing → awaiting_review → done
@@ -80,8 +82,8 @@ export interface BacklogItem {
   readonly model: string | null;
   readonly mode: string | null;
   readonly size: BacklogSize | null;
-  /** 执行方式：terminal = 确认后在前端拉执行器 TUI（缺省）；headless = 纯后台 host 会话 */
-  readonly launchMode?: "terminal" | "headless";
+  /** 执行方式（缺省 = terminal）：terminal / chat（对话页前台）/ headless（纯后台），见 automation.ts 的 LaunchMode */
+  readonly launchMode?: LaunchMode;
   readonly status: BacklogStatus;
   /** 连续被忽略计数：达到上限进休眠（明确拒绝直接休眠） */
   readonly ignoreCount: number;
