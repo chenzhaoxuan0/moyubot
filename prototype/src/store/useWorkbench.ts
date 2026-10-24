@@ -104,11 +104,9 @@ export interface UsageSnapshot {
 interface WorkbenchState {
   units: readonly WorkUnit[];
   /**
-   * daemon 连接态（启动竞态的可见化）：pnpm dev 下 vite 页面先出、daemon 后就绪是
-   * 常态，窗口期侧栏/设置页全是空的且无任何提示。文件末尾的 bootstrap 重试循环把
-   * 自己的进度写进这里——connecting 时 app.tsx 盖一层启动视图，offline 时底栏挂
-   * 常驻徽标（不挡操作，app 仍可浏览）。connected 后不再回退：会话中断线走各
-   * rpc 的按需重连，不归启动态管。
+   * daemon 连接态：文件末尾的 bootstrap 重试循环把自己的进度写进这里，由底栏
+   * 「后台守护」徽标消费（其三态的离线判据；待机/在线由徽标自己按 channel.status
+   * 分辨）。connected 后不再回退：会话中断线走各 rpc 的按需重连，不归启动态管。
    */
   daemonStatus: "connecting" | "connected" | "offline";
   activeUnitId: UnitId;
@@ -2194,7 +2192,7 @@ void (async () => {
       }
       if (attempt === FAST_ATTEMPTS) {
         console.info("[workbench] 本地 daemon 不可达 —— 转入慢速重试，连上即自动接入（无需刷新页面）", err instanceof Error ? err.message : err);
-        // 界面跟着翻：启动遮罩早已收起，底栏挂「daemon 未连接」徽标（不挡操作）
+        // 界面跟着翻：底栏「后台守护」徽标转离线态（纯文字，不挡操作）
         useWorkbench.setState({ daemonStatus: "offline" });
       }
       await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]!));

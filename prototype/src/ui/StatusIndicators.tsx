@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { Check, HelpCircle, Info, Loader2, Radio, RotateCcw, Unplug } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Check, HelpCircle, Info, Radio, RotateCcw } from "lucide-react";
 import { useBacklog } from "../store/useBacklog.ts";
 import { useWorkState, WORK_PHASE_DESCRIPTIONS } from "../store/useWorkState.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
+import { fetchChannelStatus } from "../adapters/daemon/client.ts";
 import { cn } from "./cn.ts";
 
 /**
@@ -293,22 +294,82 @@ export function WorkPhaseBadge({ popoverUp = false, align = "right" }: { popover
 }
 
 /**
- * 后台守护指示（纯文字展示，无绿灯）
- * 点开用人话讲清后台守护在无人值守时替你做什么。
+ * 后台守护徽标 —— 三态纯文字（刻意去灯化：灯只属于左侧栏会话列表，见文件头
+ * 原则 3；不引入任何彩色灯/圆点/状态色，状态差异全靠文字本身）。真实运行态
+ * 数据源是 channel.status RPC（daemon 内存读数，轮询便宜）：
+ * - 离线：daemon 未连接（启动 connecting 阶段短暂经过 / 不可达慢速重试中）
+ * - 待机：daemon 在线，但四家网关（飞书/Telegram/微信/Discord）没有任何一路在跑
+ * - 在线 · N 路渠道：各网关当前真实持有的账号总数
+ * daemon 连着才轮询（30s 一刷 + 弹层打开补拉一次）；拉取失败保留上次读数——
+ * 偶发抖动不该把「在线」误翻成「待机」。首拉未返回前显示不带计数的「在线」。
  */
+const CHANNEL_KIND_NAMES: Readonly<Record<string, string>> = {
+  feishu: "飞书",
+  telegram: "Telegram",
+  weixin: "微信",
+  discord: "Discord",
+};
+
 export function BackgroundGuardianBadge({ popoverUp = false, align = "right" }: { popoverUp?: boolean; align?: "right" | "left" }) {
   const [open, setOpen] = useState(false);
+  const daemonStatus = useWorkbench((s) => s.daemonStatus);
+  const [gateways, setGateways] = useState<Readonly<Record<string, number | undefined>> | null>(null);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    try {
+      const r = await fetchChannelStatus();
+      setGateways(r.gateways);
+    } catch {
+      /* daemon 抖动：保留上次读数，不误翻状态 */
+    }
+  }, []);
+
+  // daemon 连着才轮询：连接建立 / 重连各拉一次，之后 30s 一刷
+  useEffect(() => {
+    if (daemonStatus !== "connected") return;
+    void refresh();
+    const t = setInterval(() => void refresh(), 30_000);
+    return () => clearInterval(t);
+  }, [daemonStatus, refresh]);
+
+  // 弹层打开时补拉：点开看到的就是当下读数
+  useEffect(() => {
+    if (open && daemonStatus === "connected") void refresh();
+  }, [open, daemonStatus, refresh]);
+
+  const connected = daemonStatus === "connected";
+  const total = gateways === null ? 0 : Object.values(gateways).reduce<number>((sum, n) => sum + (n ?? 0), 0);
+  const label = !connected
+    ? "后台守护离线"
+    : gateways === null
+      ? "后台守护在线"
+      : total === 0
+        ? "后台守护待机"
+        : `后台守护在线 · ${total} 路渠道`;
+  const title = !connected
+    ? daemonStatus === "connecting"
+      ? "正在连接本地 daemon —— 后台守护（渠道网关 / 定时任务 / 记忆蒸馏）尚未就绪"
+      : "本地 daemon 不可达 —— 后台守护不在运行；后台仍在慢速重试，后端起来后自动接上"
+    : gateways !== null && total === 0
+      ? "daemon 在线，但没有任何渠道网关在跑 —— 配置并启用飞书 / Telegram 等渠道后转在线"
+      : "你不在电脑前时工作台仍在值班（点击了解它在做什么）";
+  const onlineKinds =
+    gateways === null
+      ? []
+      : Object.entries(gateways)
+          .filter(([, n]) => (n ?? 0) > 0)
+          .map(([kind, n]) => `${CHANNEL_KIND_NAMES[kind] ?? kind} ${n}`);
 
   return (
     <div className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        aria-label="后台守护在线：飞书 / Telegram 指令、定时任务、记忆蒸馏在无人值守时照常运行，点击了解详情"
-        title="后台守护在线 —— 你不在电脑前时工作台仍在值班（点击了解它在做什么）"
+        aria-label={`后台守护状态：${label}，点击了解详情`}
+        title={title}
         className="group flex h-6 cursor-pointer items-center gap-1.5 rounded-btn px-2 text-caption text-graphite transition hover:bg-line-soft hover:text-ink"
       >
         <Radio size={12} className="text-ash transition group-hover:text-ink" />
-        <span>后台守护在线</span>
+        <span>{label}</span>
       </button>
 
       {open && (
@@ -316,11 +377,26 @@ export function BackgroundGuardianBadge({ popoverUp = false, align = "right" }: 
           <span className="fixed inset-0 z-30" onClick={() => setOpen(false)} aria-hidden />
           <div className={cn(popoverAnchorCls(popoverUp, align), "w-76 rounded-card border border-line bg-canvas p-3 shadow-subtle text-caption leading-relaxed")}>
             <div className="text-body-sm font-medium text-ink pb-1.5 border-b border-line-soft">
-              后台守护在线 —— 你不在时，工作台替你值班
+              {!connected
+                ? "后台守护离线"
+                : total === 0
+                  ? gateways === null ? "后台守护在线" : "后台守护待机 —— 没有渠道在跑"
+                  : `后台守护在线 —— ${total} 路渠道值班中`}
             </div>
-            <p className="mt-2 text-graphite">
-              后台守护持续运行：即使你关掉前台、离开电脑，下面这些任务仍会照常进行并保留完整记录 ——
-            </p>
+            {!connected ? (
+              <p className="mt-2 text-graphite">
+                本地 daemon 未连接，以下能力当前均未在运行；连接恢复后自动接上（无需刷新页面）。
+              </p>
+            ) : (
+              <p className="mt-2 text-graphite">
+                后台守护持续运行：即使你关掉前台、离开电脑，下面这些任务仍会照常进行并保留完整记录 ——
+              </p>
+            )}
+            {connected && onlineKinds.length > 0 && (
+              <p className="mt-1.5 text-graphite">
+                当前在线渠道：<b>{onlineKinds.join(" · ")}</b>
+              </p>
+            )}
             <div className="mt-1.5 space-y-1.5 text-graphite">
               <p className="flex items-start gap-1.5">
                 <span className="text-teal font-bold">✓</span>
@@ -345,35 +421,3 @@ export function BackgroundGuardianBadge({ popoverUp = false, align = "right" }: 
   );
 }
 
-/**
- * daemon 连接徽标（启动竞态的可见化）：连接中 = 等待提示（启动遮罩 8s 收起后
- * 由它接棒），未连接 = 警示 + 处置指引（快速退避段耗尽才到这里，后台仍在慢速
- * 重试，连上即自动接入）。connected 是常态，不渲染 —— 正常路径不占底栏一席。
- * 遵循本文件「底栏纯文字、去灯化」约定；不可点（无弹层），title 自解释。
- */
-export function DaemonLinkBadge() {
-  const status = useWorkbench((s) => s.daemonStatus);
-  if (status === "connected") return null;
-  const connecting = status === "connecting";
-  return (
-    <span
-      aria-label={connecting ? "daemon 连接中" : "daemon 未连接"}
-      title={
-        connecting
-          ? "正在等待本地 daemon 就绪（执行器 / bot / 设置数据都来自它），连上后界面自动填充"
-          : "本地 daemon 不可达 —— bot、执行器与设置数据都来自它。启动后端（pnpm -C backend dev）后界面会自动接上，无需刷新"
-      }
-      className={cn(
-        "flex h-6 items-center gap-1.5 rounded-btn px-2 text-caption transition",
-        connecting ? "text-graphite" : "font-medium text-amber-700 dark:text-amber-400",
-      )}
-    >
-      {connecting ? (
-        <Loader2 size={12} className="animate-spin text-ash" />
-      ) : (
-        <Unplug size={12} className="text-amber-600 dark:text-amber-400" />
-      )}
-      <span>{connecting ? "daemon 连接中" : "daemon 未连接"}</span>
-    </span>
-  );
-}
