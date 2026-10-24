@@ -3,7 +3,8 @@ import { Check, HelpCircle, Info, Radio, RotateCcw } from "lucide-react";
 import { useBacklog } from "../store/useBacklog.ts";
 import { useWorkState, WORK_PHASE_DESCRIPTIONS } from "../store/useWorkState.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
-import { fetchChannelStatus } from "../adapters/daemon/client.ts";
+import { fetchAutomations, fetchChannelStatus } from "../adapters/daemon/client.ts";
+import { getGuardianConfigRpc } from "../store/useMemoryPanel.ts";
 import { cn } from "./cn.ts";
 
 /**
@@ -296,12 +297,14 @@ export function WorkPhaseBadge({ popoverUp = false, align = "right" }: { popover
 /**
  * 后台守护徽标 —— 三态纯文字（刻意去灯化：灯只属于左侧栏会话列表，见文件头
  * 原则 3；不引入任何彩色灯/圆点/状态色，状态差异全靠文字本身）。真实运行态
- * 数据源是 channel.status RPC（daemon 内存读数，轮询便宜）：
- * - 离线：daemon 未连接（启动 connecting 阶段短暂经过 / 不可达慢速重试中）
- * - 待机：daemon 在线，但四家网关（飞书/Telegram/微信/Discord）没有任何一路在跑
- * - 在线 · N 路渠道：各网关当前真实持有的账号总数
- * daemon 连着才轮询（30s 一刷 + 弹层打开补拉一次）；拉取失败保留上次读数——
- * 偶发抖动不该把「在线」误翻成「待机」。首拉未返回前显示不带计数的「在线」。
+ * 数据源是三个 daemon 内存读数 RPC（都便宜）：
+ * - 徽标头三态：channel.status（网关账号数）—— 离线 = daemon 未连接；
+ *   待机 = 在线但 0 路网关；在线 · N 路渠道 = 网关账号总数
+ * - 弹层三行清单逐行跟真（不再是写死的能力介绍）：
+ *   渠道指令 ← channel.status；定时任务 ← automation.list（启用数 + 最近发火时刻）；
+ *   记忆蒸馏 ← memory.guardian.get（设置页「每日总结」开关的权威值）
+ * daemon 连着才轮询（30s 一刷 + 弹层打开补拉一次）；各项独立容错——单项拉取
+ * 失败保留上次读数，偶发抖动不误翻状态。首拉未返回前该项显示「读取中」。
  */
 const CHANNEL_KIND_NAMES: Readonly<Record<string, string>> = {
   feishu: "飞书",
@@ -310,31 +313,48 @@ const CHANNEL_KIND_NAMES: Readonly<Record<string, string>> = {
   discord: "Discord",
 };
 
+/** MM-DD HH:mm（只用于弹层里「下次发火时刻」，不值得引日期库） */
+function fmtClock(t: number): string {
+  const d = new Date(t);
+  const two = (n: number): string => String(n).padStart(2, "0");
+  return `${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
 export function BackgroundGuardianBadge({ popoverUp = false, align = "right" }: { popoverUp?: boolean; align?: "right" | "left" }) {
   const [open, setOpen] = useState(false);
   const daemonStatus = useWorkbench((s) => s.daemonStatus);
   const [gateways, setGateways] = useState<Readonly<Record<string, number | undefined>> | null>(null);
+  const [autoInfo, setAutoInfo] = useState<{ enabled: number; total: number; nextRunAt: number | null } | null>(null);
+  const [digestEnabled, setDigestEnabled] = useState<boolean | null>(null);
 
-  const refresh = useCallback(async (): Promise<void> => {
-    try {
-      const r = await fetchChannelStatus();
-      setGateways(r.gateways);
-    } catch {
-      /* daemon 抖动：保留上次读数，不误翻状态 */
-    }
+  // 三路并行、各自容错：一行抖动不连坐另外两行
+  const refresh = useCallback((): void => {
+    void fetchChannelStatus()
+      .then((r) => setGateways(r.gateways))
+      .catch(() => undefined); /* daemon 抖动：保留上次读数，不误翻状态 */
+    void fetchAutomations()
+      .then((list) => {
+        const enabled = list.filter((a) => a.enabled);
+        const nexts = enabled.map((a) => a.nextRunAt).filter((t): t is number => typeof t === "number");
+        setAutoInfo({ enabled: enabled.length, total: list.length, nextRunAt: nexts.length > 0 ? Math.min(...nexts) : null });
+      })
+      .catch(() => undefined);
+    void getGuardianConfigRpc()
+      .then((c) => setDigestEnabled(c.digestEnabled))
+      .catch(() => undefined);
   }, []);
 
   // daemon 连着才轮询：连接建立 / 重连各拉一次，之后 30s 一刷
   useEffect(() => {
     if (daemonStatus !== "connected") return;
-    void refresh();
-    const t = setInterval(() => void refresh(), 30_000);
+    refresh();
+    const t = setInterval(refresh, 30_000);
     return () => clearInterval(t);
   }, [daemonStatus, refresh]);
 
   // 弹层打开时补拉：点开看到的就是当下读数
   useEffect(() => {
-    if (open && daemonStatus === "connected") void refresh();
+    if (open && daemonStatus === "connected") refresh();
   }, [open, daemonStatus, refresh]);
 
   const connected = daemonStatus === "connected";
@@ -359,6 +379,7 @@ export function BackgroundGuardianBadge({ popoverUp = false, align = "right" }: 
       : Object.entries(gateways)
           .filter(([, n]) => (n ?? 0) > 0)
           .map(([kind, n]) => `${CHANNEL_KIND_NAMES[kind] ?? kind} ${n}`);
+  const autoNext = autoInfo !== null && autoInfo.nextRunAt !== null ? `，下次 ${fmtClock(autoInfo.nextRunAt)}` : "";
 
   return (
     <div className="relative">
@@ -389,26 +410,52 @@ export function BackgroundGuardianBadge({ popoverUp = false, align = "right" }: 
               </p>
             ) : (
               <p className="mt-2 text-graphite">
-                后台守护持续运行：即使你关掉前台、离开电脑，下面这些任务仍会照常进行并保留完整记录 ——
-              </p>
-            )}
-            {connected && onlineKinds.length > 0 && (
-              <p className="mt-1.5 text-graphite">
-                当前在线渠道：<b>{onlineKinds.join(" · ")}</b>
+                即使你关掉前台、离开电脑，下面带 <span className="text-teal font-bold">✓</span> 的项仍会照常进行并保留完整记录 ——
               </p>
             )}
             <div className="mt-1.5 space-y-1.5 text-graphite">
               <p className="flex items-start gap-1.5">
-                <span className="text-teal font-bold">✓</span>
-                <span><b>飞书 / Telegram 指令</b>：从手机发来的消息在后台无头执行，结果自动回传，不用开电脑。</span>
+                <span className={cn("font-bold", connected && total > 0 ? "text-teal" : "text-ash")}>
+                  {connected && total > 0 ? "✓" : "—"}
+                </span>
+                <span>
+                  <b>渠道指令</b>：
+                  {!connected
+                    ? "daemon 未连接，不在运行"
+                    : total > 0
+                      ? `${onlineKinds.join(" · ")} 在线 —— 手机发来的消息在后台无头执行，结果自动回传，不用开电脑`
+                      : "没有一路渠道在线 —— 配置并启用飞书 / Telegram 等渠道后，手机消息即可后台执行"}
+                </span>
               </p>
               <p className="flex items-start gap-1.5">
-                <span className="text-teal font-bold">✓</span>
-                <span><b>定时任务</b>：到点自动执行，产物与总结写进 bot 的文件夹。</span>
+                <span className={cn("font-bold", connected && (autoInfo?.enabled ?? 0) > 0 ? "text-teal" : "text-ash")}>
+                  {connected && (autoInfo?.enabled ?? 0) > 0 ? "✓" : "—"}
+                </span>
+                <span>
+                  <b>定时任务</b>：
+                  {!connected
+                    ? "daemon 未连接，不在运行"
+                    : autoInfo === null
+                      ? "清单读取中"
+                      : autoInfo.enabled > 0
+                        ? `${autoInfo.enabled} 个启用${autoNext} —— 到点自动执行，产物与总结写进 bot 的文件夹`
+                        : `${autoInfo.total} 个任务全部停用 —— 启用后到点自动执行，产物写进 bot 的文件夹`}
+                </span>
               </p>
               <p className="flex items-start gap-1.5">
-                <span className="text-teal font-bold">✓</span>
-                <span><b>记忆蒸馏</b>：每天提取对话要点，更新单元记忆。</span>
+                <span className={cn("font-bold", connected && digestEnabled === true ? "text-teal" : "text-ash")}>
+                  {connected && digestEnabled === true ? "✓" : "—"}
+                </span>
+                <span>
+                  <b>记忆蒸馏</b>：
+                  {!connected
+                    ? "daemon 未连接，不在运行"
+                    : digestEnabled === null
+                      ? "配置读取中"
+                      : digestEnabled
+                        ? "每日总结已开启 —— 每天提取对话要点，更新单元记忆"
+                        : "每日总结已关闭 —— 可在设置页「每日总结」开关重新开启"}
+                </span>
               </p>
               <p className="mt-2 pt-1.5 border-t border-line-soft text-ash text-[10px]">
                 它们都在独立后台进程里跑，与前台终端（TUI）完全隔离 —— 永不抢夺前台的输入输出。
