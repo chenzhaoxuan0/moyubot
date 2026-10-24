@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { Check, HelpCircle, Info, Radio, RotateCcw } from "lucide-react";
+import { Check, HelpCircle, Info, Loader2, Radio, RotateCcw, Unplug } from "lucide-react";
 import { useBacklog } from "../store/useBacklog.ts";
 import { useWorkState, WORK_PHASE_DESCRIPTIONS } from "../store/useWorkState.ts";
+import { useWorkbench } from "../store/useWorkbench.ts";
 import { cn } from "./cn.ts";
 
 /**
@@ -341,5 +342,38 @@ export function BackgroundGuardianBadge({ popoverUp = false, align = "right" }: 
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * daemon 连接徽标（启动竞态的可见化）：连接中 = 等待提示（启动遮罩 8s 收起后
+ * 由它接棒），未连接 = 警示 + 处置指引（快速退避段耗尽才到这里，后台仍在慢速
+ * 重试，连上即自动接入）。connected 是常态，不渲染 —— 正常路径不占底栏一席。
+ * 遵循本文件「底栏纯文字、去灯化」约定；不可点（无弹层），title 自解释。
+ */
+export function DaemonLinkBadge() {
+  const status = useWorkbench((s) => s.daemonStatus);
+  if (status === "connected") return null;
+  const connecting = status === "connecting";
+  return (
+    <span
+      aria-label={connecting ? "daemon 连接中" : "daemon 未连接"}
+      title={
+        connecting
+          ? "正在等待本地 daemon 就绪（执行器 / bot / 设置数据都来自它），连上后界面自动填充"
+          : "本地 daemon 不可达 —— bot、执行器与设置数据都来自它。启动后端（pnpm -C backend dev）后界面会自动接上，无需刷新"
+      }
+      className={cn(
+        "flex h-6 items-center gap-1.5 rounded-btn px-2 text-caption transition",
+        connecting ? "text-graphite" : "font-medium text-amber-700 dark:text-amber-400",
+      )}
+    >
+      {connecting ? (
+        <Loader2 size={12} className="animate-spin text-ash" />
+      ) : (
+        <Unplug size={12} className="text-amber-600 dark:text-amber-400" />
+      )}
+      <span>{connecting ? "daemon 连接中" : "daemon 未连接"}</span>
+    </span>
   );
 }

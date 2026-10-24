@@ -103,6 +103,14 @@ export interface UsageSnapshot {
 
 interface WorkbenchState {
   units: readonly WorkUnit[];
+  /**
+   * daemon 连接态（启动竞态的可见化）：pnpm dev 下 vite 页面先出、daemon 后就绪是
+   * 常态，窗口期侧栏/设置页全是空的且无任何提示。文件末尾的 bootstrap 重试循环把
+   * 自己的进度写进这里——connecting 时 app.tsx 盖一层启动视图，offline 时底栏挂
+   * 常驻徽标（不挡操作，app 仍可浏览）。connected 后不再回退：会话中断线走各
+   * rpc 的按需重连，不归启动态管。
+   */
+  daemonStatus: "connecting" | "connected" | "offline";
   activeUnitId: UnitId;
   /**
    * 侧栏普通节的拖拽排序（会话内记忆，不持久化）。放 store 是为了让单元
@@ -492,6 +500,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   // 评审后清 mock（用户指示）：初始全空，一切数据来自真实 daemon——
   // 空态是设计的一部分（ZCode 原则：功能不因空而消失），不再用样例数据撑门面
   units: [],
+  daemonStatus: "connecting",
   activeUnitId: getInitialActiveUnit(),
   unitOrder: null,
   runtimes: [],
@@ -2157,15 +2166,20 @@ export const selectUnitAutomations = (s: WorkbenchState): readonly Automation[] 
 // 盯着一个空的执行器列表白等整整一轮，而实际差距可能只有 200ms。
 // 封顶仍留 3s：daemon 真没起（被占用/崩溃）时，长间隔避免无谓重试风暴，
 // 总时长仍在两分钟内自愈。
+//
+// ⚠ 快速退避段（前 40 次，约两分钟）耗尽后**不永久放弃**：转入封顶间隔的
+// 慢速重试一直试下去。放弃的话「只起前端」的用户后来起了 daemon 也要手动刷新
+// 才接入（注册表空转）；慢速重试让「连上即自动接入」成立，代价只是后台每 3s
+// 一次失败连接尝试（对未监听端口是一次立刻失败的 fetch，可忽略）。
 const RETRY_DELAYS_MS = [150, 300, 600, 1200, 3000] as const;
+const FAST_ATTEMPTS = 40;
 void (async () => {
   const { listDaemonExecutors } = await import("../adapters/daemon/client.ts");
   const { createDaemonFactory } = await import("../adapters/daemon/adapter.ts");
   const { defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
 
-  const MAX_ATTEMPTS = 40;
   let infos: Awaited<ReturnType<typeof listDaemonExecutors>> | null = null;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  for (let attempt = 1; ; attempt++) {
     try {
       const list = await listDaemonExecutors(defaultDaemonEndpoint());
       if (list.length > 0) {
@@ -2178,9 +2192,10 @@ void (async () => {
       if (attempt === 1) {
         console.info("[workbench] daemon 未就绪，按退避节奏重试（pnpm dev 下 daemon 比 vite 慢是常态）", err instanceof Error ? err.message : err);
       }
-      if (attempt === MAX_ATTEMPTS) {
-        console.info("[workbench] 本地 daemon 不可达 —— 无执行器可用（启动 backend/ 的 daemon 即接入真实执行）", err instanceof Error ? err.message : err);
-        return;
+      if (attempt === FAST_ATTEMPTS) {
+        console.info("[workbench] 本地 daemon 不可达 —— 转入慢速重试，连上即自动接入（无需刷新页面）", err instanceof Error ? err.message : err);
+        // 界面跟着翻：启动遮罩早已收起，底栏挂「daemon 未连接」徽标（不挡操作）
+        useWorkbench.setState({ daemonStatus: "offline" });
       }
       await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)]!));
     }
@@ -2195,7 +2210,7 @@ void (async () => {
       runtimeRegistry.markModelDiscovery(asRuntimeId(`daemon:${info.id}`), info.modelsDiscoverable !== false);
     }
     runtimeRegistry.setState(factories[0]!.id, { status: "stopped" });
-    useWorkbench.setState({ activeRuntimeId: factories[0]!.id });
+    useWorkbench.setState({ activeRuntimeId: factories[0]!.id, daemonStatus: "connected" });
     console.info(`[workbench] 已连接本地 daemon：${infos.map((i) => i.id).join(", ")}`);
     // 哪些模型本地元数据目录没收 —— **说出来**。
     // 原来的坑：查不到就静默丢弃，models 空了 → defaultModel 为 null → 整个

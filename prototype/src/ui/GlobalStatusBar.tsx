@@ -1,5 +1,5 @@
 import { useCallback, useRef } from "react";
-import { BackgroundGuardianBadge, SessionLightLegendBadge, WorkPhaseBadge } from "./StatusIndicators.tsx";
+import { BackgroundGuardianBadge, DaemonLinkBadge, SessionLightLegendBadge, WorkPhaseBadge } from "./StatusIndicators.tsx";
 import { Taskbar } from "./taskbar/Taskbar.tsx";
 import { STATUSBAR_MIN, useShell } from "../store/useShell.ts";
 import { useSidePane } from "../store/useSidePane.ts";
@@ -97,6 +97,8 @@ export function GlobalStatusBar() {
         <WorkPhaseBadge popoverUp align="left" />
         <span className="h-3 w-px bg-line/60" />
         <BackgroundGuardianBadge popoverUp align="left" />
+        {/* daemon 连接徽标：只在连接中 / 未连接时出现（常态不占席） */}
+        <DaemonLinkBadge />
       </div>
       {/* 折叠区：主对话列正下方（Taskbar 常驻挂载——空栏也要在，
           全局事件订阅活着，后台任务才能进榜） */}
