@@ -19,6 +19,7 @@ import {
   Palette,
   Plug,
   Plus,
+  Search,
   Settings2,
   Shield,
   Smartphone,
@@ -44,6 +45,7 @@ import { CliSettingsSection } from "./CliSettingsSection.tsx";
 import { McpSettingsSection } from "./McpSettingsSection.tsx";
 import { BrowserControlSection } from "./BrowserControlSection.tsx";
 import { ComputerControlSection } from "./ComputerControlSection.tsx";
+import { SearchSettingsSection } from "./SearchSettingsSection.tsx";
 import { RemoteControlDialog } from "./RemoteControlDialog.tsx";
 import { ImageSettingsSection } from "./ImageSettingsSection.tsx";
 import { AppearanceSettingsSection } from "./AppearanceSettingsSection.tsx";
@@ -75,6 +77,7 @@ const ICONS: Record<string, typeof Settings2> = {
   terminal: SquareTerminal,
   globe: Globe,
   monitor: Monitor,
+  search: Search,
   smartphone: Smartphone,
 };
 
@@ -316,6 +319,8 @@ function SectionBody({ section }: { section: SettingsSectionDef }) {  switch (se
       return <BrowserControlSection />;
     case "computerControl":
       return <ComputerControlSection />;
+    case "search":
+      return <SearchSettingsSection />;
     case "remoteControl":
       /* 移动端远控（原右侧栏状态条入口迁入）：低频设置项归设置页。
           embedded 形态去掉全屏遮罩直接填充内容列；FRAME 的 px-6 与弹窗自身的

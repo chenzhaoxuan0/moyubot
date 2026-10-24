@@ -62,6 +62,8 @@ import {
 } from "./mcpadmin/service.ts";
 import { createBrowserControlService } from "./browserctl/service.ts";
 import { createComputerControl } from "./computerctl/server.ts";
+import { createSearchService } from "./searchctl/service.ts";
+import { SEARCH_PROVIDER_INFOS } from "./searchctl/providers.ts";
 import { COMPUTER_MCP_PATH, controlActions, registerAcpEntriesProvider, setControlContext } from "./ctrl/store.ts";
 import { TerminalManager } from "./terminal/terminals.ts";
 import { Store } from "./store/db.ts";
@@ -1137,7 +1139,18 @@ const controlDeps: McpServiceDeps = { configHome: os.homedir(), stateHome: confi
 setControlContext(config.homeDir, config.port);
 const browserControl = createBrowserControlService(controlDeps);
 const computerControl = createComputerControl(controlDeps);
-registerAcpEntriesProvider(() => [...browserControl.acpEntries(), ...computerControl.acpEntries()]);
+// 搜索（bot 级）：密钥与配置在 daemon 侧按 botId 分槽，条目扇出由存活配置驱动
+const searchControl = createSearchService({
+  ...controlDeps,
+  store,
+  listBots: () => botRegistry.listBots(),
+});
+registerAcpEntriesProvider((rootPath) => [
+  ...browserControl.acpEntries(),
+  ...computerControl.acpEntries(),
+  // 搜索按会话工作区给条目（--root 锁定到这个 bot）
+  ...searchControl.acpEntries(rootPath),
+]);
 void browserControl.boot(); // 接管模式已启用 → 自动拉起共享 Chrome（内部自带 catch，不掀翻启动）
 
 const { server, port } = await startHttp(config, startedAt, httpRoutes, authorize, [
@@ -1189,6 +1202,10 @@ setControlContext(config.homeDir, port);
 // 端口落定后对齐：电脑控制若已启用，重写 12 家条目里的 url（端口变了旧条目就是死链）
 void computerControl.boot().catch((e: unknown) => {
   log.error("computer control boot reconcile failed", { error: e instanceof Error ? e.message : String(e) });
+});
+// 搜索同理对齐：桥脚本把端口烘进内容（hash 变了自动重装），条目按存活配置装/收
+void searchControl.boot().catch((e: unknown) => {
+  log.error("search service boot reconcile failed", { error: e instanceof Error ? e.message : String(e) });
 });
 tunnelManager = new TunnelManager(config.homeDir, port);
 const wss = attachWs(server, { config, startedAt, authorize });
@@ -3235,6 +3252,41 @@ registerMethod("computerControl.actions", (params) => {
   const p = (params ?? {}) as { afterSeq?: number };
   const afterSeq = typeof p.afterSeq === "number" && Number.isFinite(p.afterSeq) ? p.afterSeq : 0;
   return { actions: controlActions(afterSeq).filter((a) => a.domain === "computer") };
+});
+
+// ---- 搜索（bot 级；服务实例在 startHttp 前那段创建） --------------------------------
+
+registerMethod("search.providers", () => SEARCH_PROVIDER_INFOS);
+
+registerMethod("search.overview", () => searchControl.overview());
+
+registerMethod("search.status", (params) => {
+  const p = (params ?? {}) as { botId?: string };
+  return searchControl.status(p);
+});
+
+// 配置写入（密钥语义：apiKey 缺省=不动，""=清除，非空=替换；换家未给 key 自动清旧 key）
+registerMethod("search.configure", (params) => {
+  const p = (params ?? {}) as { botId?: string; provider?: string; apiKey?: string };
+  return searchControl.configure(p);
+});
+
+// 余量/余额快照：{botId}（已存密钥，60s 缓存，force=true 绕过）或 {provider, apiKey}（草稿预检）
+registerMethod("search.quota", (params) => {
+  const p = (params ?? {}) as { botId?: string; provider?: string; apiKey?: string; force?: boolean };
+  return searchControl.quota(p);
+});
+
+// 桥的 tools/list 收口：这个工作区（cwd/--root）配了搜索才暴露 web_search
+registerMethod("search.sessionTools", (params) => {
+  const p = (params ?? {}) as { cwd?: string; root?: string };
+  return searchControl.sessionTools(p);
+});
+
+// 桥的 web_search 执行：daemon 侧解析 bot → 取该 bot 的提供商与密钥
+registerMethod("search.query", (params) => {
+  const p = (params ?? {}) as { cwd?: string; root?: string; query?: string; maxResults?: number };
+  return searchControl.query(p);
 });
 
 registerMethod("session.start", async (params) => {

@@ -50,7 +50,8 @@ export interface ControlActionEntry {
   /** 单调递增序号（前端增量拉取的游标） */
   readonly seq: number;
   readonly at: number;
-  readonly domain: "browser" | "computer";
+  /** search = 搜索桥（core/search.ts，同款日志复用这个形状） */
+  readonly domain: "browser" | "computer" | "search";
   /** 动作名：enabled / disabled / mode / entry.write / sharedChrome.start / tool.computer_click … */
   readonly action: string;
   /** 摘要（谁 / 参数要点 / 结果），纯文本，不承载审批语义 */

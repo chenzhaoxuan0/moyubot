@@ -133,16 +133,19 @@ export function controlActions(afterSeq = 0): ControlActionEntry[] {
 // ---- dsh 的 ACP 注入出口 ---------------------------------------------------------
 
 /** 服务层注册「当前应注入 dsh session/new 的 MCP 条目」（启用态才返回非空） */
-let acpEntriesProvider: () => AcpMcpServer[] = () => [];
+let acpEntriesProvider: (rootPath?: string) => AcpMcpServer[] = () => [];
 
-export function registerAcpEntriesProvider(fn: () => AcpMcpServer[]): void {
+export function registerAcpEntriesProvider(fn: (rootPath?: string) => AcpMcpServer[]): void {
   acpEntriesProvider = fn;
 }
 
-/** dsh 适配器调用：session/new / session/resume 的 mcpServers 参数 */
-export function acpMcpServers(): AcpMcpServer[] {
+/**
+ * dsh 适配器调用：session/new / session/resume 的 mcpServers 参数。
+ * rootPath 是会话工作目录——搜索条目按 bot 区分时要靠它（浏览器/电脑控制忽略）。
+ */
+export function acpMcpServers(rootPath?: string): AcpMcpServer[] {
   try {
-    return acpEntriesProvider();
+    return acpEntriesProvider(rootPath);
   } catch {
     return []; // 注入面出错不阻断会话（docs/14 §2.4 的降级口径）
   }

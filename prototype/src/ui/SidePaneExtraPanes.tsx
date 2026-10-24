@@ -9,6 +9,7 @@ import { useWorkbench } from "../store/useWorkbench.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { NEW_BOT_TAB_ID, gitGraphTabId } from "../core/sidePaneTabs.ts";
 import { asModelId, asRuntimeId, asUnitId, type UnitId } from "../core/units.ts";
+import { configureSearch } from "../store/useSearch.ts";
 import { AddBotDialog } from "./AddBotDialog.tsx";
 import { GitGraphDialog } from "./gitGraph/GitGraphDialog.tsx";
 
@@ -57,6 +58,15 @@ export function NewBotPane(): ReactElement {
           },
           { createRoot: true },
         );
+        // 搜索配置（bot 级、daemon 侧存储）：bot 落盘后写密钥槽。失败不回滚
+        // bot 本体（它已经建好），错误由 AddBotDialog 的 catch 展示。
+        if (draft.search !== undefined) {
+          await configureSearch(
+            id,
+            draft.search.provider,
+            draft.search.apiKey === "" ? undefined : draft.search.apiKey,
+          );
+        }
         // 建完即变身（2026-10-23 页面合并）：同一个右栏面板无缝切换成新 bot 的
         // 完整设置页——切 bot、关新建签、开它的 bot 设置签，一个连续流程
         useWorkbench.getState().selectUnit(id);

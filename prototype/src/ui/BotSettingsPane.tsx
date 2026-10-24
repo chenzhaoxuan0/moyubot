@@ -12,6 +12,7 @@ import { useWorkbench } from "../store/useWorkbench.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { contextTabId } from "../core/sidePaneTabs.ts";
 import { asRuntimeId, asModelId, type UnitId, type WorkUnit } from "../core/units.ts";
+import { configureSearch } from "../store/useSearch.ts";
 import type { AddBotDraft } from "./AddBotDialog.tsx";
 import { AddBotDialog } from "./AddBotDialog.tsx";
 
@@ -66,6 +67,15 @@ export function BotSettingsPane({ unitId }: { unitId: UnitId }): ReactElement | 
           },
           opts?.overwrite === true ? {} : guardsOf(fresh),
         );
+        // 搜索配置（bot 级、daemon 侧存储）：定义落盘成功后再写密钥槽，
+        // 失败由 AddBotDialog 的 catch 展示（bot.json 已保存，不算回滚）。
+        if (draft.search !== undefined) {
+          await configureSearch(
+            String(unitId),
+            draft.search.provider,
+            draft.search.apiKey === "" ? undefined : draft.search.apiKey,
+          );
+        }
         // 保存后不关面板：分区之间继续编辑；冲突走 AddBotDialog 内建的三选一
       }}
     />

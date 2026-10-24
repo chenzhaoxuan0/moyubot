@@ -82,6 +82,14 @@ export type {
 } from "../../prototype/src/core/control.ts";
 
 export type {
+  SearchBotStatus,
+  SearchOverview,
+  SearchProviderId,
+  SearchProviderInfo,
+  SearchQuotaSnapshot,
+} from "../../prototype/src/core/search.ts";
+
+export type {
   GitBranchInfo,
   GitBranchesResult,
   GitChangeEntry,

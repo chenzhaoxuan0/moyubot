@@ -12,6 +12,7 @@ import {
   Pin,
   Plus,
   RefreshCw,
+  Search,
   Wand2,
   X,
   Radio,
@@ -19,12 +20,14 @@ import {
 } from "lucide-react";
 import { useWorkbench, selectVisibleModels, BOT_CONFLICT, type BotWriteGuards } from "../store/useWorkbench.ts";
 import { type WorkUnit, type UnitKind, type BotChannel } from "../core/units.ts";
+import { type SearchProviderId } from "../core/search.ts";
 import { fetchBotDefaultRoot, inspectBotFolder, openFolder } from "../adapters/daemon/client.ts";
 import { ChannelSection } from "./ChannelSection.tsx";
 import { ImportSessionsSection } from "./ImportSessionsSection.tsx";
 import { FolderPickerField } from "./FolderPickerField.tsx";
 import { UnitContextBadge, UnitContextEditor, WorkspaceInitAndUnregisterBar } from "./UnitContextEditor.tsx";
 import { WorkspaceSkillsEditor } from "./WorkspaceSkillsEditor.tsx";
+import { SEARCH_DRAFT_INIT, SearchSection, type SearchDraftState } from "./SearchSection.tsx";
 import { cn } from "./cn.ts";
 
 /**
@@ -67,14 +70,21 @@ export interface AddBotDraft {
   readonly resident?: boolean;
   /** 弱标签（ADR 0011 第 2 条）：新建恒 "bot"；编辑模式的切换由对话框自己补写 */
   readonly kind: UnitKind;
+  /**
+   * 搜索配置（bot 级，daemon 侧存储）：undefined = 本次未动搜索分区。
+   * 保存链路：bot 定义落盘后由调用方（BotSettingsPane / NewBotPane）调
+   * `search.configure` 写密钥槽——密钥不进 bot.json。
+   */
+  readonly search?: { provider: SearchProviderId | "none"; apiKey: string };
 }
 
-type Section = "identity" | "context" | "skills" | "channels" | "importSessions";
+type Section = "identity" | "context" | "skills" | "channels" | "search" | "importSessions";
 
 const SECTIONS: readonly { id: Section; label: string; icon: LucideIcon; hint: string }[] = [
   { id: "identity", label: "身份", icon: FileText, hint: "目录、名称、角色、执行器" },
   { id: "context", label: "上下文与文件", icon: BookOpen, hint: "注入清单与 SOUL/AGENTS/MEMORY/STANDING/USER" },
   { id: "channels", label: "渠道", icon: Radio, hint: "把 bot 接到 IM / webhook" },
+  { id: "search", label: "搜索", icon: Search, hint: "这个 bot 的联网搜索（Tavily / DeepSeek / 豆包 / 元宝）", },
 ];
 
 const SECTION_LIBRARY: readonly { label: string; snippet: (name: string) => string }[] = [
@@ -171,6 +181,8 @@ export function AddBotDialog({
   const [agentsMdMeta, setAgentsMdMeta] = useState<WorkUnit["agentsMdMeta"]>(undefined);
   /** 渠道配置。空 = 纯工作台内 bot。改了跟着保存一起写穿 bot.json。 */
   const [channels, setChannels] = useState<readonly BotChannel[]>(initial?.channels ?? []);
+  /** 搜索分区草稿（daemon 侧存储，保存链路见 AddBotDraft.search 注释） */
+  const [searchDraft, setSearchDraft] = useState<SearchDraftState>(SEARCH_DRAFT_INIT);
   const [folderOpened, setFolderOpened] = useState(false);
   /** 认领提示：目标文件夹已被别的 bot 注册（提交会被 daemon 的 root_taken 拦下） */
   const [claimHint, setClaimHint] = useState<string | null>(null);
@@ -219,6 +231,9 @@ export function AddBotDialog({
     setDiskNote(null);
     setClaimHint(null);
     setSection("identity");
+    // 搜索草稿两种模式都要归零：编辑分支若不重置，上一个 bot 的草稿（含密钥）
+    // 会跟着 initial 切换串进另一个 bot 的保存里
+    setSearchDraft(SEARCH_DRAFT_INIT);
     let cancelled = false;
     const fetchPlacement = async (prefill: boolean): Promise<void> => {
       try {
@@ -364,6 +379,10 @@ export function AddBotDialog({
       channels,
       resident,
       kind,
+      // 搜索分区没动过就不带（调用方据 undefined 跳过 search.configure）
+      ...(searchDraft.touched
+        ? { search: { provider: searchDraft.provider, apiKey: searchDraft.apiKey.trim() } }
+        : {}),
     };
   };
 
@@ -378,6 +397,8 @@ export function AddBotDialog({
       // kind 随主保存一笔写穿（draft.kind → Sidebar 编辑接线 → updateUnit 乐观锁链路），
       // 不做保存后补写——两笔写之间他端改动会被静默覆盖
       await onSubmit(d, overwrite ? { overwrite: true } : undefined);
+      // 搜索分区草稿归位（密钥已随调用方的 search.configure 落盘；touched 归零触发分区重拉状态）
+      setSearchDraft((prev) => (prev.touched ? { ...prev, apiKey: "", touched: false } : prev));
     } catch (err: unknown) {
       const code = (err as { code?: unknown } | null)?.code;
       if (code === BOT_CONFLICT) {
@@ -845,6 +866,16 @@ export function AddBotDialog({
                 channels={channels}
                 onChange={setChannels}
                 disabled={!isEdit}
+              />
+            )}
+
+            {/* 搜索（bot 级）：新建与编辑同一套表单——草稿随保存生效，
+                编辑模式多拉一份已存状态（掩码 + 余量） */}
+            {section === "search" && (
+              <SearchSection
+                botId={isEdit && initial ? String(initial.id) : null}
+                draft={searchDraft}
+                onDraftChange={setSearchDraft}
               />
             )}
 

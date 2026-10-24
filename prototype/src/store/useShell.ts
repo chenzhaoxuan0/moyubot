@@ -58,6 +58,7 @@ export type SettingsSectionId =
   | "mcp"
   | "browserControl"
   | "computerControl"
+  | "search"
   | "remoteControl";
 
 export type SettingsGroupId = "basics" | "agentCapabilities";
@@ -99,6 +100,7 @@ export const SETTINGS_SECTIONS: readonly SettingsSectionDef[] = [
   { id: "mcp", title: "MCP 服务", desc: "直接读写各执行器自己的配置文件（唯一真相源，原生 TUI 里改的这里也看得到）。停用 = 条目移出配置并存入停用库，恢复即写回；改对新会话生效，运行中的会话不受影响", groupId: "agentCapabilities", icon: "plug" },
   { id: "browserControl", title: "浏览器控制", desc: "playwright-mcp 一键扇出到全部执行器；隔离 / 接管（共享 Chrome）两模式", groupId: "agentCapabilities", icon: "globe" },
   { id: "computerControl", title: "电脑控制", desc: "执行器操作真实桌面（截图 / 键鼠 / 窗口）：总闸、急停与动作日志", groupId: "agentCapabilities", icon: "monitor" },
+  { id: "search", title: "搜索", desc: "按 bot 配置联网搜索（Tavily / DeepSeek / 豆包 / 元宝）：密钥 daemon 侧分槽，workbench-search 桥按会话目录暴露 web_search；这里看各家余量与条目扇出状态", groupId: "agentCapabilities", icon: "search" },
   { id: "remoteControl", title: "移动端远控", desc: "扫码直连手机 Web 触控界面、公网穿透与 IM 渠道守护状态", groupId: "agentCapabilities", icon: "smartphone" },
   { id: "image", title: "出图", desc: "图像供应商 profile 管理（gpt_image_playground 字段全集）", groupId: "agentCapabilities", icon: "image" },
 ];

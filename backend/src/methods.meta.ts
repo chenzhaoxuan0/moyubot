@@ -249,6 +249,18 @@ export const METHOD_META: Record<string, MethodMeta> = {
   "computerControl.actions": { description: "拉 afterSeq 之后的电脑控制动作审计流", paramsHint: "{afterSeq?}" },
   "computerControl.panic": { description: "紧急停止电脑控制（急停按钮）", paramsHint: "null" },
 
+  // ---- 搜索（bot 级）--------------------------------------------------------------
+  "search.providers": { description: "搜索提供商目录（tavily/deepseek/doubao/yuanbao：key 提示、文档、免费额度说明）", paramsHint: "null" },
+  "search.overview": { description: "搜索总览：全部 bot 的配置状态 + 桥条目扇出结果 + 动作日志", paramsHint: "null" },
+  "search.status": { description: "单个 bot 的搜索状态（提供商 / 密钥掩码 / 本月本机调用次数 / 缓存配额）", paramsHint: "{botId}" },
+  "search.configure": {
+    description: "配置某个 bot 的搜索（密钥存 daemon 侧 search-keys.json；apiKey 缺省=不动，空串=清除，换家自动清旧 key）",
+    paramsHint: "{botId, provider: tavily|deepseek|doubao|yuanbao|none, apiKey?}",
+  },
+  "search.quota": { description: "查余量/余额：{botId}（60s 缓存，force 绕过）或 {provider, apiKey}（保存前草稿预检）", paramsHint: "{botId} 或 {provider, apiKey}" },
+  "search.sessionTools": { description: "搜索桥 tools/list 收口：这个工作区（cwd/--root）配了搜索才暴露 web_search", paramsHint: "{cwd, root?}" },
+  "search.query": { description: "执行一次 web 搜索（daemon 定位 bot → 用该 bot 的提供商与密钥；bridge 的工具面）", paramsHint: "{cwd|root, query, maxResults?}" },
+
   // ---- 出图 / 外观 ---------------------------------------------------------------
   "image.profiles.list": { description: "列出图供应商 profile，密钥打码不回传", paramsHint: "null" },
   "image.generate": {

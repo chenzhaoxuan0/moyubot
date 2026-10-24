@@ -488,10 +488,11 @@ export class DshAdapter implements ExecutorAdapter {
     }
     if (state.ref === null) {
       // mcpServers 动态注入（docs/14 §2.4）：dsh 无落盘 MCP 配置，浏览器/电脑控制的
-      // 条目由 ctrl/store 的 provider 给出（两个能力都停用时为空数组）。
+      // 条目由 ctrl/store 的 provider 给出（两个能力都停用时为空数组）；搜索条目
+      // 按 bot 区分，provider 拿会话工作目录（state.rootPath）决定给不给。
       // dsh 若拒收，按「全量 → 仅 stdio → 空」三级降级重试——注入是增强，
       // 不能把会话本身搞死；中间级保住浏览器条目不被 http 条目连坐。
-      const injected = acpMcpServers();
+      const injected = acpMcpServers(state.rootPath);
       let res: { sessionId?: string };
       try {
         res = (await this.request(state, "session/new", { cwd: state.rootPath, mcpServers: injected }, 60000)) as {
@@ -529,7 +530,7 @@ export class DshAdapter implements ExecutorAdapter {
 
   private async resumeSession(state: DshSession): Promise<void> {
     try {
-      await this.request(state, "session/resume", { sessionId: state.ref, cwd: state.rootPath, mcpServers: acpMcpServers() }, 60000);
+      await this.request(state, "session/resume", { sessionId: state.ref, cwd: state.rootPath, mcpServers: acpMcpServers(state.rootPath) }, 60000);
       state.sessionLoaded = true;
     } catch (err: unknown) {
       // cwd 变了 / 会话不可恢复：回落新会话，宁可丢历史也不能永久不可用

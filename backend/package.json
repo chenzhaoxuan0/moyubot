@@ -22,6 +22,8 @@
     "smoke:context": "tsx scripts/smoke-context.ts",
     "smoke:prog-init": "tsx scripts/smoke-progressive-init.ts",
     "smoke:control": "tsx scripts/smoke-control.ts",
+    "smoke:search": "tsx scripts/smoke-search.ts",
+    "smoke:search-live": "tsx scripts/smoke-search-live.ts",
     "smoke:exec": "tsx scripts/smoke-exec.ts",
     "smoke:feishu": "tsx scripts/smoke-feishu.ts",
     "smoke:git": "tsx scripts/smoke-git.ts",
