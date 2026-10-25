@@ -39,7 +39,13 @@ export function LogoCropDialog({
   const [busy, setBusy] = useState(false);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; baseX: number; baseY: number } | null>(null);
 
-  /* 解码选中的图。object URL 用完即 revoke，内存里不留整图 */
+  /* 回调走 ref：父组件传的是内联箭头，每次重渲染都是新引用。若直接进 effect 依赖，
+     一次无关重渲染就会 revoke 掉 loaded.url 还在用的 object URL 再重建重解码 ——
+     窗口期内 <img> 闪断，此刻确认裁剪会对已 revoke 的 URL 解码而失败 */
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
+
+  /* 解码选中的图（file 在弹窗生命周期内不变，effect 只跑一次）；object URL 卸载即 revoke */
   useEffect(() => {
     const url = URL.createObjectURL(file);
     const img = new Image();
@@ -52,20 +58,20 @@ export function LogoCropDialog({
     };
     img.onerror = () => {
       URL.revokeObjectURL(url);
-      onCancel();
+      onCancelRef.current();
     };
     img.src = url;
     return () => URL.revokeObjectURL(url);
-  }, [file, onCancel]);
+  }, [file]);
 
   /* Esc 取消（弹窗惯例） */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape") onCancelRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
+  }, []);
 
   /* 取景几何：cover 基准（zoom=1 恰好铺满方框）+ zoom 放大；offset 被钳在
      「图永远盖住方框」的范围内，四个方向都不会露出空底 */
@@ -274,7 +280,7 @@ export function LogoCropDialog({
           </button>
           <button
             type="button"
-            onClick={() => void confirmCrop()}
+            onClick={() => void confirmCrop().catch(() => undefined)}
             disabled={!loaded || busy}
             className="flex items-center gap-1.5 rounded-btn bg-teal px-3 py-1.5 text-body-sm text-canvas disabled:opacity-40"
           >
