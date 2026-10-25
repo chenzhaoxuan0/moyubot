@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, Sparkles } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { RuntimeEvent } from "../../core/events.ts";
@@ -82,23 +82,24 @@ export function ChatViewport({
   // 2. 思考与工具折叠工作组聚合
   const renderUnits = useMemo(() => buildWorkRuns(items), [items]);
 
-  // 3. 提取轮次锚点（供右侧大纲导览）
+  // 3. 提取轮次锚点（供右侧大纲导览），关联在单元列表中的下标
   const turnAnchors = useMemo<TurnNavAnchor[]>(() => {
     const anchors: TurnNavAnchor[] = [];
     let turnCount = 0;
-    for (const it of items) {
-      if (it.kind === "user.message") {
+    renderUnits.forEach((u, unitIdx) => {
+      if (u.kind === "item" && u.item.kind === "user.message") {
         turnCount += 1;
         anchors.push({
           turnIndex: turnCount,
-          userMessageId: String(it.data.messageId || it.id),
-          queryPreview: typeof it.data.text === "string" ? it.data.text.trim().slice(0, 36) : "",
-          at: it.at,
+          userMessageId: String(u.item.data.messageId || u.item.id),
+          queryPreview: typeof u.item.data.text === "string" ? u.item.data.text.trim().slice(0, 36) : "",
+          at: u.item.at,
+          itemIndex: unitIdx,
         });
       }
-    }
+    });
     return anchors;
-  }, [items]);
+  }, [renderUnits]);
 
   // 4. 最后一条用户消息 id（末轮编辑重发专属入口）
   const lastUserTurnId = useMemo(() => {
@@ -148,6 +149,32 @@ export function ChatViewport({
     enabled: useVirtual,
   });
 
+  const handleScrollToTurn = useCallback(
+    (anchor: TurnNavAnchor) => {
+      if (useVirtual && anchor.itemIndex !== undefined) {
+        virtualizer.scrollToIndex(anchor.itemIndex, { align: "start", behavior: "smooth" });
+        setTimeout(() => {
+          const container = containerRef.current;
+          const el = container?.querySelector(`[data-turn-id="${anchor.userMessageId}"]`);
+          if (el) {
+            el.classList.add("ring-2", "ring-teal/50", "transition-all", "duration-500");
+            setTimeout(() => el.classList.remove("ring-2", "ring-teal/50"), 1500);
+          }
+        }, 300);
+      } else {
+        const container = containerRef.current;
+        if (!container) return;
+        const el = container.querySelector(`[data-turn-id="${anchor.userMessageId}"]`);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "start" });
+          el.classList.add("ring-2", "ring-teal/50", "transition-all", "duration-500");
+          setTimeout(() => el.classList.remove("ring-2", "ring-teal/50"), 1500);
+        }
+      }
+    },
+    [useVirtual, virtualizer, containerRef],
+  );
+
   return (
     <div
       ref={containerRef}
@@ -160,7 +187,11 @@ export function ChatViewport({
       <SelectionTooltip containerRef={containerRef} />
 
       {/* 轮次导航大纲条（右轨） */}
-      <TurnNavigator anchors={turnAnchors} containerRef={containerRef} />
+      <TurnNavigator
+        anchors={turnAnchors}
+        containerRef={containerRef}
+        onNavigate={handleScrollToTurn}
+      />
 
       {/* 居中正文阅读列 */}
       <div

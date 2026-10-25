@@ -6,9 +6,11 @@ import { cn } from "../../cn.ts";
 export function TurnNavigator({
   anchors,
   containerRef,
+  onNavigate,
 }: {
   anchors: readonly TurnNavAnchor[];
   containerRef: React.RefObject<HTMLDivElement | null>;
+  onNavigate?: (turn: TurnNavAnchor) => void;
 }) {
   const [activeTurn, setActiveTurn] = useState<number>(0);
   const [hoveredTurn, setHoveredTurn] = useState<number | null>(null);
@@ -17,12 +19,15 @@ export function TurnNavigator({
   if (anchors.length < 2) return null;
 
   const scrollToTurn = (turn: TurnNavAnchor) => {
+    if (onNavigate) {
+      onNavigate(turn);
+      return;
+    }
     const container = containerRef.current;
     if (!container) return;
     const el = container.querySelector(`[data-turn-id="${turn.userMessageId}"]`);
     if (el) {
       el.scrollIntoView({ behavior: "smooth", block: "start" });
-      // 短暂添加高亮反馈
       el.classList.add("ring-2", "ring-teal/50", "transition-all", "duration-500");
       setTimeout(() => {
         el.classList.remove("ring-2", "ring-teal/50");

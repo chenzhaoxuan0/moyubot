@@ -54,4 +54,5 @@ export interface TurnNavAnchor {
   readonly userMessageId: string;
   readonly queryPreview: string;
   readonly at: number;
+  readonly itemIndex?: number;
 }

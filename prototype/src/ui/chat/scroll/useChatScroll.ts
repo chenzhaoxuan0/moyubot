@@ -71,6 +71,8 @@ export function useChatScroll(changeSignal?: unknown): UseChatScrollResult {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
+      if (tag === "input" || tag === "textarea") return;
       if (["PageUp", "ArrowUp", "Home"].includes(e.key)) {
         armUserIntent();
       }

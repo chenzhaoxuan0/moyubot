@@ -358,6 +358,19 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
     ta.setSelectionRange(pos, pos);
   });
 
+  // 划词引用追问等外部事件触发输入框自动获焦
+  useEffect(() => {
+    const onFocus = () => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      const len = ta.value.length;
+      ta.setSelectionRange(len, len);
+    };
+    window.addEventListener("aw:focus-composer", onFocus);
+    return () => window.removeEventListener("aw:focus-composer", onFocus);
+  }, []);
+
   /** 提交输入内容："/" 开头的文本原样发给执行器（原生命令透传语义），支持仅带附件或图文混发。 */
   const submit = () => {
     const v = draft.trim();
