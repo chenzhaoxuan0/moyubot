@@ -51,25 +51,36 @@ async function locateOnPath(name: string): Promise<string[]> {
   const hits = out.stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   if (hits.length > 0) return hits;
 
-  // 兜底：长驻进程中若在外部刚安装了新工具，当前 process.env.PATH 尚未继承 Windows Registry 的新 PATH。
-  // 检查已知的用户默认安装目录，确保即装即用。
-  if (process.platform === "win32") {
-    const home = homedir();
-    const candidatePaths = [
-      path.join(home, ".grok", "bin", `${name}.exe`),
-      path.join(home, ".grok", "bin", `${name}`),
-      path.join(home, "AppData", "Local", "cursor-agent", `${name}.ps1`),
-      path.join(home, "AppData", "Local", "cursor-agent", `${name}.cmd`),
-      path.join(home, "AppData", "Local", "cursor-agent", `${name}.exe`),
-      path.join(home, "AppData", "Roaming", "npm", `${name}.cmd`),
-      path.join(home, "AppData", "Roaming", "npm", `${name}.ps1`),
-      path.join(home, ".cargo", "bin", `${name}.exe`),
-      path.join(home, ".local", "bin", `${name}.exe`),
-      path.join(home, ".local", "bin", name),
-    ];
-    const found = candidatePaths.filter((p) => existsSync(p));
-    if (found.length > 0) return found;
-  }
+  // 兜底：长驻进程中若在外部刚安装了新工具，当前 process.env.PATH 尚未继承
+  // Windows Registry / unix shell rc 写入的新 PATH —— 「装完点重探还是未安装」的根因。
+  // 按各 CLI 官方安装器的默认落点逐个 existsSync，确保即装即用。
+  // unix 之前完全没有这层（直接返回 []），macOS/Linux 上同一类问题照发。
+  const home = homedir();
+  const suffixes = process.platform === "win32" ? [".cmd", ".ps1", ".exe"] : [""];
+  const dirs =
+    process.platform === "win32"
+      ? [
+          path.join(home, ".grok", "bin"),                          // grok 官方脚本
+          path.join(home, ".codex", "bin"),                          // codex 原生安装器
+          path.join(home, ".opencode", "bin"),                       // opencode 官方脚本
+          path.join(home, "AppData", "Local", "cursor-agent"),       // cursor 官方脚本
+          path.join(home, "AppData", "Roaming", "npm"),              // npm 全局 shim
+          path.join(home, ".cargo", "bin"),
+          path.join(home, ".local", "bin"),                          // claude 原生安装器
+        ]
+      : [
+          path.join(home, ".local", "bin"),
+          path.join(home, ".grok", "bin"),
+          path.join(home, ".codex", "bin"),
+          path.join(home, ".opencode", "bin"),
+          path.join(home, ".cargo", "bin"),
+          path.join(home, ".npm-global", "bin"),                     // 自定义 npm prefix 的常见位
+          "/usr/local/bin",
+          "/opt/homebrew/bin",                                       // Apple Silicon Homebrew
+        ];
+  const candidates = dirs.flatMap((dir) => suffixes.map((sfx) => path.join(dir, `${name}${sfx}`)));
+  const found = candidates.filter((p) => existsSync(p));
+  if (found.length > 0) return found;
   return [];
 }
 

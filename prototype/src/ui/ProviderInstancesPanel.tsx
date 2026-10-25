@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
+  ArrowUpCircle,
   Check,
   CheckCircle2,
   ChevronRight,
@@ -14,6 +15,7 @@ import {
   Image as ImageIcon,
   Info,
   KeyRound,
+  Loader2,
   Pencil,
   Plus,
   RefreshCw,
@@ -26,8 +28,7 @@ import {
 import { prefsOf, resolveVisibleModels } from "../core/modelPrefs.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { useTerminalStore } from "../store/useTerminalStore.ts";
-import { useShell } from "../store/useShell.ts";
-import { DaemonClient, defaultDaemonEndpoint, readModelDefaults, writeModelDefaults, type DaemonExecutorInfo, type ModelSyncReport, type NativeModelConfig } from "../adapters/daemon/client.ts";
+import { defaultDaemonEndpoint, readModelDefaults, writeModelDefaults, type DaemonExecutorInfo, type ModelSyncReport, type NativeModelConfig } from "../adapters/daemon/client.ts";
 import {
   readModelCatalog,
   writeModelCatalog,
@@ -41,6 +42,7 @@ import {
 import { runtimeRegistry } from "../core/registry.ts";
 import { asModelId } from "../core/units.ts";
 import { executorIconSrc } from "./executorIcon.ts";
+import { dispatchTerminalCommand, watchRuntimeProbeUntilResolved } from "./installFlow.ts";
 import { ProviderModelPanel } from "./ModelSettings.tsx";
 import { cn } from "./cn.ts";
 
@@ -63,6 +65,13 @@ interface CliGuide {
 
 /** 本应用会话内是否已经自动探测过一轮（见 ProviderInstancesPanel 挂载 effect） */
 let autoProbedThisSession = false;
+
+/**
+ * 平台判定（安装/升级命令选 Windows 还是 Posix 版）。
+ * 放模块级统一一处：卡片和升级条各写一份 navigator.userAgent 判断，
+ * 改口径时必漏一处。
+ */
+const isWindowsHost = typeof navigator !== "undefined" ? navigator.userAgent.includes("Windows") : true;
 
 const CLI_GUIDES: Record<string, CliGuide> = {
   codex: {
@@ -145,6 +154,9 @@ export interface ProviderInstallGuide {
   readonly commandPosix?: string;
   readonly altCommand?: string;
   readonly altCommandLabel?: string;
+  /** 升级命令（薄版升级面）：npm 系用 @latest，脚本系重跑官方脚本（脚本本身就是幂等升级） */
+  readonly upgradeWindows?: string;
+  readonly upgradePosix?: string;
   readonly docUrl?: string;
   readonly tips: string;
 }
@@ -156,6 +168,8 @@ export const PROVIDER_INSTALL_GUIDES: Record<string, ProviderInstallGuide> = {
     commandPosix: "curl -fsSL https://x.ai/cli/install.sh | bash",
     altCommand: "cargo build -p xai-grok-pager-bin --release",
     altCommandLabel: "本地源码编译 (grok-build)",
+    upgradeWindows: "irm https://x.ai/cli/install.ps1 | iex",
+    upgradePosix: "curl -fsSL https://x.ai/cli/install.sh | bash",
     docUrl: "https://x.ai/cli",
     tips: "SpaceXAI 官方安装脚本会自动下载预编译二进制至 ~/.grok/bin 并写入环境变量。若使用本地 grok-build 源码，也可在源码根目录运行 cargo build 编译。",
   },
@@ -165,6 +179,8 @@ export const PROVIDER_INSTALL_GUIDES: Record<string, ProviderInstallGuide> = {
     commandPosix: "npm install -g cursor-agent",
     altCommand: "irm https://cursor.com/install.ps1 | iex",
     altCommandLabel: "官方安装脚本",
+    upgradeWindows: "npm i -g cursor-agent@latest",
+    upgradePosix: "npm i -g cursor-agent@latest",
     docUrl: "https://cursor.com/cli",
     tips: "Cursor 官方 CLI 模式（cursor-agent）。安装后在终端运行 cursor-agent login 即可完成认证。",
   },
@@ -174,6 +190,8 @@ export const PROVIDER_INSTALL_GUIDES: Record<string, ProviderInstallGuide> = {
     commandPosix: "npm install -g cursor-agent",
     altCommand: "irm https://cursor.com/install.ps1 | iex",
     altCommandLabel: "官方安装脚本",
+    upgradeWindows: "npm i -g cursor-agent@latest",
+    upgradePosix: "npm i -g cursor-agent@latest",
     docUrl: "https://cursor.com/cli",
     tips: "Cursor 官方 CLI 模式（cursor-agent）。安装后在终端运行 cursor-agent login 即可完成认证。",
   },
@@ -183,6 +201,8 @@ export const PROVIDER_INSTALL_GUIDES: Record<string, ProviderInstallGuide> = {
     commandPosix: "npm install -g openclaw",
     altCommand: "openclaw onboard",
     altCommandLabel: "初始化向导",
+    upgradeWindows: "npm i -g openclaw@latest",
+    upgradePosix: "npm i -g openclaw@latest",
     docUrl: "https://openclaw.ai",
     tips: "OpenClaw 全局 npm 包安装后，在终端执行 openclaw onboard 即可完成初始化网关配置与模型接入。",
   },
@@ -192,6 +212,8 @@ export const PROVIDER_INSTALL_GUIDES: Record<string, ProviderInstallGuide> = {
     commandPosix: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
     altCommand: "npm i -g @openai/codex",
     altCommandLabel: "npm 全局安装",
+    upgradeWindows: "irm https://chatgpt.com/codex/install.ps1 | iex",
+    upgradePosix: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
     docUrl: "https://developers.openai.com/codex/cli",
     tips: "OpenAI 官方 Codex CLI。安装后运行 codex login 进行账号登录或绑定 API 密钥。",
   },
@@ -201,6 +223,8 @@ export const PROVIDER_INSTALL_GUIDES: Record<string, ProviderInstallGuide> = {
     commandPosix: "curl -fsSL https://claude.ai/install.sh | bash",
     altCommand: "npm i -g @anthropic-ai/claude-code",
     altCommandLabel: "npm 全局安装",
+    upgradeWindows: "irm https://claude.ai/install.ps1 | iex",
+    upgradePosix: "curl -fsSL https://claude.ai/install.sh | bash",
     docUrl: "https://claude.com/product/claude-code",
     tips: "Anthropic 官方 Claude Code 终端执行器。安装后运行 claude login 登录账号。",
   },
@@ -208,6 +232,8 @@ export const PROVIDER_INSTALL_GUIDES: Record<string, ProviderInstallGuide> = {
     title: "OpenCode CLI",
     commandWindows: "npm i -g opencode-ai",
     commandPosix: "npm i -g opencode-ai",
+    upgradeWindows: "npm i -g opencode-ai@latest",
+    upgradePosix: "npm i -g opencode-ai@latest",
     docUrl: "https://opencode.ai",
     tips: "开源多模型终端 Agent 执行器。安装后运行 opencode auth login 配置各厂商模型密钥。",
   },
@@ -215,12 +241,16 @@ export const PROVIDER_INSTALL_GUIDES: Record<string, ProviderInstallGuide> = {
     title: "Pi Agent CLI",
     commandWindows: "npm i -g @earendil-works/pi-coding-agent",
     commandPosix: "npm i -g @earendil-works/pi-coding-agent",
+    upgradeWindows: "npm i -g @earendil-works/pi-coding-agent@latest",
+    upgradePosix: "npm i -g @earendil-works/pi-coding-agent@latest",
     tips: "轻量全栈 Agent 工具。安装后运行 pi login 配置模型路由。",
   },
   mcode: {
     title: "MiniMax MCode CLI",
     commandWindows: "npm i -g @minimax/mcode",
     commandPosix: "npm i -g @minimax/mcode",
+    upgradeWindows: "npm i -g @minimax/mcode@latest",
+    upgradePosix: "npm i -g @minimax/mcode@latest",
     tips: "MiniMax Code 研发套件，支持私有化模型调度。",
   },
   hermes: {
@@ -229,18 +259,24 @@ export const PROVIDER_INSTALL_GUIDES: Record<string, ProviderInstallGuide> = {
     commandPosix: "pipx install hermes-agent",
     altCommand: "pipx install hermes-agent",
     altCommandLabel: "pipx 隔离安装",
+    upgradeWindows: "pip install -U hermes-agent",
+    upgradePosix: "pipx upgrade hermes-agent",
     tips: "通过 Python pip 或 pipx 安装 hermes-agent。",
   },
   kimi: {
     title: "Kimi Code CLI",
     commandWindows: "npm i -g @moonshot-ai/kimi-code",
     commandPosix: "npm i -g @moonshot-ai/kimi-code",
+    upgradeWindows: "npm i -g @moonshot-ai/kimi-code@latest",
+    upgradePosix: "npm i -g @moonshot-ai/kimi-code@latest",
     tips: "Moonshot Kimi Code 终端执行器，安装后在终端进行认证。",
   },
   dsh: {
     title: "DeepSeek Harness CLI",
     commandWindows: "npm i -g @deepseek-ai/dsh",
     commandPosix: "npm i -g @deepseek-ai/dsh",
+    upgradeWindows: "npm i -g @deepseek-ai/dsh@latest",
+    upgradePosix: "npm i -g @deepseek-ai/dsh@latest",
     tips: "DeepSeek Harness 官方 CLI，安装后运行 dsh login 或配置 DEEPSEEK_API_KEY。",
   },
   agy: {
@@ -274,13 +310,17 @@ function InstallGuideCard({
   const guide = PROVIDER_INSTALL_GUIDES[bareId];
   const [copiedMain, setCopiedMain] = useState(false);
   const [copiedAlt, setCopiedAlt] = useState(false);
-  const [runningInTerminal, setRunningInTerminal] = useState(false);
   const [checking, setChecking] = useState(false);
+  /**
+   * 派发后等安装完成的阶段标记：
+   * waiting = 已注入终端、后台轮询探测中（面板可以已随设置页关闭，轮询照跑）
+   * timeout = 5 分钟没等到 —— 给出重启兜底指引自灭
+   */
+  const [awaiting, setAwaiting] = useState<"idle" | "waiting" | "timeout">("idle");
 
   if (!guide && !hint) return null;
 
-  const isWindows = typeof navigator !== "undefined" ? navigator.userAgent.includes("Windows") : true;
-  const mainCmd = (isWindows ? guide?.commandWindows : (guide?.commandPosix ?? guide?.commandWindows)) ?? "";
+  const mainCmd = (isWindowsHost ? guide?.commandWindows : (guide?.commandPosix ?? guide?.commandWindows)) ?? "";
 
   const handleCopy = (cmd: string, isAlt: boolean) => {
     if (!cmd) return;
@@ -294,31 +334,18 @@ function InstallGuideCard({
     }
   };
 
-  const handleRunInTerminal = (cmdToRun: string) => {
+  const handleRunInTerminal = async (cmdToRun: string) => {
     if (!cmdToRun) return;
-    setRunningInTerminal(true);
-    // 复制到剪贴板兜底
-    void navigator.clipboard.writeText(cmdToRun);
-
-    // 在工作台终端新建标签
-    const termId = useTerminalStore.getState().createTab({
-      profileId: "pwsh",
-      title: `安装 ${displayName}`,
-    });
-
-    // 关闭设置页切到终端让用户直接观看安装
-    useShell.getState().closeSettings();
-
-    // 稍等 PTY 初始化完成后注入命令并回车执行
-    setTimeout(() => {
-      try {
-        const client = DaemonClient.get(defaultDaemonEndpoint());
-        void client.rpc("terminal.input", { terminalId: termId, data: `${cmdToRun}\r` }).catch(() => {});
-      } catch {
-        /* ignore */
-      }
-      setRunningInTerminal(false);
-    }, 800);
+    setAwaiting("waiting");
+    try {
+      // 等首帧再注入（不赌定时器），注入完立即开装完成监听 —— 状态离开
+      // not_installed 的那一刻注册表就地翻转，设置页开不开、在哪页，徽标都跟着变
+      await dispatchTerminalCommand(cmdToRun, `安装 ${displayName}`);
+      const flipped = await watchRuntimeProbeUntilResolved(bareId);
+      setAwaiting(flipped ? "idle" : "timeout");
+    } catch {
+      setAwaiting("idle");
+    }
   };
 
   const handleRecheck = async () => {
@@ -392,13 +419,17 @@ function InstallGuideCard({
                 <span>{copiedMain ? "已复制" : "复制"}</span>
               </button>
               <button
-                onClick={() => handleRunInTerminal(mainCmd)}
-                disabled={runningInTerminal}
-                title="新建终端标签并自动执行安装命令"
-                className="flex items-center gap-1 rounded bg-teal px-2.5 py-1 text-[11px] font-sans font-medium text-white hover:bg-teal-hover transition shadow-xs"
+                onClick={() => void handleRunInTerminal(mainCmd)}
+                disabled={awaiting === "waiting"}
+                title="新建终端标签并自动执行安装命令，完成后自动检测接入"
+                className="flex items-center gap-1 rounded bg-teal px-2.5 py-1 text-[11px] font-sans font-medium text-white hover:bg-teal-hover transition shadow-xs disabled:opacity-60"
               >
-                <Terminal size={11} />
-                <span>在终端运行安装</span>
+                {awaiting === "waiting" ? (
+                  <Loader2 size={11} className="animate-spin" />
+                ) : (
+                  <Terminal size={11} />
+                )}
+                <span>{awaiting === "waiting" ? "等待安装完成…" : "在终端运行安装"}</span>
               </button>
             </div>
           </div>
@@ -419,6 +450,26 @@ function InstallGuideCard({
           )}
         </div>
       )}
+
+      {/* 派发后的闭环反馈：装完自动检测（后台轮询，设置页关了也照跑） */}
+      {awaiting === "waiting" && (
+        <p className="flex items-center gap-2 text-caption text-graphite">
+          <Loader2 size={12} className="animate-spin text-teal" />
+          已派发到终端 —— 安装完成后自动检测接入（最长等 5 分钟），可切到终端查看进度。
+        </p>
+      )}
+      {awaiting === "timeout" && (
+        <p className="flex items-start gap-2 text-caption text-amber-600 leading-relaxed">
+          <AlertCircle size={13} className="mt-0.5 shrink-0" />
+          5 分钟内仍未检测到该执行器。若终端里确实装完了，重启工作台让守护进程拾取新装的
+          PATH 后再打开本页；也可以先点「重新检测」再试一次。
+        </p>
+      )}
+      {awaiting === "idle" && (
+        <p className="text-[11px] text-ash leading-relaxed">
+          自己复制去装也行：装完点「重新检测」；若仍显示未安装，重启工作台让守护进程拾取新装的 PATH。
+        </p>
+      )}
     </section>
   );
 }
@@ -431,6 +482,7 @@ export function ProviderInstancesPanel() {
   const syncModelsAll = useWorkbench((s) => s.syncModelsAll);
   const syncingModels = useWorkbench((s) => s.syncingModels);
   const modelSync = useWorkbench((s) => s.modelSync);
+  const daemonStatus = useWorkbench((s) => s.daemonStatus);
 
   const [checkedLabel, setCheckedLabel] = useState("刚刚");
   const [checking, setChecking] = useState(false);
@@ -554,6 +606,57 @@ export function ProviderInstancesPanel() {
           模型刷新失败：{modelSync.error}
         </p>
       )}
+
+      {/* 零就绪引导：一台没装任何 CLI 的新机，用户面对一列「未安装」不知道从哪下手。
+          等全部探测有结论再出（unprobed/starting 时藏着，避免首屏闪一下又消失），
+          给两家覆盖面最广的快捷安装 + 指向左侧列表的引导。装完后台轮询自动接入，
+          不需要用户回来点任何按钮。 */}
+      {daemonStatus === "connected" &&
+        !checking &&
+        runtimes.filter((r) => !r.testOnly).length > 0 &&
+        !runtimes.filter((r) => !r.testOnly).some((r) => r.state.status === "ready") &&
+        !runtimes.filter((r) => !r.testOnly).some((r) => r.state.status === "unprobed" || r.state.status === "starting") && (
+          <section className="rounded-card border border-amber-500/30 bg-amber-500/5 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="flex items-start gap-3 min-w-0">
+                <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-500">
+                  <Download size={15} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-body-sm font-semibold text-ink">本机还没有已就绪的执行器</h3>
+                  <p className="mt-1 text-caption text-graphite leading-relaxed">
+                    装一家就能开工 —— 下面两家模型覆盖面最广；也可以从左侧列表挑任意一家，按引导安装。
+                    命令会派发到终端执行，装完自动检测接入，期间可以关掉设置页去干别的。
+                  </p>
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                {(["claude", "codex"] as const).map((bareId) => {
+                  const g = PROVIDER_INSTALL_GUIDES[bareId]!;
+                  const cmd = isWindowsHost ? g.commandWindows : (g.commandPosix ?? g.commandWindows);
+                  return (
+                    <button
+                      key={bareId}
+                      onClick={() => {
+                        // 派发即接管：关闭设置页切终端；完成监听在后台跑，
+                        // 状态翻转那一刻注册表广播，全应用徽标一起翻绿
+                        void (async () => {
+                          await dispatchTerminalCommand(cmd, `安装 ${g.title}`);
+                          await watchRuntimeProbeUntilResolved(bareId);
+                        })();
+                      }}
+                      title={cmd}
+                      className="flex items-center gap-1.5 rounded-btn bg-teal px-3 py-1.5 text-caption font-medium text-white hover:bg-teal-hover transition shadow-xs"
+                    >
+                      <Download size={12} />
+                      安装 {g.title}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+        )}
 
       <div className="grid grid-cols-[240px_minmax(0,1fr)] gap-4 items-start">
         {/* 左列：实例列表 */}
@@ -819,6 +922,10 @@ function InstanceEditor({
   const probeAll = useWorkbench((s) => s.probeAll);
   const [editingName, setEditingName] = useState(false);
   const [copiedInstall, setCopiedInstall] = useState(false);
+  /** 薄版升级条：展开态 + 派发中标记 */
+  const [showUpgrade, setShowUpgrade] = useState(false);
+  const [upgrading, setUpgrading] = useState(false);
+  const [copiedUpgrade, setCopiedUpgrade] = useState(false);
   const agyDefaultYolo = useTerminalStore((s) => s.agyDefaultYolo);
   const setAgyDefaultYolo = useTerminalStore((s) => s.setAgyDefaultYolo);
 
@@ -828,6 +935,33 @@ function InstanceEditor({
   const guide = CLI_GUIDES[bareRuntimeId] ?? {
     desc: `${name} 终端执行器。`,
     tips: "工作台直接调度本地安装的命令行进程。",
+  };
+  const installGuide = PROVIDER_INSTALL_GUIDES[bareRuntimeId];
+  const upgradeCmd = installGuide
+    ? isWindowsHost
+      ? (installGuide.upgradeWindows ?? installGuide.upgradePosix)
+      : (installGuide.upgradePosix ?? installGuide.upgradeWindows)
+    : undefined;
+
+  const handleUpgradeInTerminal = async () => {
+    if (!upgradeCmd) return;
+    setUpgrading(true);
+    try {
+      await dispatchTerminalCommand(upgradeCmd, `升级 ${name}`);
+      setUpgrading(false);
+    } catch {
+      setUpgrading(false);
+    }
+    // 升级不走轮询闭环：升级期间状态本来就是 ready，无从判定「升完没」。
+    // 派发 2 分钟后补一次单家探测刷新版本号 —— npm 类升级通常一两分钟内完，
+    // 没升完也只是版本号暂旧（与不补探测的旧况相同，不劣化）。
+    setTimeout(() => {
+      void runtimeRegistry
+        .getOrCreate(runtime.id)
+        .then((adapter) => adapter.probe())
+        .then((probe) => runtimeRegistry.setState(runtime.id, probe.state))
+        .catch(() => undefined);
+    }, 120_000);
   };
 
   return (
@@ -910,8 +1044,23 @@ function InstanceEditor({
             </div>
           </div>
 
-          {/* 设为默认按钮 */}
+          {/* 设为默认按钮 + 升级入口（有升级命令的执行器才显示） */}
           <div className="shrink-0 flex items-center gap-2">
+            {runtime.state.status === "ready" && upgradeCmd && (
+              <button
+                onClick={() => setShowUpgrade((v) => !v)}
+                title="查看并运行该执行器的升级命令"
+                className={cn(
+                  "flex items-center gap-1.5 rounded-btn border px-3 py-1.5 text-caption font-medium transition",
+                  showUpgrade
+                    ? "border-teal bg-teal-tint text-teal"
+                    : "border-line bg-canvas text-graphite hover:border-teal hover:text-ink hover:bg-line-soft",
+                )}
+              >
+                <ArrowUpCircle size={12} />
+                <span>升级</span>
+              </button>
+            )}
             {isDefault ? (
               <span className="flex items-center gap-1.5 rounded-btn bg-ink px-3 py-1.5 text-caption font-medium text-canvas">
                 <CheckCircle2 size={12} className="text-teal" />
@@ -942,6 +1091,48 @@ function InstanceEditor({
             可用模型：<span className="font-medium text-ink">{runtime.models.length}</span> 款
           </span>
         </div>
+
+        {/* 薄版升级条：官方升级命令 + 终端执行，跑完 2 分钟后自动补一次探测刷新版本号 */}
+        {showUpgrade && upgradeCmd && (
+          <div className="mt-3 space-y-2 rounded-card border border-line/70 bg-canvas p-3">
+            <div className="text-caption text-ash">
+              <span className="font-sans font-medium">升级命令</span>
+              {runtime.state.status === "ready" && runtime.state.version && (
+                <span>（当前 {formatShortVersion(runtime.state.version) ?? runtime.state.version}）</span>
+              )}
+              <span className="font-sans">：</span>
+            </div>
+            <div className="flex items-center justify-between gap-2 rounded bg-card px-3 py-2 border border-line/60 font-mono text-caption text-ink">
+              <span className="select-all overflow-x-auto whitespace-nowrap">{upgradeCmd}</span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={() => {
+                    void navigator.clipboard.writeText(upgradeCmd);
+                    setCopiedUpgrade(true);
+                    setTimeout(() => setCopiedUpgrade(false), 2000);
+                  }}
+                  title="复制升级命令"
+                  className="flex items-center gap-1 rounded px-2 py-1 text-[11px] font-sans font-medium border border-line bg-canvas hover:border-teal hover:text-teal transition"
+                >
+                  {copiedUpgrade ? <Check size={11} className="text-teal" /> : <Copy size={11} />}
+                  <span>{copiedUpgrade ? "已复制" : "复制"}</span>
+                </button>
+                <button
+                  onClick={() => void handleUpgradeInTerminal()}
+                  disabled={upgrading}
+                  title="新建终端标签并自动执行升级命令"
+                  className="flex items-center gap-1 rounded bg-teal px-2.5 py-1 text-[11px] font-sans font-medium text-white hover:bg-teal-hover transition shadow-xs disabled:opacity-60"
+                >
+                  {upgrading ? <Loader2 size={11} className="animate-spin" /> : <Terminal size={11} />}
+                  <span>{upgrading ? "已派发…" : "在终端运行升级"}</span>
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] text-ash">
+              派发后 2 分钟会自动补一次探测刷新版本号；没刷出来就点顶部「探测执行器」。
+            </p>
+          </div>
+        )}
       </section>
 
       {/* 未安装 / 异常引导卡片：一键在终端安装与复制命令 */}
