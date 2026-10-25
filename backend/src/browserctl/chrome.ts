@@ -11,7 +11,7 @@
  *   占住 profile 锁）。
  */
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:net";
@@ -28,18 +28,31 @@ export interface ChromiumCandidate {
   readonly kind: "chrome" | "edge";
 }
 
+/** 存在且可执行：unix 用 X_OK（existsSync 过不掉 stale 非可执行文件/目录占位） */
+function isExecutableFile(p: string): boolean {
+  try {
+    accessSync(p, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 系统浏览器发现：Chrome 优先，Edge 兜底（Chromium 系都能 CDP，三平台各自的常见落点） */
 export function findChromium(preferred: "chrome" | "msedge"): ChromiumCandidate | null {
   const prefer: readonly ("chrome" | "edge")[] = preferred === "chrome" ? ["chrome", "edge"] : ["edge", "chrome"];
   const pools = chromiumCandidates();
   for (const kind of prefer) {
-    for (const p of pools[kind]) if (existsSync(p)) return { executable: p, kind };
+    for (const p of pools[kind]) if (isExecutableFile(p)) return { executable: p, kind };
   }
   return null;
 }
 
-/** 各平台的 Chrome / Edge 可执行文件候选，按优先级排列 */
-function chromiumCandidates(): Record<"chrome" | "edge", string[]> {
+/** 各平台的 Chrome / Edge 可执行文件候选，按优先级排列。
+ *  刻意不登记 snap chromium 与 Ubuntu 的 chromium-browser 过渡 shim：
+ *  snap 沙箱禁止写 $HOME 下的隐藏目录（--user-data-dir 指向 ~/.agent-workbench
+ *  必然失败），宁可诚实报「未找到」也不要 8 秒超时后给一个误导性错误。 */
+export function chromiumCandidates(): Record<"chrome" | "edge", string[]> {
   if (process.platform === "win32") {
     const pf = process.env["ProgramFiles"] ?? "C:\\Program Files";
     const pf86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
@@ -71,16 +84,13 @@ function chromiumCandidates(): Record<"chrome" | "edge", string[]> {
       ],
     };
   }
-  // Linux：发行版包名各异（google-chrome / chromium / chromium-browser），
-  // 另有 deb 直装与 snap 落点，全登记
+  // Linux：发行版包名各异（google-chrome / chromium），另有 deb 直装落点
   return {
     chrome: [
       "/usr/bin/google-chrome",
       "/usr/bin/google-chrome-stable",
       "/usr/bin/chromium",
-      "/usr/bin/chromium-browser",
       "/opt/google/chrome/chrome",
-      "/snap/bin/chromium",
     ],
     edge: ["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable", "/opt/microsoft/edge/microsoft-edge"],
   };

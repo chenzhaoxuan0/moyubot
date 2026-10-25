@@ -166,6 +166,16 @@ async function main(): Promise<void> {
     const resp = await nextMessage(ws, (f) => f["id"] === "smoke-1");
     check("method call round-trips", resp["ok"] === true && (resp["result"] as Record<string, unknown> | undefined)?.["ok"] === true, resp);
 
+    // 3b. 编辑器清单回环 —— 三平台矩阵各跑各的平台分支（win32 探测链 / darwin / linux command -v），
+    //     断言契约而非环境：文件管理器恒在且排最前，id 只认已知值
+    send(ws, { v: 1, id: "smoke-editors", method: "workspace.listEditors", params: null });
+    const editorsResp = await nextMessage(ws, (f) => f["id"] === "smoke-editors");
+    const editors =
+      ((editorsResp["result"] as { editors?: { id: string; name: string }[] } | undefined)?.["editors"]) ?? [];
+    check("workspace.listEditors round-trips", editorsResp["ok"] === true && Array.isArray(editors) && editors.length >= 1, editorsResp);
+    check("文件管理器恒在且排最前", editors[0]?.["id"] === "explorer" && typeof editors[0]?.["name"] === "string", editors);
+    check("只登记已知编辑器 id", editors.every((e) => e["id"] === "explorer" || e["id"] === "vscode"), editors);
+
     // 4. 错误帧：未知方法 / 坏 envelope / 非 JSON
     send(ws, { v: 1, id: "smoke-2", method: "does_not_exist" });
     const unknown = await nextMessage(ws, (f) => f["id"] === "smoke-2");

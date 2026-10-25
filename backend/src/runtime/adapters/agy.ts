@@ -16,7 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,23 +42,28 @@ import { execLines, resolveCommand, spawnLines } from "../exec.ts";
 import { log } from "../../log.ts";
 
 /**
- * sidecar 的 Python 解释器：Windows 用 python；unix 优先 python3
- * （macOS / 多数 Linux 发行版没有裸 python 命令）。探测一次即缓存。
+ * SDK sidecar 的 Python 解释器候选（按优先级）：
+ * - unix：python3 优先（macOS / 多数发行版无裸 python），python 兜底；
+ * - win32：python 优先，`py -3` 兜底（Windows 商店别名 stub 会让裸 python「存在但假」）。
+ * 刻意不做 which/command -v 预筛：存在 ≠ 能跑，直接让 import 探测（probeSdk）说话，
+ * 首个 import 成功的候选胜出并缓存 —— 模块装在哪个解释器里就用哪个。
  */
-let cachedPythonBin: string | null = null;
-function pythonBin(): string {
-  if (cachedPythonBin === null) {
-    cachedPythonBin = "python";
-    if (process.platform !== "win32") {
-      try {
-        execFileSync("which", ["python3"], { stdio: "ignore", timeout: 1000 });
-        cachedPythonBin = "python3";
-      } catch {
-        // 裸 python 兜底（python-is-python3 / conda 装法）
-      }
-    }
-  }
-  return cachedPythonBin;
+export interface PythonCommand {
+  readonly file: string;
+  readonly baseArgs: readonly string[];
+}
+
+function sdkPythonCandidates(): PythonCommand[] {
+  return process.platform === "win32"
+    ? [{ file: "python", baseArgs: [] }, { file: "py", baseArgs: ["-3"] }]
+    : [{ file: "python3", baseArgs: [] }, { file: "python", baseArgs: [] }];
+}
+
+/** probe 成功后缓存的胜者。只缓存「import 真跑通」的正结果，失败不缓存（下次 probe 重试）。 */
+let cachedSdkPython: PythonCommand | undefined;
+
+export function cachedPythonCommand(): PythonCommand | undefined {
+  return cachedSdkPython;
 }
 
 interface AgyStepUpdate {
@@ -485,14 +490,18 @@ export class AgyAdapter implements ExecutorAdapter {
   /** python + google-antigravity 可用性（probe 时探一次，缓存） */
   private sdkAvailable = false;
 
-  /** probe 阶段探测：python -c 'import google.antigravity' 成功即启用 SDK 传输 */
+  /** probe 阶段探测：候选解释器按序跑 `import google.antigravity`，首个成功的胜出并缓存 */
   private async probeSdk(): Promise<boolean> {
-    try {
-      await execLines({ file: pythonBin(), prefixArgs: [], via: 'exe' }, ['-c', 'import google.antigravity'], 10000);
-      return true; // 报错（未装/无 python）会 throw
-    } catch {
-      return false;
+    for (const cand of sdkPythonCandidates()) {
+      try {
+        await execLines({ file: cand.file, prefixArgs: cand.baseArgs, via: 'exe' }, ['-c', 'import google.antigravity'], 10000);
+        cachedSdkPython = cand;
+        return true; // 报错（未装/解释器跑不起来）会 throw → 试下一个候选
+      } catch {
+        continue;
+      }
     }
+    return false;
   }
 
   markSdkAvailable(v: boolean): void {
@@ -501,8 +510,10 @@ export class AgyAdapter implements ExecutorAdapter {
 
   private ensureSdkChild(state: SessionState): ChildProcess {
     if (state.sdkChild !== null && state.sdkChild.exitCode === null) return state.sdkChild;
+    const py = cachedSdkPython;
+    if (py === undefined) throw new Error('antigravity sidecar 解释器未就绪（probe 未通过就起了 SDK 传输？）');
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const child = spawn(pythonBin(), ['-u', path.join(here, 'agy-antigravity-sidecar.py')], {
+    const child = spawn(py.file, [...py.baseArgs, '-u', path.join(here, 'agy-antigravity-sidecar.py')], {
       cwd: state.rootPath,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,

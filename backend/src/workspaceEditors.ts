@@ -47,8 +47,8 @@ interface EditorDef {
   winCommandAppNames: string[];
   /** macOS `open -a` 应用名（.app 前缀） */
   macApp: string;
-  /** macOS CLI 命令名（PATH 里有就用，省一次 open -a 的应用名解析） */
-  macCommand: string | null;
+  /** unix（macOS / Linux）CLI 命令名：PATH 里有就直接起（macOS 还能省一次 open -a 的应用名解析） */
+  unixCommand: string | null;
 }
 
 /** LocalAppData\Programs —— VS Code 的默认安装位置 */
@@ -81,7 +81,7 @@ const EDITOR_DEFS: EditorDef[] = [
     winCommand: "code",
     winCommandAppNames: ["Code.exe"],
     macApp: "Visual Studio Code",
-    macCommand: "code",
+    unixCommand: "code",
   },
 ];
 
@@ -103,10 +103,11 @@ function resolveWindowsCommandPaths(command: string): string[] {
   }
 }
 
-/** unix 上命令是否在 PATH（Linux 列编辑器用；1s 超时防 PATH 里挂了慢速网络目录） */
+/** unix 上命令是否在 PATH（Linux 列编辑器用）。走 POSIX shell 内建 command -v：
+ *  不依赖外部 which 二进制（NixOS / 精简容器可能没装）；1s 超时防慢速网络目录挂 PATH。 */
 function unixCommandExists(command: string): boolean {
   try {
-    execFileSync("which", [command], { stdio: "ignore", timeout: 1000 });
+    execFileSync("/bin/sh", ["-c", `command -v ${command}`], { stdio: "ignore", timeout: 1000 });
     return true;
   } catch {
     return false;
@@ -190,7 +191,7 @@ export function listInstalledEditors(): { editors: WorkspaceEditorInfo[] } {
         ? Object.keys(resolveEditorLaunchTarget(def)).length > 0
         : process.platform === "darwin"
           ? true // macOS 不做 .app existsSync 白名单探测，交给 open -a 报错兜底
-          : def.macCommand !== null && unixCommandExists(def.macCommand);
+          : def.unixCommand !== null && unixCommandExists(def.unixCommand);
     if (installed) editors.push({ id: def.id, name: def.name });
   }
   cachedEditors = editors;
@@ -221,7 +222,7 @@ export function openInEditorApp(editorId: string, rawTargetPath: string): OpenIn
   }
 
   if (process.platform === "darwin") {
-    if (def.macCommand && launchDetached(def.macCommand, [targetPath], `openWith ${def.id} cli`, targetPath)) {
+    if (def.unixCommand && launchDetached(def.unixCommand, [targetPath], `openWith ${def.id} cli`, targetPath)) {
       return { ok: true, path: targetPath };
     }
     if (launchDetached("open", ["-a", def.macApp, targetPath], `openWith ${def.id}`, targetPath)) {
@@ -231,7 +232,7 @@ export function openInEditorApp(editorId: string, rawTargetPath: string): OpenIn
   }
 
   // Linux：只有 CLI 在 PATH 才有机会（code 官方脚本装法），否则如实失败
-  if (def.macCommand && launchDetached(def.macCommand, [targetPath], `openWith ${def.id} cli`, targetPath)) {
+  if (def.unixCommand && launchDetached(def.unixCommand, [targetPath], `openWith ${def.id} cli`, targetPath)) {
     return { ok: true, path: targetPath };
   }
   return { ok: false, path: targetPath, error: `Linux 上未找到 ${def.name} 命令行入口` };

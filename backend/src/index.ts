@@ -162,7 +162,9 @@ async function attemptFreePort(port: number): Promise<boolean> {
       }
       return freed;
     } else {
-      const out = execSync(`lsof -ti :${port}`, { encoding: "utf8" });
+      // -sTCP:LISTEN：只回收监听进程。不带过滤时 lsof 会把连到该端口的客户端
+      // 连接（浏览器标签页 / WS 客户端）一并 SIGKILL，与 win32 分支口径对齐。
+      const out = execSync(`lsof -ti :${port} -sTCP:LISTEN`, { encoding: "utf8" });
       const pids = out.trim().split(/\s+/).filter(Boolean);
       let freed = false;
       for (const pid of pids) {

@@ -8,7 +8,15 @@
 # - typecheck / build：纯本地
 # - prototype check：models + sidepane 两个纯函数契约自检，不依赖 daemon / 网络
 # - backend smoke：smoke-health 自起 daemon（随机端口 + 临时 AGENT_WORKBENCH_HOME），
-#   不依赖任何外部 CLI 或密钥
+#   含 workspace.listEditors 回环（三平台各跑各的平台分支），不依赖外部 CLI / 密钥
+# - smoke:chrome：浏览器发现 / SDK 解释器候选表的平台契约（不起 daemon、不装浏览器）
+# - LF guard：.sh 行尾纪律回归（.gitattributes 之外的运行时证据）
+#
+# 供应链与成本纪律：
+# - actions 钉到不可变 commit SHA（tag 可被重指）；
+# - pnpm 版本锚在根 package.json 的 packageManager（major 会动 lockfile 格式，不能浮动）；
+# - permissions 最小只读 + concurrency 自动取消旧跑（三个 job 各装一棵依赖树，别堆积）；
+# - 统一 bash shell：Windows 默认 pwsh 只认最后一条命令的退出码，会吞掉前置安装失败。
 name: cross-platform
 
 on:
@@ -16,6 +24,17 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-platform-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   verify:
@@ -27,15 +46,19 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        # 版本来自根 package.json 的 packageManager 字段
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            prototype/pnpm-lock.yaml
+            backend/pnpm-lock.yaml
 
       - name: Install deps (root / prototype / backend)
         run: |
@@ -59,3 +82,13 @@ jobs:
 
       - name: Backend daemon smoke
         run: pnpm -C backend smoke
+
+      - name: Backend cross-platform discovery smoke
+        run: pnpm -C backend smoke:chrome
+
+      - name: Shell scripts LF + syntax guard
+        run: |
+          ! grep -q $'\r' launch-all.sh launch-electron.sh
+          sh -n launch-all.sh
+          sh -n launch-electron.sh
+          ! git ls-files --eol -- '*.sh' | grep 'eol=crlf'

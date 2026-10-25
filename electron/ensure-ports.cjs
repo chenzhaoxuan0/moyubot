@@ -54,7 +54,10 @@ async function freePort(port) {
     }
   } else {
     try {
-      const out = execSync(`lsof -ti :${port}`, { encoding: "utf8" });
+      // -sTCP:LISTEN 与 win32 分支的 LISTENING 过滤同款口径：不带它 lsof 会把
+      // 「连着这个端口的客户端连接」（浏览器标签页 / Electron 的 WS）也算进来，
+      // 双击启动时等于把正在跑的整套栈连同用户浏览器一起 SIGKILL。
+      const out = execSync(`lsof -ti :${port} -sTCP:LISTEN`, { encoding: "utf8" });
       for (const pid of out.trim().split(/\s+/).filter(Boolean)) {
         killPid(pid);
       }

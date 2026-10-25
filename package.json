@@ -4,6 +4,7 @@
   "type": "module",
   "description": "本地个人统一工作台 —— 一条命令起全栈（前端 5280 + daemon 5281）",
   "main": "electron/main.cjs",
+  "packageManager": "pnpm@11.13.1",
   "scripts": {
     "dev": "node electron/ensure-ports.cjs 5281 5280 && concurrently -k -n web,daemon -c cyan,magenta \"pnpm -C prototype dev\" \"pnpm -C backend dev\"",
     "dev:desktop": "node electron/ensure-ports.cjs 5281 5280 && concurrently -k -n web,daemon,desktop -c cyan,magenta,green \"pnpm -C prototype dev\" \"pnpm -C backend dev\" \"node electron/wait-and-launch.cjs\"",
