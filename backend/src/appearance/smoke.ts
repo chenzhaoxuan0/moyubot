@@ -7,6 +7,7 @@
  *   3. expectedHash 乐观锁：agent 改过文件后，前端的旧写入必须被拒
  *   4. 非法 JSON 不许写进用户唯一的外观文件
  *   5. 壁纸落盘 + data URL 回读；路径越界要被挡住
+ *   6. 自定义 logo 同一套（额外放行 .svg）
  *
  * 跑法：pnpm exec tsx src/appearance/smoke.ts
  */
@@ -21,6 +22,8 @@ import {
   saveWallpaper,
   readWallpaperDataUrl,
   resolveWallpaper,
+  saveLogo,
+  readLogoDataUrl,
   AppearanceConflictError,
 } from "./store.ts";
 
@@ -144,6 +147,18 @@ try {
   // 家目录本身被当成壁纸路径时，不该把整个目录当文件读
   await mkdir(path.join(home, "wallpapers"), { recursive: true });
   check("家目录本身不是壁纸", resolveWallpaper(home, ".") === null || typeof resolveWallpaper(home, ".") === "string");
+
+  // 6. logo：落盘 + data URL 回读 + svg 放行 + 越界防护 + readAppearance 解析 logo.path
+  const savedLogo = await saveLogo(home, "我的标.svg", png);
+  check("logo 落到 logos/（文件名被消毒）", savedLogo.relPath === "logos/___.svg", savedLogo.relPath);
+  const logoUrl = await readLogoDataUrl(home, savedLogo.relPath);
+  check("logo 能读回 data URL（svg 按 image/svg+xml 包）", logoUrl === `data:image/svg+xml;base64,${png.toString("base64")}`);
+  const logoDoc = JSON.stringify({ ...doc, logo: { mode: "custom", path: savedLogo.relPath } }, null, 2);
+  await writeAppearance(home, logoDoc);
+  const logoRead = await readAppearance(home);
+  check("readAppearance 解析 logo.path", logoRead.logoRel === savedLogo.relPath && logoRead.logoPath === path.join(home, "logos", "___.svg"));
+  check("logo 越界被挡", resolveWallpaper(home, "../secrets.png") === null);
+  check("指向缺失文件的 logo 读不到字节", (await readLogoDataUrl(home, "logos/nope.png")) === null);
 } finally {
   await rm(home, { recursive: true, force: true });
 }

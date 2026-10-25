@@ -11,6 +11,7 @@ import {
   type AppearanceProfile,
   type AppearanceState,
   type ArtSettings,
+  type LogoSettings,
   type PaletteKey,
   type ResolvedAppearance,
   type WallpaperSettings,
@@ -21,6 +22,7 @@ import {
   loadAppearance,
   writeAppearance,
   saveWallpaperFile,
+  saveLogoFile,
   type AppearanceLoadSource,
 } from "../core/appearanceStore.ts";
 
@@ -80,6 +82,51 @@ function wallpaperCssUrl(source: string | null): string | null {
   return wallpaperBlobUrl;
 }
 
+/* --------------------------------------------------------------------------- 自定义 logo */
+
+/** 上次写进 favicon 的来源键（brand:light/dark 或 custom:<path>），变化才重算 —— applyToDom 高频触发 */
+let lastFaviconKey = "";
+/** 当前桌面端（Electron）是否已处于「自定义 logo」覆盖态，变化才重发图标 */
+let brandIconIsCustom = false;
+
+function loadImageElement(source: string): Promise<HTMLImageElement> {
+  return new Promise((resolveImage, reject) => {
+    const img = new Image();
+    img.onload = () => resolveImage(img);
+    img.onerror = () => reject(new Error("logo decode failed"));
+    img.src = source;
+  });
+}
+
+/** 本地 File → data URL（导入自定义 logo 时即时拿图，不等 daemon 回读）。 */
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("logo read failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * 把任意图 cover-crop 成正方形 PNG data URL。
+ * favicon / Electron 窗口 / 托盘三个消费位都要小方图（位图），用户的图什么比例都有 ——
+ * 居中裁方统一在这里做。SVG 无内在尺寸时按 1024 用户坐标系处理（与品牌标同规格）。
+ */
+async function squarePngDataUrl(source: string, size: number): Promise<string> {
+  const img = await loadImageElement(source);
+  const w = img.naturalWidth || 1024;
+  const h = img.naturalHeight || 1024;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("canvas 2d unavailable");
+  const edge = Math.min(w, h);
+  ctx.drawImage(img, (w - edge) / 2, (h - edge) / 2, edge, edge, 0, 0, size, size);
+  return canvas.toDataURL("image/png");
+}
+
 function applyToDom(state: AppearanceState): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
@@ -99,6 +146,61 @@ function applyToDom(state: AppearanceState): void {
 
   root.classList.toggle("dark", resolved === "dark");
   root.setAttribute("data-theme", resolved);
+
+  const electronBridge = (
+    window as unknown as {
+      electronAPI?: {
+        notifyTheme?: (resolved: ResolvedAppearance) => void;
+        setBrandIcon?: (payload: { window: string; tray: string } | null) => void;
+      };
+    }
+  ).electronAPI;
+
+  /*
+   * 品牌图标（favicon / Electron 窗口 / 托盘）跟随同一真相源：
+   * 自定义 logo 优先，其次亮白底 / 暗黑底双版品牌标。
+   * 首屏 index.html 的脚本只是近似，这里才是权威修正。
+   * favicon 与桌面图标都只在「来源变化」时重算 —— applyToDom 在拖滑杆时高频触发，
+   * 每次都重画 canvas / 重发 IPC 就太浪费了。
+   */
+  const logoActive = state.logo.mode === "custom" && Boolean(state.logo.source);
+  const faviconKey = logoActive ? `custom:${state.logo.path}` : `brand:${resolved}`;
+  if (faviconKey !== lastFaviconKey) {
+    lastFaviconKey = faviconKey;
+    const favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (favicon) {
+      if (logoActive && state.logo.source) {
+        // 异步裁图回来时来源可能又变了（比如立刻切回品牌标）——过期结果直接丢弃
+        void squarePngDataUrl(state.logo.source, 64)
+          .then((href) => {
+            if (lastFaviconKey === faviconKey) favicon.href = href;
+          })
+          .catch(() => {});
+      } else {
+        favicon.href = resolved === "dark" ? "/moyu-logo-dark.svg" : "/moyu-logo-light.svg";
+      }
+    }
+  }
+  if (logoActive !== brandIconIsCustom) {
+    const wantCustom = logoActive;
+    brandIconIsCustom = wantCustom;
+    if (wantCustom && state.logo.source) {
+      const source = state.logo.source;
+      // 同上：生成期间用户可能已切回品牌标，过期的一组图标不许再推给主进程
+      void Promise.all([squarePngDataUrl(source, 256), squarePngDataUrl(source, 32)])
+        .then(([windowIcon, trayIcon]) => {
+          if (brandIconIsCustom === wantCustom) {
+            electronBridge?.setBrandIcon?.({ window: windowIcon, tray: trayIcon });
+          }
+        })
+        .catch(() => {
+          if (brandIconIsCustom === wantCustom) electronBridge?.setBrandIcon?.(null);
+        });
+    } else {
+      electronBridge?.setBrandIcon?.(null);
+    }
+  }
+  electronBridge?.notifyTheme?.(resolved);
 
   // 壁纸：没有图或未启用时移除 data 属性，让 CSS 的默认分支接管
   const hasWallpaper = state.wallpaper.enabled && Boolean(state.wallpaper.source);
@@ -166,6 +268,10 @@ export interface AppearanceStore extends AppearanceState {
   reload: () => Promise<void>;
   /** 导入壁纸：落盘到 wallpapers/ 并把路径写回状态 */
   importWallpaper: (file: File) => Promise<void>;
+  /** 导入自定义 logo：落盘到 logos/ 并立即启用 */
+  importLogo: (file: File) => Promise<void>;
+  setLogo: <K extends keyof LogoSettings>(key: K, value: LogoSettings[K]) => void;
+  resetLogo: () => void;
 
   setMode: (mode: AppearanceMode) => void;
   /** bot 头像框形态（全局设置，不分亮暗档案） */
@@ -261,6 +367,27 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
       set({ lastError: error instanceof Error ? error.message : String(error) });
       throw error;
     }
+  },
+
+  importLogo: async (file) => {
+    try {
+      const relPath = await saveLogoFile(file);
+      // source 直接用本地 File 转 data URL —— 刚落盘的文件 appearance.json 还没记，
+      // 此时去 probe 读回来的只会是旧 logo；不等 4 秒轮询，导入当场生效
+      const source = await fileToDataUrl(file);
+      set(publish({ ...get(), logo: { mode: "custom", path: relPath, source } }));
+    } catch (error) {
+      set({ lastError: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+  },
+
+  setLogo: (key, value) => {
+    set(publish({ ...get(), logo: { ...get().logo, [key]: value } }));
+  },
+
+  resetLogo: () => {
+    set(publish({ ...get(), logo: { mode: "brand", path: null, source: null } }));
   },
 
   setMode: (mode) => {

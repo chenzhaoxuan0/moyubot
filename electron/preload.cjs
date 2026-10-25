@@ -5,6 +5,19 @@ contextBridge.exposeInMainWorld("electronAPI", {
   platform: process.platform,
   arch: process.arch,
   /**
+   * 推送应用的主题结论（appearance mode 解析出的 light/dark）到主进程：
+   * 主进程据此切换窗口图标与托盘图标（亮主题白底 logo / 暗主题黑底 logo，
+   * 见 main.cjs 的 applyBrandIcons）。纯浏览器访问时 electronAPI 不存在，
+   * useAppearance.applyToDom 里的调用自然落空，不影响主题本身。
+   */
+  notifyTheme: (resolved) => ipcRenderer.send("app:theme-changed", resolved),
+  /**
+   * 推送自定义品牌图标（用户在外观设置里换的自定义 logo）：
+   * payload 是渲染层 canvas 居中裁方后的 PNG data URL —— window 256px / tray 32px 两档。
+   * 传 null 恢复内置品牌图标（亮白底/暗黑底双版，随主题切换）。
+   */
+  setBrandIcon: (payload) => ipcRenderer.send("app:brand-icon", payload ?? null),
+  /**
    * 原生目录选择对话框：系统文件资源管理器的「选择文件夹」窗口。
    * resolve 选中的绝对路径；取消 / 不可用 resolve null。
    */

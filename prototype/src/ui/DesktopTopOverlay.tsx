@@ -1,5 +1,6 @@
 import { PanelLeftOpen } from "lucide-react";
 import { useShell } from "../store/useShell.ts";
+import { BrandLogo } from "./BrandLogo.tsx";
 
 /**
  * 左上浮层 —— 仅在侧边栏折叠时常驻左上角，提供侧栏展开入口。
@@ -27,9 +28,7 @@ export function DesktopTopOverlay() {
           title="展开侧栏 · ⌘B"
           className="group relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-btn text-body-sm text-graphite hover:bg-line-soft hover:text-ink"
         >
-          <img
-            src="/icon.png"
-            alt="A"
+          <BrandLogo
             className="h-5 w-5 rounded-sm object-cover transition-opacity duration-150 group-hover:opacity-0"
           />
           <PanelLeftOpen

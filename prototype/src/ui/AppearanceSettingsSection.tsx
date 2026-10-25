@@ -19,8 +19,10 @@ import {
   Laptop,
   PanelBottom,
   Bot,
+  Sticker,
 } from "lucide-react";
 import { useAppearance } from "../store/useAppearance.ts";
+import { BrandLogo } from "./BrandLogo.tsx";
 import { Toggle } from "./Toggle.tsx";
 import { useLayoutStore } from "./mobile/useIsMobile.ts";
 import { useShell as useShellState } from "../store/useShell.ts";
@@ -243,6 +245,8 @@ export function AppearanceSettingsSection() {
   const store = useAppearance();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+  const logoFileRef = useRef<HTMLInputElement | null>(null);
+  const [logoError, setLogoError] = useState<string | null>(null);
 
   const layoutPref = useLayoutStore((s) => s.preference);
   const setLayoutPref = useLayoutStore((s) => s.setPreference);
@@ -255,7 +259,7 @@ export function AppearanceSettingsSection() {
   const chatColumnWidth = useShellState((s) => s.chatColumnWidth);
   const setChatColumnWidth = useShellState((s) => s.setChatColumnWidth);
 
-  const { mode, resolvedAppearance, activeProfile, art, wallpaper, presetId } = store;
+  const { mode, resolvedAppearance, activeProfile, art, wallpaper, logo, presetId } = store;
   const followsTheme = activeProfile.transparency === null;
   // 跟随默认的显示值按有无壁纸分档：无壁纸 0%（不透明），有壁纸 30%（否则壁纸被盖住）
   const wallpaperOn = store.wallpaper.enabled && Boolean(store.wallpaper.source);
@@ -284,6 +288,25 @@ export function AppearanceSettingsSection() {
 
   const textContrast = contrastRatio(activeProfile.palette.text, activeProfile.palette.background);
   const mutedContrast = contrastRatio(activeProfile.palette.muted, activeProfile.palette.background);
+
+  /**
+   * 自选 logo 导入：与壁纸同一套链路 —— daemon 落盘到 <homeDir>/logos/，
+   * appearance.json 只记路径。导入成功当场启用（本地 File 直接转 data URL 上屏）。
+   */
+  const handleLogoFile = async (file: File) => {
+    setLogoError(null);
+    if (!file.type.startsWith("image/")) {
+      setLogoError("请选择图片文件");
+      return;
+    }
+    try {
+      await store.importLogo(file);
+    } catch (error) {
+      setLogoError(
+        error instanceof Error ? `保存失败：${error.message}` : "保存失败，请确认后台 daemon 在运行",
+      );
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -741,6 +764,88 @@ export function AppearanceSettingsSection() {
         </div>
       </SectionCard>
 
+      {/* ---------------------------------------------------- 应用 Logo */}
+      <SectionCard
+        icon={<Sticker size={16} />}
+        title="应用 Logo"
+        desc="换成你自己的图 —— 侧栏、浏览器标签页、Electron 窗口与托盘图标全部跟着换。内置品牌标自带亮白底/暗黑底双版。"
+        action={
+          logo.mode === "custom" ? (
+            <button
+              type="button"
+              onClick={() => store.resetLogo()}
+              className="flex shrink-0 items-center gap-1.5 rounded-btn border border-line px-2.5 py-1 text-body-sm text-graphite hover:bg-surface-hover hover:text-ink"
+            >
+              <RotateCcw size={12} />
+              恢复品牌标
+            </button>
+          ) : undefined
+        }
+      >
+        <div className="space-y-4">
+          <input
+            ref={logoFileRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleLogoFile(file);
+              e.target.value = "";
+            }}
+          />
+          <div className="flex flex-wrap items-center gap-4">
+            {/* 预览：就是当前真实生效的图标（自定义图或随主题的品牌标） */}
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-card border border-line bg-canvas">
+              <BrandLogo className="h-11 w-11 rounded-btn object-cover" />
+            </div>
+            <div className="min-w-48 flex-1">
+              <SegmentedField<"brand" | "custom">
+                label="图标来源"
+                value={logo.mode}
+                onChange={(v) => {
+                  // 还没有自定义图就切「自定义」= 直接打开选图；选完导入会自动启用
+                  if (v === "custom" && !logo.source) {
+                    logoFileRef.current?.click();
+                    return;
+                  }
+                  store.setLogo("mode", v);
+                }}
+                options={[
+                  { value: "brand", label: "品牌标" },
+                  { value: "custom", label: "自定义" },
+                ]}
+              />
+            </div>
+          </div>
+          {logoError && <p className="text-caption text-loss">{logoError}</p>}
+          {logo.mode === "custom" && (
+            <div className="space-y-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => logoFileRef.current?.click()}
+                  title="选中的图由后台 daemon 落盘到工作目录的 logos/ 下，appearance.json 里只记一个路径。"
+                  className="flex items-center gap-1.5 rounded-btn border border-line px-3 py-1.5 text-body-sm text-ink hover:bg-surface-hover"
+                >
+                  <Upload size={13} />
+                  更换图片
+                </button>
+              </div>
+              {logo.path && (
+                <p className="rounded-btn border border-line/60 bg-line-soft/30 px-2.5 py-1.5 text-caption text-graphite">
+                  logo 文件：<span className="font-mono text-ink">{logo.path}</span>
+                </p>
+              )}
+            </div>
+          )}
+          <p className="text-caption text-graphite">
+            自定义图会居中裁方，同一张用在明暗两套主题；窗口 / 托盘图标在桌面端实时同步。
+            agent 也可以直接改 appearance.json 的 logo.path（图放 logos/ 目录）。
+          </p>
+        </div>
+      </SectionCard>
+
       {/* ---------------------------------------------------- 表面 */}
       <SectionCard
         icon={<Wand2 size={16} />}
@@ -973,7 +1078,7 @@ export function AppearanceSettingsSection() {
                 const path = store.filePath ?? "~/.agent-workbench/appearance.json";
                 wb.selectUnit(target.id);
                 wb.setDraft(
-                  `帮我调整工作台外观。外观的唯一真相是 ${path}：先读这个文件，各字段（mode、profiles.light|dark 的 palette / transparency / overlayTransparency / surface、art、wallpaper）的取值域见 prototype/src/core/appearance.ts。改完保存即可——应用每 4 秒核对一次文件，变了就自动换新外观，无需重启。我的要求：`,
+                  `帮我调整工作台外观。外观的唯一真相是 ${path}：先读这个文件，各字段（mode、profiles.light|dark 的 palette / transparency / overlayTransparency / surface、art、wallpaper、logo）的取值域见 prototype/src/core/appearance.ts。改完保存即可——应用每 4 秒核对一次文件，变了就自动换新外观，无需重启。我的要求：`,
                 );
                 useShellState.getState().closeSettings();
               }}

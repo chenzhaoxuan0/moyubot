@@ -32,6 +32,7 @@ import { useWorkbench, type ViewMode, type BotWriteGuards } from "../store/useWo
 import { useShell } from "../store/useShell.ts";
 import { useGit } from "../store/useGit.ts";
 import { useAppearance } from "../store/useAppearance.ts";
+import { BrandLogo } from "./BrandLogo.tsx";
 import type { AvatarFrame } from "../core/appearance.ts";
 import { describeRule, formatAbsolute, formatAbsoluteHuman, formatRelative, type Automation } from "../core/automation.ts";
 import { DaemonClient, defaultDaemonEndpoint, dispatchTerminal, fetchAutomations, fetchUnitHistory, renameHistoryEntry, type UnitHistoryEntry } from "../adapters/daemon/client.ts";
@@ -228,9 +229,7 @@ export function Sidebar() {
             title="收起侧栏 · ⌘B"
             className="group relative flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-btn text-body-sm text-graphite hover:bg-line-soft hover:text-ink"
           >
-            <img
-              src="/icon.png"
-              alt="A"
+            <BrandLogo
               className="h-5 w-5 rounded-sm object-cover transition-opacity duration-150 group-hover:opacity-0"
             />
             <PanelLeftClose

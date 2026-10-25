@@ -90,6 +90,9 @@ import {
   readWallpaperDataUrl,
   saveWallpaper,
   deleteWallpaper,
+  readLogoDataUrl,
+  saveLogo,
+  deleteLogo,
 } from "./appearance/store.ts";
 import { DailyDigest } from "./memory/dailyDigest.ts";
 import { stewardSearch, stewardRecent, ensureSteward, stewardRoot, stewardDefinition, STEWARD_ID } from "./memory/steward.ts";
@@ -2716,11 +2719,14 @@ registerMethod("bot.initWorkspace", async (params) => {
 // ---- 外观（appearance）—— <homeDir>/appearance.json，用户可让 agent 直接改这个文件 ----
 registerMethod("appearance.read", async () => {
   const meta = await readAppearance(config.homeDir);
-  // 壁纸单独带回来：图不进 JSON，否则那个文件会大到没法手改
-  const wallpaperDataUrl = meta.exists
-    ? await readWallpaperDataUrl(config.homeDir, meta.wallpaperRel)
-    : null;
-  return { ...meta, wallpaperDataUrl };
+  // 壁纸 / logo 单独带回来：图不进 JSON，否则那个文件会大到没法手改
+  const [wallpaperDataUrl, logoDataUrl] = meta.exists
+    ? await Promise.all([
+        readWallpaperDataUrl(config.homeDir, meta.wallpaperRel),
+        readLogoDataUrl(config.homeDir, meta.logoRel),
+      ])
+    : [null, null];
+  return { ...meta, wallpaperDataUrl, logoDataUrl };
 });
 registerMethod("appearance.write", async (params) => {
   const p = (params ?? {}) as { content?: string; expectedHash?: string | null };
@@ -2740,6 +2746,18 @@ registerMethod("appearance.wallpaper.save", async (params) => {
 registerMethod("appearance.wallpaper.delete", async (params) => {
   const p = (params ?? {}) as { path?: string };
   return { deleted: await deleteWallpaper(config.homeDir, p.path ?? null) };
+});
+// 自定义 logo 同一套口径：<homeDir>/logos/，appearance.json 里只记 logo.path
+registerMethod("appearance.logo.save", async (params) => {
+  const p = (params ?? {}) as { name?: string; base64?: string };
+  if (typeof p.name !== "string" || typeof p.base64 !== "string") {
+    throw Object.assign(new Error("name and base64 are required"), { code: "bad_params" });
+  }
+  return saveLogo(config.homeDir, p.name, Buffer.from(p.base64, "base64"));
+});
+registerMethod("appearance.logo.delete", async (params) => {
+  const p = (params ?? {}) as { path?: string };
+  return { deleted: await deleteLogo(config.homeDir, p.path ?? null) };
 });
 // ---- 出图供应商 profile —— <homeDir>/image-profiles.json，密钥永不下发浏览器 ----
 registerMethod("image.profiles.list", () => {

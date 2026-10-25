@@ -234,6 +234,25 @@ export interface AppearanceProfile {
 /** bot 头像框形态：圆角（按名字哈希的 blob 形状）或无圆角方形 */
 export type AvatarFrame = "rounded" | "square";
 
+/**
+ * 应用 Logo。品牌标是内置的双版 SVG（亮主题白底 / 暗主题黑底）；
+ * 自定义模式换成用户自己的图（单图全局，不分亮暗），落盘只存路径。
+ */
+export interface LogoSettings {
+  /** "brand" = 内置 MoyuBot 双版标；"custom" = 用户自选图 */
+  mode: "brand" | "custom";
+  /** **持久化值**：logo 文件路径（相对 daemon 家），写进 appearance.json，图不进 JSON */
+  path: string | null;
+  /** **运行时值**：daemon 把图读成的 data URL，只活在内存里，导出时剥掉 */
+  source: string | null;
+}
+
+export const DEFAULT_LOGO: LogoSettings = {
+  mode: "brand",
+  path: null,
+  source: null,
+};
+
 export interface AppearanceState {
   schemaVersion: 1;
   /** 外壳外观：auto=跟随系统，等价 DS 的 appearance */
@@ -242,7 +261,9 @@ export interface AppearanceState {
   profiles: Record<ResolvedAppearance, AppearanceProfile>;
   art: ArtSettings;
   wallpaper: WallpaperSettings;
-  /** bot 头像框形态（全局，不分亮暗） */
+  /** 自定义 Logo（全局，不分亮暗档案） */
+  logo: LogoSettings;
+  /** bot 头像框形态（全局，不分亮暗档案） */
   avatarFrame: AvatarFrame;
   /** 当前选中的预设 id，null = 用户已手工改过 */
   presetId: string | null;
@@ -400,6 +421,7 @@ export function defaultAppearanceState(): AppearanceState {
     },
     art: { ...DEFAULT_ART },
     wallpaper: { ...DEFAULT_WALLPAPER },
+    logo: { ...DEFAULT_LOGO },
     avatarFrame: "rounded",
     presetId: PRESET_PARCHMENT.id,
   };
@@ -686,6 +708,8 @@ export function sanitizeAppearanceState(raw: unknown): AppearanceState {
     input.art && typeof input.art === "object" ? input.art : {};
   const wallpaper: Partial<WallpaperSettings> =
     input.wallpaper && typeof input.wallpaper === "object" ? input.wallpaper : {};
+  const logo: Partial<LogoSettings> =
+    input.logo && typeof input.logo === "object" ? input.logo : {};
   const light = sanitizeProfile(input.profiles?.light, fallback.profiles.light);
   const dark = sanitizeProfile(input.profiles?.dark, fallback.profiles.dark);
 
@@ -708,6 +732,12 @@ export function sanitizeAppearanceState(raw: unknown): AppearanceState {
       zoom: clampNumber(wallpaper.zoom, 1, 2, 1),
       dim: clampNumber(wallpaper.dim, 0, 0.8, 0),
       taskIntensity: clampNumber(wallpaper.taskIntensity, 0, 1, 0.35),
+    },
+    // logo 同口径：只留 mode/path，source 由 daemon 回填
+    logo: {
+      mode: logo.mode === "custom" ? "custom" : "brand",
+      path: typeof logo.path === "string" && logo.path ? logo.path : null,
+      source: null,
     },
     avatarFrame: input.avatarFrame === "square" ? "square" : "rounded",
     presetId: typeof input.presetId === "string" ? input.presetId : null,

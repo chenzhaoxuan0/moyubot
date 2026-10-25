@@ -1,5 +1,64 @@
-const { app, BrowserWindow, dialog, shell, ipcMain, Menu, Tray } = require("electron");
+const { app, BrowserWindow, dialog, shell, ipcMain, Menu, nativeImage, nativeTheme, Tray } = require("electron");
 const path = require("path");
+
+/**
+ * 品牌图标 —— 亮主题用白底版，暗主题用黑底版（源文件 moyuwhite/moyublack.svg 栅格化）。
+ * 窗口图标 256px，托盘 32px（Windows 通知区域的实际显示尺寸，单独出图更锐）。
+ */
+const ICON_LIGHT = path.join(__dirname, "icon-light.png");
+const ICON_DARK = path.join(__dirname, "icon-dark.png");
+const TRAY_LIGHT = path.join(__dirname, "tray-light.png");
+const TRAY_DARK = path.join(__dirname, "tray-dark.png");
+
+/**
+ * 渲染层是否已上报过主题结论（app:theme-changed）。
+ * 上报前跟随系统明暗（nativeTheme）；上报后以应用内 appearance 设置为准 ——
+ * 用户在应用里钉死 light/dark 时，系统切换不该把图标带跑偏。
+ */
+let rendererThemeReported = false;
+
+/** 用户自定义 logo 的覆盖图标（app:brand-icon 推来的 PNG），null = 用内置双版 */
+let brandOverride = null;
+/** 最近一次应用过的明暗档 —— 图标覆盖与主题切换共用一条应用路径，各自只记自己的状态 */
+let lastDark = null;
+
+function applyBrandIcons(dark) {
+  lastDark = dark;
+  const windowIcon = brandOverride ? brandOverride.window : dark ? ICON_DARK : ICON_LIGHT;
+  const trayIcon = brandOverride ? brandOverride.tray : dark ? TRAY_DARK : TRAY_LIGHT;
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setIcon(windowIcon);
+  if (tray && !tray.isDestroyed()) tray.setImage(trayIcon);
+}
+
+ipcMain.on("app:theme-changed", (_event, resolved) => {
+  if (resolved !== "dark" && resolved !== "light") return;
+  rendererThemeReported = true;
+  applyBrandIcons(resolved === "dark");
+});
+
+// 自定义 logo：渲染层把图裁方转成 PNG data URL 推过来（256/32 两档），
+// 主进程用 nativeImage 还原。payload 不合法或解码为空 = 撤销覆盖、回内置双版。
+ipcMain.on("app:brand-icon", (_event, payload) => {
+  const usable =
+    payload &&
+    typeof payload === "object" &&
+    typeof payload.window === "string" &&
+    typeof payload.tray === "string";
+  if (usable) {
+    const windowImg = nativeImage.createFromDataURL(payload.window);
+    const trayImg = nativeImage.createFromDataURL(payload.tray);
+    brandOverride = !windowImg.isEmpty() && !trayImg.isEmpty() ? { window: windowImg, tray: trayImg } : null;
+  } else {
+    brandOverride = null;
+  }
+  applyBrandIcons(lastDark === null ? nativeTheme.shouldUseDarkColors : lastDark);
+});
+
+// auto 模式下渲染层会跟着系统变化重推结论；这里的 nativeTheme 兜底只服务
+// 渲染层还没起来（后端未就绪、加载重试中）的那段窗口期
+nativeTheme.on("updated", () => {
+  if (!rendererThemeReported) applyBrandIcons(nativeTheme.shouldUseDarkColors);
+});
 
 let mainWindow = null;
 let tray = null;
@@ -198,7 +257,8 @@ function showMainWindow() {
  * dev 模式下 daemon 由 concurrently 另起，生命周期独立于本进程）。
  */
 function createTray() {
-  tray = new Tray(path.join(__dirname, "icon.png"));
+  // 初始按系统明暗挑底色；渲染层起来后 app:theme-changed 会带着应用内结论来纠正
+  tray = new Tray(nativeTheme.shouldUseDarkColors ? TRAY_DARK : TRAY_LIGHT);
   tray.setToolTip("MoyuBot · 后台运行中");
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -223,7 +283,8 @@ function createWindow() {
     minWidth: 360,
     minHeight: 480,
     title: "MoyuBot",
-    icon: path.join(__dirname, "icon.png"),
+    // 初始按系统明暗；渲染层上报后 applyBrandIcons 会换（icon.png 仅作打包兜底，运行时不再引用）
+    icon: nativeTheme.shouldUseDarkColors ? ICON_DARK : ICON_LIGHT,
     backgroundColor: "#f7f7f4",
     show: true, // 立即显示窗口，防止 ready-to-show 被阻塞
     autoHideMenuBar: true,

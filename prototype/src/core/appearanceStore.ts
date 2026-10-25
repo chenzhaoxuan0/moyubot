@@ -39,6 +39,8 @@ export interface AppearanceFileSnapshot {
   readonly wallpaperPath: string | null;
   /** daemon 把壁纸读成 data URL 一起带回来（图不进 JSON） */
   readonly wallpaperDataUrl: string | null;
+  /** daemon 把自定义 logo 读成 data URL 一起带回来（图不进 JSON） */
+  readonly logoDataUrl: string | null;
 }
 
 export type AppearanceLoadSource = "file" | "fallback" | "defaults";
@@ -73,13 +75,17 @@ export function serializeAppearance(state: AppearanceState): string {
         schemaVersion: 1,
         generator: "agent-workbench",
         // 提示直接写在这里，agent 打开文件就知道这份 schema 是什么
-        note: "外观设置。改完保存，应用会自动读取。appearance/art/surface/wallpaper 的可选项见 prototype/src/core/appearance.ts",
+        note: "外观设置。改完保存，应用会自动读取。appearance/art/surface/wallpaper/logo 的可选项见 prototype/src/core/appearance.ts",
       },
       mode: state.mode,
       presetId: state.presetId,
       profiles: state.profiles,
       art: state.art,
       avatarFrame: state.avatarFrame,
+      logo: {
+        mode: state.logo.mode,
+        path: state.logo.path,
+      },
       wallpaper: {
         enabled: state.wallpaper.enabled,
         // 只写 path，不写 source：source 是 daemon 回的运行时 data URL，
@@ -95,18 +101,29 @@ export function serializeAppearance(state: AppearanceState): string {
   )}\n`;
 }
 
-/** 读回来时把 wallpaper.path（文件路径）与图（data URL）合成前端要的那个 source。 */
+/** 读回来时把 wallpaper.path / logo.path（文件路径）与图（data URL）合成前端要的那个 source。 */
 function deserializeAppearance(
   json: AppearanceState,
   wallpaperDataUrl: string | null,
+  logoDataUrl: string | null,
 ): AppearanceState {
+  let next = json;
   if (!wallpaperDataUrl) {
     // 文件里声明了壁纸但字节拿不到（路径越界/文件不在位）：关掉它，别留一个空壳开关
-    return json.wallpaper.source
-      ? { ...json, wallpaper: { ...json.wallpaper, enabled: false, source: null } }
-      : json;
+    next = next.wallpaper.source
+      ? { ...next, wallpaper: { ...next.wallpaper, enabled: false, source: null } }
+      : next;
+  } else {
+    next = { ...next, wallpaper: { ...next.wallpaper, source: wallpaperDataUrl } };
   }
-  return { ...json, wallpaper: { ...json.wallpaper, source: wallpaperDataUrl } };
+  if (json.logo.mode === "custom" && !logoDataUrl) {
+    // 自定义 logo 声明了但字节拿不到：回落品牌标（渲染端 source 为空本来也会回落），
+    // mode 一并翻回 brand，免得设置页显示「自定义」却啥也看不到
+    next = { ...next, logo: { mode: "brand", path: next.logo.path, source: null } };
+  } else if (logoDataUrl) {
+    next = { ...next, logo: { ...next.logo, source: logoDataUrl } };
+  }
+  return next;
 }
 
 /* --------------------------------------------------------------------------- 降级层 */
@@ -150,7 +167,11 @@ export async function loadAppearance(): Promise<AppearanceLoadResult> {
     const snapshot = await call<AppearanceFileSnapshot>("appearance.read");
     if (snapshot?.exists) {
       const parsed = JSON.parse(snapshot.content) as AppearanceState;
-      const state = deserializeAppearance(sanitizeAppearanceState(parsed), snapshot.wallpaperDataUrl);
+      const state = deserializeAppearance(
+        sanitizeAppearanceState(parsed),
+        snapshot.wallpaperDataUrl,
+        snapshot.logoDataUrl,
+      );
       // 文件里没有 wallpaper.path 但历史上走过兜底 —— 以文件为准，别把两处状态混起来
       return { state, source: "file", path: snapshot.path, hash: snapshot.hash };
     }
@@ -221,6 +242,20 @@ export async function saveWallpaperFile(file: File): Promise<string> {
     // 大图要给足超时，32MB 的 base64 走回环也要一会儿
     30_000,
   );
+  return result.relPath;
+}
+
+/**
+ * 存一张自定义 logo：先让 daemon 落盘到 <homeDir>/logos/，再把返回的相对路径写回 state。
+ * 与壁纸同一套口径 —— appearance.json 里只有一个路径字符串，图本身不进文件。
+ */
+export async function saveLogoFile(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const base64 = toBase64(buffer);
+  const result = await call<{ relPath: string }>("appearance.logo.save", {
+    name: file.name,
+    base64,
+  });
   return result.relPath;
 }
 

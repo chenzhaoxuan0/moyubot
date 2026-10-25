@@ -17,6 +17,11 @@
       "src": "/icon.png",
       "sizes": "512x512",
       "type": "image/png"
+    },
+    {
+      "src": "/moyu-logo-dark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
     }
   ]
 }

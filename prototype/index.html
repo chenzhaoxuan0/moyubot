@@ -8,7 +8,7 @@
     <meta name="theme-color" content="#12141a" />
     <meta name="color-scheme" content="dark light" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="icon" type="image/png" href="/icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/moyu-logo-light.svg" />
     <title>MoyuBot</title>
     <script>
       (function() {
@@ -22,6 +22,10 @@
             document.documentElement.classList.remove('dark');
             document.documentElement.setAttribute('data-theme', 'light');
           }
+          // favicon 与主题同源：亮白底 / 暗黑底。这里只是首屏近似（读旧键），
+          // appearance.json 加载完成后由 useAppearance.applyToDom 修正。
+          var fav = document.querySelector('link[rel="icon"]');
+          if (fav) fav.href = d ? '/moyu-logo-dark.svg' : '/moyu-logo-light.svg';
         } catch (e) {}
 
         window.addEventListener('error', function(event) {

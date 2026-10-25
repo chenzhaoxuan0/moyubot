@@ -270,10 +270,12 @@ export const METHOD_META: Record<string, MethodMeta> = {
   "image.tasks.list": { description: "出图任务历史（daemon 事实源）；文件经 GET /api/image/file?path= 取", paramsHint: "null" },
   "image.profiles.put": { description: "按 id 新增或更新出图 profile", paramsHint: "{id, ...profile 字段}" },
   "image.profiles.delete": { description: "按 id 删出图供应商 profile", paramsHint: "{id}" },
-  "appearance.read": { description: "读 appearance.json 及壁纸 dataURL", paramsHint: "null" },
+  "appearance.read": { description: "读 appearance.json 及壁纸/logo dataURL", paramsHint: "null" },
   "appearance.write": { description: "整体写 appearance.json，hash 乐观锁", paramsHint: "{content, expectedHash?}" },
   "appearance.wallpaper.save": { description: "落一张 base64 壁纸到 wallpapers 目录", paramsHint: "{name, base64}" },
   "appearance.wallpaper.delete": { description: "删 wallpapers 目录下的壁纸文件", paramsHint: "{path?}" },
+  "appearance.logo.save": { description: "落一张 base64 自定义 logo 到 logos 目录", paramsHint: "{name, base64}" },
+  "appearance.logo.delete": { description: "删 logos 目录下的 logo 文件", paramsHint: "{path?}" },
 
   // ---- 终端 / 工作区 / 网络 ---------------------------------------------------------
   "terminal.create": { description: "新建 PTY 终端会话，数据经 terminal 帧推送", paramsHint: "{cwd?, shell?, cols?, rows?}" },
