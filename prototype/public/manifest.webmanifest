@@ -19,9 +19,9 @@
       "type": "image/png"
     },
     {
-      "src": "/moyu-logo-dark.svg",
-      "sizes": "any",
-      "type": "image/svg+xml"
+      "src": "/moyu-logo-dark.png",
+      "sizes": "256x256",
+      "type": "image/png"
     }
   ]
 }
