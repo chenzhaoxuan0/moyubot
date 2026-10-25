@@ -2,8 +2,9 @@ const { app, BrowserWindow, dialog, shell, ipcMain, Menu, nativeImage, nativeThe
 const path = require("path");
 
 /**
- * 品牌图标 —— 亮主题用白底版，暗主题用黑底版（源文件 moyuwhite/moyublack.svg 栅格化）。
- * 窗口图标 256px，托盘 32px（Windows 通知区域的实际显示尺寸，单独出图更锐）。
+ * 品牌图标 —— 亮主题用白底版，暗主题用黑底版（设计导出的 PNG 原图逐级减半缩放，
+ * 不走 SVG 栅格化 —— SVG 小尺寸下图形外会出灰边）。窗口图标 256px，
+ * 托盘 32px（Windows 通知区域的实际显示尺寸，单独出图更锐）。
  */
 const ICON_LIGHT = path.join(__dirname, "icon-light.png");
 const ICON_DARK = path.join(__dirname, "icon-dark.png");
