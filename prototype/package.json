@@ -16,6 +16,7 @@
     "check:git-names": "node --experimental-strip-types scripts/check-git-names.ts"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.22",
     "@xterm/addon-canvas": "^0.7.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-unicode11": "^0.9.0",

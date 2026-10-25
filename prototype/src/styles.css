@@ -423,3 +423,28 @@ textarea {
   opacity: 0.45;
   cursor: pointer;
 }
+
+/* ==========================================================================
+   Chat Reasoning Shimmer — 思考过程微光流动动画 (对齐 DeepSeek / Cursor)
+   ========================================================================== */
+@keyframes text-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+
+.animate-text-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-ash) 0%,
+    var(--color-ink) 50%,
+    var(--color-ash) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: text-shimmer 2.2s ease-in-out infinite;
+}
