@@ -2,7 +2,7 @@
  * AI-native P6 验收（docs/21 §2 P6）：工作台技能同步。
  *
  *   自起 daemon → bot.put（createRoot 新建）→ .agents/skills/agent-workbench/SKILL.md
- *   随 initWorkspace 自动播种（版本标记 v2）→ skills.inventory 可见（项目级源）→
+ *   随 initWorkspace 自动播种（版本标记 vN）→ skills.inventory 可见（项目级源）→
  *   workbench.skill.sync 幂等（current，两个官方技能一并返回）→ 无标记的用户自建
  *   同名不被碰（skipped-foreign）→ 旧版本标记 → 升级（updated）→ force 重装 →
  *   无参调用对全部 bot 兜底 → 仓库根自用副本与 daemon 正本零漂移。
@@ -17,7 +17,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { workbenchSkillMd } from "../src/skills/workbenchSkill.ts";
+import { workbenchSkillMd, WORKBENCH_SKILL_VERSION } from "../src/skills/workbenchSkill.ts";
 import { contextSkillMd } from "../src/skills/contextSkill.ts";
 
 const backendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -142,7 +142,7 @@ async function main(): Promise<void> {
     check("skill seeded at bot init", seeded, { skillFile });
     if (seeded) {
       const md = await readFile(skillFile, "utf8");
-      check("skill carries version marker v2 + frontmatter", md.includes("agent-workbench-skill: v2") && md.includes("name: agent-workbench") && md.includes("aw methods"), md.slice(0, 120));
+      check(`skill carries version marker v${WORKBENCH_SKILL_VERSION} + frontmatter`, md.includes(`agent-workbench-skill: v${WORKBENCH_SKILL_VERSION}`) && md.includes("name: agent-workbench") && md.includes("aw methods"), md.slice(0, 120));
     }
 
     // 2. 技能盘点可见（项目级 .agents/skills 源、启用中）
@@ -166,12 +166,12 @@ async function main(): Promise<void> {
     await writeFile(skillFile, `<!-- agent-workbench-skill: v0 -->\n旧版内容\n`, "utf8");
     const upgraded = await rpc<{ results?: SyncResult[] }>(port, "workbench.skill.sync", { rootPath: botRoot });
     const afterUpgrade = await readFile(skillFile, "utf8");
-    check("stale marker upgrades to canonical", upgraded.result?.results?.[0]?.status === "updated" && afterUpgrade.includes("agent-workbench-skill: v2") && afterUpgrade.includes("驾驶你所在的工作台"), upgraded);
+    check("stale marker upgrades to canonical", upgraded.result?.results?.[0]?.status === "updated" && afterUpgrade.includes(`agent-workbench-skill: v${WORKBENCH_SKILL_VERSION}`) && afterUpgrade.includes("驾驶你所在的工作台"), upgraded);
 
     // 6. force 重装（含用户自建场景）
     await writeFile(skillFile, "完全无关的内容\n", "utf8");
     const forced = await rpc<{ results?: SyncResult[] }>(port, "workbench.skill.sync", { rootPath: botRoot, force: true });
-    check("force reinstalls the canonical skill", forced.result?.results?.[0]?.status === "updated" && (await readFile(skillFile, "utf8")).includes("agent-workbench-skill: v2"), forced);
+    check("force reinstalls the canonical skill", forced.result?.results?.[0]?.status === "updated" && (await readFile(skillFile, "utf8")).includes(`agent-workbench-skill: v${WORKBENCH_SKILL_VERSION}`), forced);
 
     // 7. 无参调用：对全部 bot 兜底
     const all = await rpc<{ results?: SyncResult[] }>(port, "workbench.skill.sync", null);
