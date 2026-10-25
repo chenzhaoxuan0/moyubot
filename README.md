@@ -1,7 +1,14 @@
 # MoyuBot（原 Agent Workbench）
 
+[![cross-platform](https://github.com/chenzhaoxuan0/moyubot/actions/workflows/cross-platform.yml/badge.svg)](https://github.com/chenzhaoxuan0/moyubot/actions/workflows/cross-platform.yml)
+
 本地个人统一工作台 —— 一个界面，多个工作区，多家开源 Agent CLI 平等切换。
 bot 干活，你摸鱼。
+
+> **平台支持**：Windows / macOS / Linux（三平台 CI 矩阵守护：依赖冻结安装、
+> 类型检查、构建、契约自检、daemon 冒烟）。各 agent CLI（claude / codex / …）
+> 不随项目分发，装在 PATH 即被发现——这是「一个软件管理多个 CLI」的设计口径。
+> Windows 双击 `launch-all.bat`，macOS / Linux 用 `./launch-all.sh`。
 
 > **命名说明**：本项目原名 **Agent Workbench**，现更名 **MoyuBot**。除品牌显示名外，
 > 标识符一律沿用旧名：CLI 仍叫 `aw`（旧名 **A**gent **W**ork**b**ench 的缩写）、
