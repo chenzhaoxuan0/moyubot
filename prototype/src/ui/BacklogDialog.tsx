@@ -1,5 +1,5 @@
 import { useState, type ReactElement, type ReactNode } from "react";
-import { ListTodo, X } from "lucide-react";
+import { Info, ListTodo, X } from "lucide-react";
 import type { BacklogItem } from "../core/backlog.ts";
 import { draftPromptOf } from "../core/backlog.ts";
 import { useBacklog } from "../store/useBacklog.ts";
@@ -261,13 +261,21 @@ const inputCls =
   "w-full rounded-input border border-transparent bg-rail px-2.5 py-1.5 text-body-sm text-ink outline-none placeholder:text-ash focus:border-teal";
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }): ReactElement {
-  // 标签与提示分行：此前同一行 baseline 排布，提示长一点就在双列格子里换行挤压，
-  // 与下方控件糊在一起 —— 宁可多占两行也要每行只装一件事。
+  // 说明折叠进标签旁的 ⓘ（title 悬停显示）—— 与 AutomationDialog 的 Field 同款
+  // 口径：表单只留标签与控件，说明按需索取
   return (
     <div className="space-y-1.5">
-      <div className="flex flex-col gap-0.5">
+      <div className="flex items-center gap-1">
         <span className="text-body-sm font-medium text-ink">{label}</span>
-        {hint !== undefined && <span className="text-caption leading-snug text-ash">{hint}</span>}
+        {hint !== undefined && (
+          <span
+            title={hint}
+            aria-label={hint}
+            className="flex shrink-0 cursor-help items-center text-ash/70 transition hover:text-graphite"
+          >
+            <Info size={11} />
+          </span>
+        )}
       </div>
       {children}
     </div>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
-import { CalendarClock, X } from "lucide-react";
+import { CalendarClock, Info, X } from "lucide-react";
 import {
   scheduleRuleToCron,
   formatAbsoluteHuman,
@@ -614,7 +614,7 @@ export function AutomationDialog({
             />
           </Field>
 
-          <Field label="重复规则" hint={`落库口径：${previewCron}`}>
+          <Field label="重复规则">
             <div className="space-y-2.5">
               <div className="flex flex-wrap gap-1">
                 {FREQ_TABS.map((t) => (
@@ -811,6 +811,10 @@ export function AutomationDialog({
                   </div>
                 </>
               )}
+
+              {/* 落库口径是实算反馈不是说明（像计算器的显示屏）：边选边看生效的
+                  调度，留在构建器内部常显一行，不折叠进 ⓘ */}
+              <p className="text-caption text-ash">落库口径：{previewCron}</p>
             </div>
           </Field>
 
@@ -865,13 +869,21 @@ const inputCls =
   "w-full rounded-input border border-transparent bg-rail px-2.5 py-1.5 text-body-sm text-ink outline-none placeholder:text-ash focus:border-teal";
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }): ReactElement {
-  // 标签与提示分行：此前同一行 baseline 排布，提示长一点就在双列格子里换行挤压，
-  // 与下方控件糊在一起 —— 宁可多占两行也要每行只装一件事。
+  // 说明折叠进标签旁的 ⓘ（title 悬停显示）：常显的说明行曾让每个字段占两行
+  // 文字 + 控件，双列表单密不透风 —— 说明按需索取，表单只留标签与控件
   return (
     <div className="space-y-1.5">
-      <div className="flex flex-col gap-0.5">
+      <div className="flex items-center gap-1">
         <span className="text-body-sm font-medium text-ink">{label}</span>
-        {hint !== undefined && <span className="text-caption leading-snug text-ash">{hint}</span>}
+        {hint !== undefined && (
+          <span
+            title={hint}
+            aria-label={hint}
+            className="flex shrink-0 cursor-help items-center text-ash/70 transition hover:text-graphite"
+          >
+            <Info size={11} />
+          </span>
+        )}
       </div>
       {children}
     </div>
