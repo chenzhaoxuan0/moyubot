@@ -321,17 +321,26 @@ function WorkGroupRow({
   busy: boolean;
   lastUserTurnId: string | number | undefined;
 }) {
-  const [open, setOpen] = useState(running);
-
-  // 运行中自动展开，完成后自动折叠（ZCode autoCollapseOnComplete 模式）
-  useEffect(() => {
-    if (running) setOpen(true);
-    else setOpen(false);
-  }, [running]);
+  // 保持默认折叠状态，绝不随运行状态自动展开收起导致画面剧烈跳跃
+  const [open, setOpen] = useState(false);
 
   const toolCount = entries.filter((e) => e.kind === "tool").length;
   const thinkCount = entries.filter((e) => e.kind === "thinking").length;
   const failed = entries.some((e) => e.kind === "tool" && e.data?.ok === false);
+
+  // 提取当前正在进行的操作或思考摘要
+  const activeLabel = useMemo(() => {
+    if (!running) return null;
+    const activeTool = entries.find((e) => e.kind === "tool" && e.data?.completed !== true);
+    if (activeTool) {
+      return `正在执行 ${activeTool.data?.title || activeTool.data?.toolName || "工具"}…`;
+    }
+    const isThinking = entries[entries.length - 1]?.kind === "thinking";
+    if (isThinking) {
+      return "正在深度思考…";
+    }
+    return "正在处理中…";
+  }, [entries, running]);
 
   // 统计修改交付的文件
   const deliverableFiles = useMemo(() => {
@@ -364,18 +373,21 @@ function WorkGroupRow({
             running ? "animate-pulse text-teal" : failed ? "text-loss" : "text-ash",
           )}
         />
-        <span className={cn("shrink-0 font-medium", running && "text-teal")}>
-          {running ? "执行中" : "已完成执行"}
+        <span className={cn("shrink-0 font-medium", running ? "text-teal" : "text-graphite")}>
+          {running ? (activeLabel ?? "工作中…") : "执行已就绪"}
         </span>
         <span className="min-w-0 truncate text-ash font-mono text-[11px]">
-          {toolCount > 0 && `· ${toolCount} 个操作`}
+          {toolCount > 0 && ` · ${toolCount} 条命令`}
           {thinkCount > 0 && ` · 思考 ${thinkCount} 阶段`}
           {failed && " · 含有失败项"}
         </span>
-        <ChevronRight
-          size={12}
-          className={cn("ml-auto shrink-0 transition-transform text-ash", open ? "rotate-90" : "rotate-0")}
-        />
+        <span className="ml-auto flex items-center gap-1 text-[11px] text-ash">
+          <span className="hidden sm:inline">{open ? "收起明细" : "展开过程"}</span>
+          <ChevronRight
+            size={12}
+            className={cn("shrink-0 transition-transform text-ash", open ? "rotate-90" : "rotate-0")}
+          />
+        </span>
       </button>
 
       {/* 展开的详细执行流 */}
@@ -455,6 +467,8 @@ function SingleItemRow({
           streaming={item.data.streaming === true}
           usage={item.data.usage}
           busy={busy}
+          turnStartedAt={item.data.turnStartedAt}
+          durationMs={item.data.durationMs}
         />
       );
 

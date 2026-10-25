@@ -12,6 +12,7 @@ import { DesktopTopOverlay } from "./ui/DesktopTopOverlay.tsx";
 import { SettingsPage } from "./ui/SettingsPage.tsx";
 import { SourceControlPage } from "./ui/SourceControlPage.tsx";
 import { PermissionDialog } from "./ui/PermissionDialog.tsx";
+import { QuestionnaireCard } from "./ui/chat/items/QuestionnaireCard.tsx";
 import { Timeline, EmptyState } from "./ui/Timeline.tsx";
 import { ChatTerminalDock } from "./ui/ChatTerminalDock.tsx";
 import { useWorkbench } from "./store/useWorkbench.ts";
@@ -318,6 +319,7 @@ function ConversationSlot() {
             <div className="relative flex min-h-0 flex-1 flex-col">
               <Timeline />
               <PermissionDialog />
+              <QuestionnaireCard />
               <Composer />
               {/* 对话页小终端：在输入框下方（ZCode 同款），与 TUI 终端页互相独立 */}
               <ChatTerminalDock />

@@ -41,6 +41,9 @@ export type {
   WorkUnit,
 } from "../../prototype/src/core/units.ts";
 export {
+  asModelId,
+  asSessionId,
+  asUnitId,
   LEGACY_CONTEXT_MANIFEST,
   normalizeContextManifest,
   normalizeSkillBinding,

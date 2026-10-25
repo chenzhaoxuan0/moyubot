@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Check, Copy, GitBranch } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, Copy, GitBranch, Timer } from "lucide-react";
 import { MarkdownContent } from "../../MarkdownContent.tsx";
 import { useWorkbench } from "../../../store/useWorkbench.ts";
 
@@ -11,6 +11,15 @@ const clock = (at: number) =>
     second: "2-digit",
   });
 
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const sec = Math.round(ms / 100) / 10;
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const remSec = Math.round(sec % 60);
+  return `${min}分${remSec}秒`;
+}
+
 export function AssistantMessageBlock({
   text,
   at,
@@ -19,6 +28,8 @@ export function AssistantMessageBlock({
   streaming = false,
   usage,
   busy,
+  turnStartedAt,
+  durationMs,
 }: {
   text: string;
   at: number;
@@ -29,10 +40,30 @@ export function AssistantMessageBlock({
   /** 本轮用量（groupTimelineEvents 把 usage 事件并入这里；缺省不渲染右侧 meta） */
   usage?: { model: string; inputTokens: number; outputTokens: number };
   busy: boolean;
+  turnStartedAt?: number;
+  durationMs?: number;
 }) {
   const startFork = useWorkbench((s) => s.startFork);
   const sourceStatus = useWorkbench((s) => s.sessions.find((x) => String(x.id) === sessionId)?.status);
   const [copied, setCopied] = useState(false);
+  const [liveSec, setLiveSec] = useState(0);
+
+  // 流式中实时更新已执行秒数（对齐截图与用户诉求）
+  useEffect(() => {
+    if (!streaming || !turnStartedAt) return;
+    const update = () => {
+      setLiveSec(Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)));
+    };
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [streaming, turnStartedAt]);
+
+  const displayDuration = streaming
+    ? (liveSec > 0 ? `已执行 ${liveSec}秒` : "执行中…")
+    : durationMs !== undefined && durationMs > 0
+      ? `耗时 ${formatDuration(durationMs)}`
+      : null;
 
   // idle 门禁（ADR 0013 不变量 6）：本轮流式中 / 源段 running/awaiting_* 时禁止分叉
   const blocked =
@@ -76,6 +107,15 @@ export function AssistantMessageBlock({
             />
           )}
           <span className="tnum shrink-0">{clock(at)}</span>
+          {displayDuration && (
+            <span
+              className="flex shrink-0 items-center gap-1 font-mono text-[11px] text-ash/90"
+              title={streaming ? "正在执行中" : "本轮任务总耗时"}
+            >
+              <Timer size={11} className={streaming ? "animate-spin text-teal" : "text-ash"} />
+              <span>{displayDuration}</span>
+            </span>
+          )}
           <button
             type="button"
             onClick={() => startFork({ ofSessionId: sessionId as never, anchorMessageId: messageId, kind: "branch" })}

@@ -68,6 +68,7 @@ import { COMPUTER_MCP_PATH, controlActions, registerAcpEntriesProvider, setContr
 import { TerminalManager } from "./terminal/terminals.ts";
 import { Store } from "./store/db.ts";
 import { listNativeSessions, readNativeSession, readerOf, type NativeSessionSummary } from "./history/index.ts";
+import { syncNativeSession, NativeSessionWatcher } from "./history/sync.ts";
 import { samePath } from "./history/util.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
 import { QuotaResumeWatcher } from "./automation/quotaResume.ts";
@@ -1254,6 +1255,10 @@ const wss = attachWs(server, { config, startedAt, authorize });
 // 通知推送通道挂进 WS（在此之前到达的事件只记录不推送，历史以 notifications.list 为准）
 notifications.setPush((row) => broadcastNotification(wss, row));
 
+// 原生会话源文件监视器：检测外部终端写入并实时推送到工作台对话时间线与侧栏
+const nativeWatcher = new NativeSessionWatcher(store, traceSink, () => wss);
+nativeWatcher.start();
+
 // ---- 待办 / GTD（backlog）—— 引擎需要 wss 广播，必须在 attachWs 之后构造 ----------
 
 backlogEngine = new BacklogEngine({
@@ -2051,6 +2056,15 @@ registerMethod("unit.history", async (params) => {
       }
     }
 
+    if (s.cliRef) {
+      const nativeList = await cachedNativeList(s.runtimeId, s.rootPath ?? defaultBotRootPath);
+      const hit = nativeList.find((x) => x.sessionId === s.cliRef);
+      if (hit) {
+        if (!title || title === "（无标题会话）") title = hit.title;
+        endedAt = Math.max(endedAt ?? 0, hit.updatedAt);
+      }
+    }
+
     entries.push({
       key: `session-${s.id}`,
       kind: "session",
@@ -2059,13 +2073,13 @@ registerMethod("unit.history", async (params) => {
       title: title === "" ? "（无标题会话）" : title,
       subtitle: null,
       runtimeId: s.runtimeId,
-      launchMode: imported ? "terminal" : "headless",
+      launchMode: imported ? "chat" : "headless",
       status: sessionStatus,
       trigger: null,
       startedAt: s.startedAt,
       endedAt,
       detail: null,
-      sessionId: imported ? null : s.id,
+      sessionId: s.id,
       resumeRef: s.cliRef,
       terminalId: null,
       // 来源标签（workbench 缺省不显，渠道/自动化/导入来源让用户知道「这条怎么来的」）
@@ -3645,6 +3659,8 @@ registerMethod("session.trace", (params) => {
 registerMethod("session.events.since", async (params) => {
   const p = (params ?? {}) as { sessionId?: string; afterSeq?: number };
   if (typeof p.sessionId !== "string") throw Object.assign(new Error("sessionId is required"), { code: "bad_params" });
+  nativeWatcher.watchSession(p.sessionId);
+  await syncNativeSession(p.sessionId, store, traceSink, wss);
   const afterSeq = typeof p.afterSeq === "number" ? p.afterSeq : 0;
   const hot = host.hotEventsSince(asSessionId(p.sessionId), afterSeq);
   const parseLedger = (nd: string): Array<{ seq: number; at: number; event: unknown }> => {

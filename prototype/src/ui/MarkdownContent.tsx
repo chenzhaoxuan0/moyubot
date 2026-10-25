@@ -76,23 +76,24 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 }
 
 /**
- * 标题阶梯必须严格递减，且只用 @theme 里的四档字号
- * （h1 text-body-lg 16 / h2 text-body 14 / h3+ text-body-sm 12）。
- * 原先一级用的是 `text-title` —— 这个 token 根本不存在，
- * 于是 h1 回落到继承的 14px，比二级标题（16px）还小，层级是反的。
+ * 标题阶梯分级（对齐 mcode/TUI 的 markdownHeading 调色板与现代分级阅读）：
+ * h1: 大标题 + 底部轻分割线 + 主色高光
+ * h2: 二级重点分节（蓝青色，分层显著）
+ * h3: 三级子议题（紫青色）
+ * h4+: 紧凑加粗小标题
  */
 const headingCls = [
-  "mt-4 mb-2 text-body-lg font-medium text-ink", // h1
-  "mt-3 mb-1.5 text-body font-medium text-ink", // h2
-  "mt-2.5 mb-1 text-body-sm font-medium text-ink", // h3
-  "mt-2 mb-1 text-body-sm font-medium text-ink", // h4
-  "mt-2 mb-1 text-body-sm font-medium text-graphite", // h5
-  "mt-2 mb-1 text-body-sm font-medium text-graphite", // h6
+  "mt-6 mb-3 text-[17px] font-bold text-teal dark:text-teal-tint tracking-tight border-b border-line/60 pb-1.5 flex items-center gap-1.5", // h1
+  "mt-5 mb-2.5 text-[15px] font-bold text-sky-600 dark:text-sky-400 tracking-tight flex items-center gap-1.5", // h2
+  "mt-4 mb-2 text-[14px] font-semibold text-indigo-600 dark:text-indigo-400 tracking-tight", // h3
+  "mt-3 mb-1.5 text-[13px] font-semibold text-emerald-600 dark:text-emerald-400", // h4
+  "mt-2.5 mb-1 text-[12px] font-semibold text-graphite uppercase tracking-wider", // h5
+  "mt-2 mb-1 text-[12px] font-semibold text-ash uppercase tracking-wider", // h6
 ] as const;
 
 const components: Components = {
-  h1: ({ children }) => <h1 className={headingCls[0]}>{children}</h1>,
-  h2: ({ children }) => <h2 className={headingCls[1]}>{children}</h2>,
+  h1: ({ children }) => <h1 className={headingCls[0]}><span className="h-3 w-1 rounded-full bg-teal shrink-0" aria-hidden />{children}</h1>,
+  h2: ({ children }) => <h2 className={headingCls[1]}><span className="h-2.5 w-1 rounded-full bg-sky-500 shrink-0" aria-hidden />{children}</h2>,
   h3: ({ children }) => <h3 className={headingCls[2]}>{children}</h3>,
   h4: ({ children }) => <h4 className={headingCls[3]}>{children}</h4>,
   h5: ({ children }) => <h5 className={headingCls[4]}>{children}</h5>,

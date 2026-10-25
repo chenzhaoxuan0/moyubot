@@ -41,6 +41,7 @@ export function groupTimelineEvents(
 ): GroupedItem[] {
   const result: GroupedItem[] = [];
   let prevSessionId: string | null = null;
+  let currentTurnStartedAt: number | undefined;
 
   for (const entry of events) {
     const { id, event, at } = entry;
@@ -97,6 +98,7 @@ export function groupTimelineEvents(
 
       case "message.delta": {
         if (event.role === "user") {
+          currentTurnStartedAt = at;
           result.push({
             id,
             kind: "user.message",
@@ -125,6 +127,7 @@ export function groupTimelineEvents(
                 messageId: event.messageId,
                 sessionId: String(event.sessionId),
                 streaming: true,
+                turnStartedAt: currentTurnStartedAt,
               },
             });
           }
@@ -148,6 +151,10 @@ export function groupTimelineEvents(
         if (existing !== undefined && existing.data.streaming === true) {
           existing.data.text = event.text;
           existing.data.streaming = false;
+          existing.data.completedAt = at;
+          if (existing.data.turnStartedAt) {
+            existing.data.durationMs = Math.max(0, at - existing.data.turnStartedAt);
+          }
         } else {
           result.push({
             id,
@@ -158,6 +165,9 @@ export function groupTimelineEvents(
               messageId: event.messageId,
               sessionId: String(event.sessionId),
               streaming: false,
+              turnStartedAt: currentTurnStartedAt,
+              completedAt: at,
+              durationMs: currentTurnStartedAt ? Math.max(0, at - currentTurnStartedAt) : undefined,
             },
           });
         }
