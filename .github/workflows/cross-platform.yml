@@ -1,0 +1,61 @@
+# 三平台适配验证矩阵（Windows / macOS / Linux）—— docs 口径：
+# 本项目是「一个软件管理多个 CLI」的工作台，不内置任何 agent 二进制，
+# 所以 CI 验证的是「三平台都能装依赖、起 daemon、过契约检查」，
+# 而不是打包安装包（claude.exe / pi-coding-agent 不进任何产物）。
+#
+# 各步骤封闭性：
+# - install：三份独立 lockfile（root / prototype / backend，均 lockfileVersion 9.0）
+# - typecheck / build：纯本地
+# - prototype check：models + sidepane 两个纯函数契约自检，不依赖 daemon / 网络
+# - backend smoke：smoke-health 自起 daemon（随机端口 + 临时 AGENT_WORKBENCH_HOME），
+#   不依赖任何外部 CLI 或密钥
+name: cross-platform
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install deps (root / prototype / backend)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm -C prototype install --frozen-lockfile
+          pnpm -C backend install --frozen-lockfile
+
+      # electron 的 postinstall 会按当前平台下载运行时二进制——
+      # 这一步验证的是「每个平台的 electron 都能落地」，不启动 GUI
+      - name: Electron platform binary sanity
+        run: node -e "console.log('electron binary:', require('electron'))"
+
+      - name: Typecheck (prototype + backend)
+        run: pnpm typecheck
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Frontend contract checks
+        run: pnpm -C prototype check
+
+      - name: Backend daemon smoke
+        run: pnpm -C backend smoke

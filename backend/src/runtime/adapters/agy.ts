@@ -16,7 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createInterface } from "node:readline";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,26 @@ import type {
 } from "../../contract.ts";
 import { execLines, resolveCommand, spawnLines } from "../exec.ts";
 import { log } from "../../log.ts";
+
+/**
+ * sidecar 的 Python 解释器：Windows 用 python；unix 优先 python3
+ * （macOS / 多数 Linux 发行版没有裸 python 命令）。探测一次即缓存。
+ */
+let cachedPythonBin: string | null = null;
+function pythonBin(): string {
+  if (cachedPythonBin === null) {
+    cachedPythonBin = "python";
+    if (process.platform !== "win32") {
+      try {
+        execFileSync("which", ["python3"], { stdio: "ignore", timeout: 1000 });
+        cachedPythonBin = "python3";
+      } catch {
+        // 裸 python 兜底（python-is-python3 / conda 装法）
+      }
+    }
+  }
+  return cachedPythonBin;
+}
 
 interface AgyStepUpdate {
   conversation_id?: string;
@@ -468,7 +488,7 @@ export class AgyAdapter implements ExecutorAdapter {
   /** probe 阶段探测：python -c 'import google.antigravity' 成功即启用 SDK 传输 */
   private async probeSdk(): Promise<boolean> {
     try {
-      await execLines({ file: 'python', prefixArgs: [], via: 'exe' }, ['-c', 'import google.antigravity'], 10000);
+      await execLines({ file: pythonBin(), prefixArgs: [], via: 'exe' }, ['-c', 'import google.antigravity'], 10000);
       return true; // 报错（未装/无 python）会 throw
     } catch {
       return false;
@@ -482,7 +502,7 @@ export class AgyAdapter implements ExecutorAdapter {
   private ensureSdkChild(state: SessionState): ChildProcess {
     if (state.sdkChild !== null && state.sdkChild.exitCode === null) return state.sdkChild;
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const child = spawn('python', ['-u', path.join(here, 'agy-antigravity-sidecar.py')], {
+    const child = spawn(pythonBin(), ['-u', path.join(here, 'agy-antigravity-sidecar.py')], {
       cwd: state.rootPath,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,

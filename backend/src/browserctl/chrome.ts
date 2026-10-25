@@ -16,6 +16,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { log } from "../log.ts";
 
 /** 默认调试端口基址（被占则上浮，最多试 7 个） */
@@ -27,27 +28,62 @@ export interface ChromiumCandidate {
   readonly kind: "chrome" | "edge";
 }
 
-/** 系统浏览器发现：Chrome 优先，Edge 兜底（Windows 每机必有，Chromium 系都能 CDP） */
+/** 系统浏览器发现：Chrome 优先，Edge 兜底（Chromium 系都能 CDP，三平台各自的常见落点） */
 export function findChromium(preferred: "chrome" | "msedge"): ChromiumCandidate | null {
-  const pf = process.env["ProgramFiles"] ?? "C:\\Program Files";
-  const pf86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
-  const la = process.env["LOCALAPPDATA"] ?? "";
-  const chrome = [
-    join(pf, "Google", "Chrome", "Application", "chrome.exe"),
-    join(pf86, "Google", "Chrome", "Application", "chrome.exe"),
-    ...(la !== "" ? [join(la, "Google", "Chrome", "Application", "chrome.exe")] : []),
-  ];
-  const edge = [
-    join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
-    join(pf86, "Microsoft", "Edge", "Application", "msedge.exe"),
-    ...(la !== "" ? [join(la, "Microsoft", "Edge", "Application", "msedge.exe")] : []),
-  ];
   const prefer: readonly ("chrome" | "edge")[] = preferred === "chrome" ? ["chrome", "edge"] : ["edge", "chrome"];
-  const pools: Record<"chrome" | "edge", string[]> = { chrome, edge };
+  const pools = chromiumCandidates();
   for (const kind of prefer) {
     for (const p of pools[kind]) if (existsSync(p)) return { executable: p, kind };
   }
   return null;
+}
+
+/** 各平台的 Chrome / Edge 可执行文件候选，按优先级排列 */
+function chromiumCandidates(): Record<"chrome" | "edge", string[]> {
+  if (process.platform === "win32") {
+    const pf = process.env["ProgramFiles"] ?? "C:\\Program Files";
+    const pf86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+    const la = process.env["LOCALAPPDATA"] ?? "";
+    return {
+      chrome: [
+        join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+        join(pf86, "Google", "Chrome", "Application", "chrome.exe"),
+        ...(la !== "" ? [join(la, "Google", "Chrome", "Application", "chrome.exe")] : []),
+      ],
+      edge: [
+        join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
+        join(pf86, "Microsoft", "Edge", "Application", "msedge.exe"),
+        ...(la !== "" ? [join(la, "Microsoft", "Edge", "Application", "msedge.exe")] : []),
+      ],
+    };
+  }
+  if (process.platform === "darwin") {
+    const home = homedir();
+    return {
+      chrome: [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        join(home, "Applications", "Google Chrome.app", "Contents", "MacOS", "Google Chrome"),
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+      ],
+      edge: [
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+        join(home, "Applications", "Microsoft Edge.app", "Contents", "MacOS", "Microsoft Edge"),
+      ],
+    };
+  }
+  // Linux：发行版包名各异（google-chrome / chromium / chromium-browser），
+  // 另有 deb 直装与 snap 落点，全登记
+  return {
+    chrome: [
+      "/usr/bin/google-chrome",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/chromium",
+      "/usr/bin/chromium-browser",
+      "/opt/google/chrome/chrome",
+      "/snap/bin/chromium",
+    ],
+    edge: ["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable", "/opt/microsoft/edge/microsoft-edge"],
+  };
 }
 
 /** CDP 健康检查：端口上是不是一个活的调试端点 */

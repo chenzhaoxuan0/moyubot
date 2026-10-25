@@ -1,0 +1,10 @@
+# 三平台行尾纪律（没有它，Windows autocrlf 会把 .sh 检出成 CRLF，
+# unix 上一跑就是 "bad interpreter: /usr/bin/env sh^M"）：
+# - .sh 恒 LF；.bat/.cmd 恒 CRLF（cmd 对 LF 脚本的 goto/label 解析有历史坑）
+# - 其余文本走 text=auto，仓库内统一 LF
+* text=auto
+*.sh text eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.png binary
+*.ico binary

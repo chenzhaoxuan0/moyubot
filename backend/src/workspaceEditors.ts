@@ -103,6 +103,16 @@ function resolveWindowsCommandPaths(command: string): string[] {
   }
 }
 
+/** unix 上命令是否在 PATH（Linux 列编辑器用；1s 超时防 PATH 里挂了慢速网络目录） */
+function unixCommandExists(command: string): boolean {
+  try {
+    execFileSync("which", [command], { stdio: "ignore", timeout: 1000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** 由 CLI 命令位置反推相邻 exe：PATH 里常见的是 bin\code.cmd，真实 exe 在上一级 */
 function deriveWindowsAppPathsFromCommand(def: EditorDef): string[] {
   if (!def.winCommand || def.winCommandAppNames.length === 0) return [];
@@ -168,20 +178,20 @@ let cachedEditors: WorkspaceEditorInfo[] | null = null;
 /**
  * 已安装编辑器清单（含排在最前的系统文件管理器）。
  * ZCode getInstalledEditors 同款：应用生命周期内缓存，探测 IO 只花一次。
- * Linux 暂无静态路径清单（ZCode 也未支持），只返回文件管理器。
+ * Linux 没有 .app 白名单可探，用 which 探 CLI（code 官方脚本装法）。
  */
 export function listInstalledEditors(): { editors: WorkspaceEditorInfo[] } {
   if (cachedEditors) return { editors: cachedEditors };
 
   const editors: WorkspaceEditorInfo[] = [{ id: "explorer", name: fileManagerEditorName() }];
-  if (process.platform === "win32" || process.platform === "darwin") {
-    for (const def of EDITOR_DEFS) {
-      const installed =
-        process.platform === "win32"
-          ? Object.keys(resolveEditorLaunchTarget(def)).length > 0
-          : true; // macOS 不做 .app existsSync 白名单探测，交给 open -a 报错兜底
-      if (installed) editors.push({ id: def.id, name: def.name });
-    }
+  for (const def of EDITOR_DEFS) {
+    const installed =
+      process.platform === "win32"
+        ? Object.keys(resolveEditorLaunchTarget(def)).length > 0
+        : process.platform === "darwin"
+          ? true // macOS 不做 .app existsSync 白名单探测，交给 open -a 报错兜底
+          : def.macCommand !== null && unixCommandExists(def.macCommand);
+    if (installed) editors.push({ id: def.id, name: def.name });
   }
   cachedEditors = editors;
   return { editors: cachedEditors };
