@@ -109,10 +109,10 @@ export function MobileDrawer({
         <div className="flex items-center justify-between border-b border-line/60 bg-rail/50 px-4 py-3.5">
           <div className="flex items-center gap-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-teal text-white font-bold text-xs shadow-xs">
-              AG
+              MY
             </div>
             <div>
-              <h2 className="text-body-sm font-semibold text-ink">Agent Workbench</h2>
+              <h2 className="text-body-sm font-semibold text-ink">MoyuBot</h2>
               <span className="text-[10px] text-teal font-medium">移动端控制台</span>
             </div>
           </div>

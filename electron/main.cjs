@@ -199,7 +199,7 @@ function showMainWindow() {
  */
 function createTray() {
   tray = new Tray(path.join(__dirname, "icon.png"));
-  tray.setToolTip("Agent Workbench · 后台运行中");
+  tray.setToolTip("MoyuBot · 后台运行中");
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "打开工作台", click: () => showMainWindow() },
@@ -222,7 +222,7 @@ function createWindow() {
     height: 940,
     minWidth: 360,
     minHeight: 480,
-    title: "Agent Workbench",
+    title: "MoyuBot",
     icon: path.join(__dirname, "icon.png"),
     backgroundColor: "#f7f7f4",
     show: true, // 立即显示窗口，防止 ready-to-show 被阻塞
@@ -264,7 +264,7 @@ function createWindow() {
     if (!hideNotified && process.platform === "win32" && typeof tray.displayBalloon === "function") {
       hideNotified = true;
       tray.displayBalloon({
-        title: "Agent Workbench 仍在后台运行",
+        title: "MoyuBot 仍在后台运行",
         content: "定时任务、IM 渠道与心跳照常工作。点托盘图标重新打开窗口；右键托盘图标可退出。",
       });
     }

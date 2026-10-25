@@ -96,7 +96,7 @@ class GatewayClient {
       const hello = await this.request("connect", {
         minProtocol: 3,
         maxProtocol: 4,
-        client: { id: "cli", displayName: "Agent Workbench", version: "0.1.0", platform: process.platform, mode: "cli" },
+        client: { id: "cli", displayName: "MoyuBot", version: "0.1.0", platform: process.platform, mode: "cli" },
         role: "operator",
         scopes: ["operator.read", "operator.write"],
         auth: { token },

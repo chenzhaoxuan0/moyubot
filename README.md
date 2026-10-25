@@ -1,6 +1,12 @@
-# Agent Workbench
+# MoyuBot（原 Agent Workbench）
 
 本地个人统一工作台 —— 一个界面，多个工作区，多家开源 Agent CLI 平等切换。
+bot 干活，你摸鱼。
+
+> **命名说明**：本项目原名 **Agent Workbench**，现更名 **MoyuBot**。除品牌显示名外，
+> 标识符一律沿用旧名：CLI 仍叫 `aw`（旧名 **A**gent **W**ork**b**ench 的缩写）、
+> 数据目录仍为 `~/.agent-workbench`、环境变量仍为 `AGENT_WORKBENCH_HOME`——
+> 现有安装、数据与脚本不受任何影响。
 
 ![主界面](docs/images/main-window.png)
 
@@ -14,7 +20,8 @@ USER.md / MEMORY.md / 技能目录默认全关、按需打开，AGENTS.md 三态
 （Tavily / DeepSeek / 豆包 / 元宝四家适配，`workbench-search` 桥按会话目录收口
 `web_search` 工具，密钥 daemon 侧分槽、免费余量设置页可视——见
 [docs/22](docs/22-bot-search.md)）。
-**AI-native（docs/21）**：全部操作既可由人经 GUI、也可由 agent 经 `aw` CLI /
+**AI-native（docs/21）**：全部操作既可由人经 GUI、也可由 agent 经 `aw` CLI
+（`aw` 即旧名 Agent Workbench 的缩写，见文首命名说明）/
 `POST /rpc`（`aw methods` 自描述）驱动——聊天编排（`session.chat`，附件路径
 daemon 内联）、通知事实源、出图（`image.generate`）GUI 与 headless 同一条代码路径。
 以 [MIT](LICENSE) 协议开源。
@@ -150,7 +157,8 @@ agent-workbench/
 | Agent CLI 登录态 | 各 CLI 自己管（`codex login` / `claude login`…），本项目不经手 |
 | daemon 访问 token | `<homeDir>/token`（自动生成，本地鉴权用） |
 
-`<homeDir>` 默认 `~/.agent-workbench`，可用 `AGENT_WORKBENCH_HOME` 改。
+`<homeDir>` 默认 `~/.agent-workbench`，可用 `AGENT_WORKBENCH_HOME` 改
+（目录与环境变量均沿用旧名，见文首命名说明）。
 
 ---
 

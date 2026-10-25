@@ -229,7 +229,7 @@ class AppServerConnection {
       this.child = null;
     });
     await this.request("initialize", {
-      clientInfo: { name: "agent-workbench", title: "Agent Workbench", version: "0.1.0" },
+      clientInfo: { name: "agent-workbench", title: "MoyuBot", version: "0.1.0" },
     });
   }
 

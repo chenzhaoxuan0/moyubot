@@ -1,4 +1,4 @@
-# Agent Workbench
+# MoyuBot
 
 本地个人统一工作台：一个界面管理多个单元（bot / 项目）与多家 Agent CLI 执行器。本文件收录领域语言，只做术语表，不承载实现细节。
 

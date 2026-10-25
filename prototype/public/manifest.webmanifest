@@ -1,6 +1,6 @@
 {
-  "name": "Agent Workbench Mobile",
-  "short_name": "Workbench",
+  "name": "MoyuBot Mobile",
+  "short_name": "MoyuBot",
   "description": "现代化 Personal Agent 移动端远程控制台与触控工作区",
   "start_url": "/",
   "display": "standalone",

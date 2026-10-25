@@ -210,7 +210,7 @@ async function flow(): Promise<void> {
     // 先改视口再**重载**：应用按初始化时的容器宽度决定折叠，事后 resize 不回弹。
     await cdpSend("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
     await cdpSend("Page.reload");
-    await waitFor("page reloaded", async () => (await evaluate<string>("document.title")) === "Agent Workbench", 15000);
+    await waitFor("page reloaded", async () => (await evaluate<string>("document.title")) === "MoyuBot", 15000);
     await evaluate(reactInputJs);
     // 兜底：还是折叠态就点「展开侧栏」
     await evaluate(`(() => {
@@ -223,7 +223,7 @@ async function flow(): Promise<void> {
     // 1. 等 app 挂载（不依赖侧栏元素形态 —— 折叠/展开两种态结构不同）
     await waitFor("app mount + daemon connect", async () => {
       const ready = await evaluate<string>(
-        `document.title === "Agent Workbench" && window.__awbSetReactValue !== undefined ? "yes" : "no"`,
+        `document.title === "MoyuBot" && window.__awbSetReactValue !== undefined ? "yes" : "no"`,
       );
       return ready === "yes";
     }, 20000);
