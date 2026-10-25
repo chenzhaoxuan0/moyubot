@@ -177,7 +177,7 @@ function applyToDom(state: AppearanceState): void {
           })
           .catch(() => {});
       } else {
-        favicon.href = resolved === "dark" ? "/moyu-logo-dark.png" : "/moyu-logo-light.png";
+        favicon.href = resolved === "dark" ? "/moyu-logo-dark-64.png" : "/moyu-logo-light-64.png";
       }
     }
   }

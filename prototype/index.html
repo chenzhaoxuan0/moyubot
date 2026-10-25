@@ -8,7 +8,7 @@
     <meta name="theme-color" content="#12141a" />
     <meta name="color-scheme" content="dark light" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="icon" type="image/png" href="/moyu-logo-light.png" />
+    <link rel="icon" type="image/png" sizes="64x64" href="/moyu-logo-light-64.png" />
     <title>MoyuBot</title>
     <script>
       (function() {
@@ -25,7 +25,7 @@
           // favicon 与主题同源：亮白底 / 暗黑底。这里只是首屏近似（读旧键），
           // appearance.json 加载完成后由 useAppearance.applyToDom 修正。
           var fav = document.querySelector('link[rel="icon"]');
-          if (fav) fav.href = d ? '/moyu-logo-dark.png' : '/moyu-logo-light.png';
+          if (fav) fav.href = d ? '/moyu-logo-dark-64.png' : '/moyu-logo-light-64.png';
         } catch (e) {}
 
         window.addEventListener('error', function(event) {
