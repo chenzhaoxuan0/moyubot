@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { useAppearance } from "../store/useAppearance.ts";
 import { BrandLogo } from "./BrandLogo.tsx";
+import { LogoCropDialog } from "./LogoCropDialog.tsx";
 import { Toggle } from "./Toggle.tsx";
 import { useLayoutStore } from "./mobile/useIsMobile.ts";
 import { useShell as useShellState } from "../store/useShell.ts";
@@ -247,6 +248,8 @@ export function AppearanceSettingsSection() {
   const [importError, setImportError] = useState<string | null>(null);
   const logoFileRef = useRef<HTMLInputElement | null>(null);
   const [logoError, setLogoError] = useState<string | null>(null);
+  /** 待裁剪的候选图：选图先进 LogoCropDialog 定位方框，确认后才真正导入 */
+  const [cropFile, setCropFile] = useState<File | null>(null);
 
   const layoutPref = useLayoutStore((s) => s.preference);
   const setLayoutPref = useLayoutStore((s) => s.setPreference);
@@ -290,22 +293,17 @@ export function AppearanceSettingsSection() {
   const mutedContrast = contrastRatio(activeProfile.palette.muted, activeProfile.palette.background);
 
   /**
-   * 自选 logo 导入：与壁纸同一套链路 —— daemon 落盘到 <homeDir>/logos/，
-   * appearance.json 只记路径。导入成功当场启用（本地 File 直接转 data URL 上屏）。
+   * 自选 logo：先过裁剪弹窗（非方形图自动居中裁很容易切掉主体，用户要能自己定位），
+   * 确认后的方形 PNG 再走 importLogo —— daemon 落盘到 <homeDir>/logos/，
+   * appearance.json 只记路径，导入当场生效。
    */
-  const handleLogoFile = async (file: File) => {
+  const handleLogoFile = (file: File) => {
     setLogoError(null);
     if (!file.type.startsWith("image/")) {
       setLogoError("请选择图片文件");
       return;
     }
-    try {
-      await store.importLogo(file);
-    } catch (error) {
-      setLogoError(
-        error instanceof Error ? `保存失败：${error.message}` : "保存失败，请确认后台 daemon 在运行",
-      );
-    }
+    setCropFile(file);
   };
 
   return (
@@ -790,7 +788,7 @@ export function AppearanceSettingsSection() {
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
-              if (file) void handleLogoFile(file);
+              if (file) handleLogoFile(file);
               e.target.value = "";
             }}
           />
@@ -825,7 +823,7 @@ export function AppearanceSettingsSection() {
                 <button
                   type="button"
                   onClick={() => logoFileRef.current?.click()}
-                  title="选中的图由后台 daemon 落盘到工作目录的 logos/ 下，appearance.json 里只记一个路径。"
+                  title="选中的图先进裁剪窗定位方框；确认后由 daemon 落盘到工作目录的 logos/ 下，appearance.json 里只记一个路径。"
                   className="flex items-center gap-1.5 rounded-btn border border-line px-3 py-1.5 text-body-sm text-ink hover:bg-surface-hover"
                 >
                   <Upload size={13} />
@@ -1117,6 +1115,22 @@ export function AppearanceSettingsSection() {
           </div>
         </div>
       </SectionCard>
+
+      {/* logo 裁剪弹窗：选图后先定位方框，确认才导入 */}
+      {cropFile && (
+        <LogoCropDialog
+          file={cropFile}
+          onCancel={() => setCropFile(null)}
+          onConfirm={(cropped) => {
+            setCropFile(null);
+            void store.importLogo(cropped).catch((error: unknown) => {
+              setLogoError(
+                error instanceof Error ? `保存失败：${error.message}` : "保存失败，请确认后台 daemon 在运行",
+              );
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
