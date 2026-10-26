@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import * as sidePane from "../core/sidePaneTabs.ts";
 import type { UnitId } from "../core/units.ts";
-import { useShell, SIDEBAR_DEFAULT } from "./useShell.ts";
+import { useShell } from "./useShell.ts";
 
 /**
  * 右侧标签面板的 shell 状态 —— tabs/activeTabId 的领域规则全部在
@@ -43,24 +43,25 @@ function withoutUnread(unread: Readonly<Record<string, true>>, tabId: string): R
 }
 
 /**
- * v4（2026-10-27）：132 减半实测过窄，回调 264（左栏等宽）。此前「264 仍偏宽」
- * 的观感多半来自盘上的拖拽存量宽而非默认值本身 —— 键位再升一位做一次性重置，
- * 保证这次复测打开的就是 264 本尊。读档时顺带清掉 v1-v3 残键。
+ * v5（2026-10-27）：264 实测后用户定稿 300 —— 即本项目最初的默认宽。键位随之
+ * 升一位做一次性重置，清掉复测期间可能拖出的存量值。读档时顺带清掉 v1-v4 残键。
  * v2 起盘上的宽度只来自用户拖拽落定（程序性 resize 不落盘，见 SidePanePanel 的
  * onResize 与 commitPaneWidth）—— 读到什么信什么。
  */
-const WIDTH_KEY = "agent-workbench:sidepane-width-px.v4";
+const WIDTH_KEY = "agent-workbench:sidepane-width-px.v5";
 const WIDTH_KEY_STALE = [
+  "agent-workbench:sidepane-width-px.v4",
   "agent-workbench:sidepane-width-px.v3",
   "agent-workbench:sidepane-width-px.v2",
   "agent-workbench:sidepane-width-px",
 ] as const;
 /**
- * 默认宽 = 左栏常规宽（与设置页左侧导航对齐，两栏切换视觉宽度一致）。
- * 最窄即默认宽：tab 条是 overflow-x-auto 的横向滚动条，窄了只是标签条内滚动。
+ * 默认宽 = 300（2026-10-27 用户定稿：264 偏窄、300 合适；面板是按需查看的侧写
+ * 列，300px 下功能主页与历史列表均可读）。最窄即默认宽：tab 条是 overflow-x-auto
+ * 的横向滚动条，窄了只是标签条内滚动。
  */
-const SIDE_PANE_DEFAULT = SIDEBAR_DEFAULT;
-const SIDE_PANE_MIN = SIDEBAR_DEFAULT;
+const SIDE_PANE_DEFAULT = 300;
+const SIDE_PANE_MIN = 300;
 /** 「最近关闭」上限（ZCode recentClosedSidePaneTabs 同款）：够后悔，不无限堆 */
 const RECENTLY_CLOSED_MAX = 8;
 
