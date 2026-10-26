@@ -448,3 +448,19 @@ textarea {
   -webkit-text-fill-color: transparent;
   animation: text-shimmer 2.2s ease-in-out infinite;
 }
+
+/* ==========================================================================
+   In-Chat Find（Ctrl+F 匹配高亮）— CSS Custom Highlight API
+   InChatFindBar 只注册 Range，不向 React 管理的 DOM 插 <mark>（流式重渲染安全）。
+   普通命中沿用选区色（亮色蓝 / 暗色紫，两套主题各自定义）；
+   当前命中用强调色底 + 反色文字（沿用旧实现 amber/teal 的两级层级关系）。
+   不支持该 API 的浏览器由组件 feature-detect 自动降级为无高亮。
+   ========================================================================== */
+::highlight(inchat-find) {
+  background-color: var(--color-selection, #8bc4f8);
+}
+
+::highlight(inchat-find-current) {
+  background-color: var(--color-teal);
+  color: var(--color-on-accent);
+}

@@ -494,6 +494,21 @@ function getInitialActiveUnit(): UnitId {
 const DEFAULT_TURN_CONFIG: TurnContextConfig = { mode: "off", persistForSession: false };
 
 /**
+ * 全关清单（Bare）：一个都不注入的统一基线，三处共用 —— run 的分叉段覆盖 /
+ * 新段覆盖、Composer 勾选面板的兜底底板。冻结成单一常量，防三份字面量各自漂移。
+ */
+export const MANIFEST_ALL_OFF = {
+  firstTurnInject: false,
+  agentsMd: "off",
+  soul: false,
+  user: false,
+  memorySemantic: false,
+  memoryDaily: false,
+  memoryStanding: false,
+  skills: false,
+} as const;
+
+/**
  * 临时注入配置双写（2026-10-23 按 bot 记忆）：视图 turnContextConfig + 记忆表
  * turnContextByUnit[activeUnitId] 同步落——切走再切回时从记忆表恢复，
  * 不再重置回「跟随预设」。
@@ -961,19 +976,40 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
 
   recallMessage: async (input) => {
     const s = get();
-    // 1. 若当前会话处于运行态或忙态，先停止当前运行
-    if (s.busy || s.sessions.find((x) => String(x.id) === String(input.ofSessionId))?.status === "running") {
+    const seg = s.sessions.find((x) => String(x.id) === String(input.ofSessionId));
+    // 1. 若当前会话处于运行态或忙态，先停止当前运行。必须 await 真正的 cancel
+    //    （cancelRun 是即发即忘的包装，不等它就往下走竞态还在：前端先截时间线/
+    //    复位 busy，daemon 侧本轮仍在写账本，随后到达的事件会把已撤回的轮又
+    //    灌回时间线）。适配器取「会话所属执行器」，与队列操作同款口径。
+    if (s.busy || seg?.status === "running") {
       try {
-        get().cancelRun();
+        const adapter = await runtimeRegistry.getOrCreate((seg?.runtimeId ?? s.activeRuntimeId) as never);
+        await adapter.cancel(input.ofSessionId);
       } catch (err) {
-        console.warn("[workbench] 撤回时 cancelRun 失败（继续撤回流程）", err);
+        console.warn("[workbench] 撤回时取消当前运行失败（继续撤回流程）", err);
       }
     }
 
-    // 2. 将内容回填到底部输入框，触发自动聚焦
+    // 2. 锚点校验：时间线里找不到这轮消息（锚点 id 是本地合成假 id / 视图已
+    //    切换 / 账本已过期）时**中止撤回** —— 硬着头皮写 pendingFork 的话，下一
+    //    次发送会带着 daemon 不认识的锚点开段，直接吃 unknown_anchor。
+    const anchorIdx = get().timeline.findIndex((t) => {
+      const ev = t.event;
+      return (
+        (ev.type === "message.delta" && ev.role === "user" && ev.messageId === input.anchorMessageId) ||
+        (ev.type === "message.completed" && ev.messageId === input.anchorMessageId)
+      );
+    });
+    if (anchorIdx < 0) {
+      set({ busy: false });
+      get().pushNotice("未找到要撤回的消息", "可能已过期或不在当前时间线里，撤回已取消。", { level: "warn" });
+      return;
+    }
+
+    // 3. 将内容回填到底部输入框，触发自动聚焦
     get().setDraft(input.text);
 
-    // 3. 记录分叉意图（revision）：下一条发送的消息将从此轮之前开启新段
+    // 4. 记录分叉意图（revision）：下一条发送的消息将从此轮之前开启新段
     set({
       pendingFork: {
         ofSessionId: input.ofSessionId,
@@ -982,24 +1018,11 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       },
     });
 
-    // 4. 从前端时间线即时剔除该用户消息及其之后产生的所有事件
-    set((state) => {
-      const idx = state.timeline.findIndex((t) => {
-        const ev = t.event;
-        return (
-          (ev.type === "message.delta" && ev.role === "user" && ev.messageId === input.anchorMessageId) ||
-          (ev.type === "message.completed" && ev.messageId === input.anchorMessageId)
-        );
-      });
-
-      if (idx >= 0) {
-        return {
-          timeline: state.timeline.slice(0, idx),
-          busy: false,
-        };
-      }
-      return { busy: false };
-    });
+    // 5. 从前端时间线即时剔除该用户消息及其之后产生的所有事件
+    set((state) => ({
+      timeline: state.timeline.slice(0, anchorIdx),
+      busy: false,
+    }));
 
     get().pushNotice(
       "已撤回消息",
@@ -1554,16 +1577,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       const turnManifest = resolveEffectiveTurnManifest(currentTurnConfig, unit?.contextManifest, false);
       const forkManifestOverride: ContextManifest | undefined =
         currentTurnConfig.mode === "off" || turnManifest === null
-          ? {
-              firstTurnInject: false,
-              agentsMd: "off",
-              soul: false,
-              user: false,
-              memorySemantic: false,
-              memoryDaily: false,
-              memoryStanding: false,
-              skills: false,
-            }
+          ? MANIFEST_ALL_OFF
           : { ...turnManifest, firstTurnInject: false };
 
       try {
@@ -1767,16 +1781,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     const turnManifest = resolveEffectiveTurnManifest(currentTurnConfig, unit?.contextManifest, true);
     let contextManifestOverride: ContextManifest | undefined = undefined;
     if (currentTurnConfig.mode === "off" || turnManifest === null) {
-      contextManifestOverride = {
-        firstTurnInject: false,
-        agentsMd: "off",
-        soul: false,
-        user: false,
-        memorySemantic: false,
-        memoryDaily: false,
-        memoryStanding: false,
-        skills: false,
-      };
+      contextManifestOverride = MANIFEST_ALL_OFF;
     } else if (currentTurnConfig.mode === "custom") {
       contextManifestOverride = { ...turnManifest, firstTurnInject: true };
     }
@@ -2042,11 +2047,9 @@ function consumeEvents(adapter: RuntimeAdapter): void {
           ...(s.activeSessionId === event.sessionId ? { busy: false } : {}),
         }));
       }
-      if (event.type === "permission.requested") {
-        if (useWorkbench.getState().permissionMode === "bypass") {
-          void useWorkbench.getState().resolvePermission(event.requestId, "allow");
-        }
-      }
+      // bypass 下的 ask 自动放行已移到 daemon 侧裁决：前端不再代答 —— 各权限档
+      // 的 ask 卡片一律正常弹出，由 daemon 自动放行时经下面的 permission.resolved
+      // 回声把卡片翻成「已处理」（与手动裁决同一条消费路径）。
       if (event.type === "permission.resolved") {
         useWorkbench.setState((s) => ({
           permissionDecisions: {

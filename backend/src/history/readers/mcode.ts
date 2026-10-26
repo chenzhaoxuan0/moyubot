@@ -9,7 +9,7 @@
  */
 
 import path from "node:path";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type { NativeSessionDetail, NativeSessionSummary, SessionReader } from "../types.ts";
 import { entriesFromContent, homeDir, isRecord, readJsonLines, str } from "../util.ts";
@@ -149,21 +149,8 @@ export function createMcodeReader(): SessionReader {
         }
 
         let dir = "";
-        let messagesFile = "";
         if (r.historyRelativeDir) {
           dir = path.join(root, r.historyRelativeDir);
-          messagesFile = path.join(dir, "messages.jsonl");
-        }
-
-        let count = 0;
-        if (messagesFile && existsSync(messagesFile)) {
-          // 快速估算消息条数（避免为数十个会话全量 readJsonLines 同步阻塞事件循环）
-          try {
-            const size = statSync(messagesFile).size;
-            count = Math.max(1, Math.round(size / 300));
-          } catch {
-            count = 1;
-          }
         }
 
         out.push({
@@ -173,7 +160,10 @@ export function createMcodeReader(): SessionReader {
           title: r.title !== "" ? r.title : "mcode 会话",
           startedAt: r.createdAt,
           updatedAt: r.updatedAt || r.createdAt,
-          messageCount: count,
+          // 列表不臆造消息条数（旧实现按文件大小估算 size/300，展示给用户的是
+          // 编造的数字）：sqlite 索引里没有条数列；真实条数在展开回看时由
+          // read() 的 transcript.length 提供（与 openclaw/antigravity 列表同口径）。
+          messageCount: 0,
           source: dir || path.join(root, r.sessionId),
         });
 
@@ -197,28 +187,24 @@ export function createMcodeReader(): SessionReader {
       // 2. 兜底：如果没查到，按 base64 命名规则快速定位
       if (!existsSync(messagesFile)) {
         const b64 = Buffer.from(sessionId).toString("base64");
-        // 查看当前年份或全局（限制深度为年/月/日）
-        const year = new Date().getFullYear().toString();
-        const yearDir = path.join(root, year);
-        if (existsSync(yearDir)) {
-          // 浅查当前年/月
-          const months = existsSync(yearDir) ? readdirSync(yearDir).slice(-3) : [];
-          for (const m of months) {
-            const mDir = path.join(yearDir, m);
-            if (!existsSync(mDir)) continue;
-            const days = readdirSync(mDir).slice(-7);
-            for (const d of days) {
-              const dDir = path.join(mDir, d);
-              if (!existsSync(dDir)) continue;
-              const entries = readdirSync(dDir);
-              const matched = entries.find((e) => e.includes(b64));
-              if (matched) {
-                dir = path.join(dDir, matched);
-                messagesFile = path.join(dir, "messages.jsonl");
-                break;
-              }
+        // 从当前月起往回走 3 个月，每个月浅扫最近 7 天（目录为 YYYY/MM/DD，
+        // 月/日都是两位补零）。用 Date 的月份回退做跨年换算 —— 一月会话能正确
+        // 回看上一年十二月，不再假设「月份都在当前年」（评审：跨年边界缺陷）。
+        const now = new Date();
+        for (let back = 0; back < 3 && !existsSync(messagesFile); back++) {
+          const m = new Date(now.getFullYear(), now.getMonth() - back, 1);
+          const monthDir = path.join(root, String(m.getFullYear()), String(m.getMonth() + 1).padStart(2, "0"));
+          if (!existsSync(monthDir)) continue;
+          const days = readdirSync(monthDir).sort().slice(-7);
+          for (const d of days) {
+            const dDir = path.join(monthDir, d);
+            if (!existsSync(dDir)) continue;
+            const matched = readdirSync(dDir).find((e) => e.includes(b64));
+            if (matched) {
+              dir = path.join(dDir, matched);
+              messagesFile = path.join(dir, "messages.jsonl");
+              break;
             }
-            if (existsSync(messagesFile)) break;
           }
         }
       }

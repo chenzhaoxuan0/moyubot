@@ -71,6 +71,23 @@ You are currently in Plan Mode. The user has set the session to read-only planni
 - You SHOULD read files, search the codebase, and list directory contents to fully understand the context.
 - When your plan is ready, you MUST call the \`ExitPlanMode\` tool (with parameter \`plan\` summarizing the step-by-step changes) or clearly present your complete step-by-step plan and ask the user for approval.`;
 
+/**
+ * 清单是否「除 agentsMd=off 外一个注入源都不开」（全关 Bare）。
+ * startSession 首轮注入与 dispatchSend 续聊注入两处共用（评审去重）；
+ * firstTurnInject 不在此谓词内 —— 两个调用点对它的组合语义各不相同，各自显式判。
+ */
+function isManifestAllSourcesOff(manifest: ContextManifest): boolean {
+  return (
+    manifest.agentsMd === "off" &&
+    !manifest.soul &&
+    !manifest.user &&
+    !manifest.memorySemantic &&
+    !manifest.memoryDaily &&
+    !manifest.memoryStanding &&
+    !manifest.skills
+  );
+}
+
 /** 对 WS 暴露的适配器摘要 */
 export interface AdapterInfo {
   readonly id: string;
@@ -1145,15 +1162,7 @@ export class RuntimeHost {
         // 注入器只认结果，不认识三态。缺 manifest = 测试/mock 路径，退回 legacy。
         const manifest =
           input.contextManifest === undefined ? undefined : normalizeContextManifest(input.contextManifest);
-        const isExplicitOff =
-          manifest !== undefined &&
-          manifest.agentsMd === "off" &&
-          !manifest.soul &&
-          !manifest.user &&
-          !manifest.memorySemantic &&
-          !manifest.memoryDaily &&
-          !manifest.memoryStanding &&
-          !manifest.skills;
+        const isExplicitOff = manifest !== undefined && isManifestAllSourcesOff(manifest);
         const shouldInject = manifest === undefined || (manifest.firstTurnInject !== false && !isExplicitOff);
         if (!shouldInject) {
           injected = null;
@@ -1769,15 +1778,7 @@ export class RuntimeHost {
       if (this.injector !== undefined && !isNativeCommand && contextInject?.manifest !== undefined) {
         try {
           const manifest = normalizeContextManifest(contextInject.manifest);
-          const isExplicitOff =
-            manifest.firstTurnInject === false &&
-            manifest.agentsMd === "off" &&
-            !manifest.soul &&
-            !manifest.user &&
-            !manifest.memorySemantic &&
-            !manifest.memoryDaily &&
-            !manifest.memoryStanding &&
-            !manifest.skills;
+          const isExplicitOff = manifest.firstTurnInject === false && isManifestAllSourcesOff(manifest);
 
           if (!isExplicitOff) {
             const nativeAgents =
@@ -2112,6 +2113,17 @@ export class RuntimeHost {
       log.info("permission auto-resolved by rule", { sessionId: h.id, requestId: event.requestId, decision });
       void h.impl?.resolvePermission(event.requestId, decision).catch((err: unknown) =>
         log.warn("gate auto-resolve failed", { error: err instanceof Error ? err.message : String(err) }),
+      );
+      return;
+    }
+    // bypass（yolo）档：用户已显式选「免审批」——审批请求不等 UI，立即按
+    // 「点了允许」放行（原先由前端代答，现移到 daemon 侧收口，审批决策不再
+    // 依赖活着的前端）。deny 规则在上一步已按规则优先拦过一轮。
+    if (h.mode === "yolo") {
+      this.pendingPerms.delete(key);
+      log.info("permission auto-allowed in bypass (yolo) mode", { sessionId: h.id, requestId: event.requestId });
+      void h.impl?.resolvePermission(event.requestId, "allow").catch((err: unknown) =>
+        log.warn("bypass auto-allow failed", { error: err instanceof Error ? err.message : String(err) }),
       );
       return;
     }

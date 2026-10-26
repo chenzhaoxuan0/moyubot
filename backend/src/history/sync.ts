@@ -11,8 +11,8 @@ import path from "node:path";
 import type { WebSocketServer } from "ws";
 import type { Store } from "../store/db.ts";
 import type { TraceSink } from "../runtime/trace.ts";
-import { readNativeSession } from "./index.ts";
-import { asSessionId, asUnitId, type RuntimeEvent, type SessionId, type UnitId } from "../contract.ts";
+import { readNativeSession, type NativeSessionDetail } from "./index.ts";
+import { asSessionId, asUnitId, type RuntimeEvent, type UnitId } from "../contract.ts";
 import { broadcastEvent } from "../wsd.ts";
 import { log } from "../log.ts";
 
@@ -21,14 +21,61 @@ export interface SyncOutcome {
   readonly newMessages: number;
 }
 
+/** (executorId, cliRef) 二元组：定位一条原生会话所需的最小信息，全文件随行 */
+export interface NativeSessionRef {
+  readonly executorId: string;
+  readonly cliRef: string;
+}
+
+/**
+ * 解析 `imp_<exec>_<cliRef>` 形态的隐式会话 id（外部导入会话在 store 无行时的
+ * 兜底定位方式）。executorId 段不含下划线，其余部分整体归 cliRef（原生 id 自身
+ * 可能含 `_`）。非该形态或残缺返回 null。
+ */
+export function parseImplicitSessionId(id: string): NativeSessionRef | null {
+  if (!id.startsWith("imp_")) return null;
+  const parts = id.slice(4).split("_");
+  if (parts.length < 2 || parts[0] === "") return null;
+  const cliRef = parts.slice(1).join("_");
+  if (cliRef === "") return null;
+  return { executorId: parts[0]!, cliRef };
+}
+
 // 记录内存中每个会话已同步的原生 transcript 偏移量
 const sessionNativeSyncedCounts = new Map<string, number>();
 
-export async function syncNativeSession(
+// 单飞（single-flight）：session.events.since RPC 与 500ms watcher 会对同一会话
+// 并发触发同步；lastSeq 从快照取值，并发跑会把同批消息重复记账。同一时刻同一
+// 会话只允许一个在途同步，后来的调用共享同一个 Promise。
+const nativeSyncInFlight = new Map<string, Promise<SyncOutcome>>();
+
+/** 收回某会话的同步游标（session.forget 回收路径调用，防 Map 只增不减） */
+export function forgetNativeSyncState(sessionId: string): void {
+  sessionNativeSyncedCounts.delete(sessionId);
+}
+
+export function syncNativeSession(
   sessionId: string,
   store: Store,
   traceSink: TraceSink,
   wss?: WebSocketServer,
+  snapshot?: NativeSessionDetail | null,
+): Promise<SyncOutcome> {
+  const inFlight = nativeSyncInFlight.get(sessionId);
+  if (inFlight !== undefined) return inFlight;
+  const p = performNativeSync(sessionId, store, traceSink, wss, snapshot).finally(() => {
+    if (nativeSyncInFlight.get(sessionId) === p) nativeSyncInFlight.delete(sessionId);
+  });
+  nativeSyncInFlight.set(sessionId, p);
+  return p;
+}
+
+async function performNativeSync(
+  sessionId: string,
+  store: Store,
+  traceSink: TraceSink,
+  wss: WebSocketServer | undefined,
+  snapshot: NativeSessionDetail | null | undefined,
 ): Promise<SyncOutcome> {
   const s = store.getSession(sessionId);
   let executorId = "";
@@ -37,11 +84,11 @@ export async function syncNativeSession(
   if (s !== undefined && s.cliRef !== null && s.cliRef !== "") {
     executorId = s.runtimeId.replace(/^daemon:/, "");
     cliRef = s.cliRef;
-  } else if (sessionId.startsWith("imp_")) {
-    const parts = sessionId.slice(4).split("_");
-    if (parts.length >= 2) {
-      executorId = parts[0]!;
-      cliRef = parts.slice(1).join("_");
+  } else {
+    const implicit = parseImplicitSessionId(sessionId);
+    if (implicit !== null) {
+      executorId = implicit.executorId;
+      cliRef = implicit.cliRef;
     }
   }
 
@@ -49,12 +96,15 @@ export async function syncNativeSession(
     return { changed: false, newMessages: 0 };
   }
 
-  let detail;
-  try {
-    detail = await readNativeSession(executorId, cliRef);
-  } catch (err: unknown) {
-    log.debug("[native-sync] 读取原生会话失败（跳过）", { executorId, cliRef, err: String(err) });
-    return { changed: false, newMessages: 0 };
+  // watcher 已在探测时读过一份就直传，避免同一变更周期里重复 readNativeSession
+  let detail: NativeSessionDetail | null | undefined = snapshot;
+  if (detail === undefined) {
+    try {
+      detail = await readNativeSession(executorId, cliRef);
+    } catch (err: unknown) {
+      log.debug("[native-sync] 读取原生会话失败（跳过）", { executorId, cliRef, err: String(err) });
+      return { changed: false, newMessages: 0 };
+    }
   }
 
   if (!detail || !Array.isArray(detail.transcript) || detail.transcript.length === 0) {
@@ -207,6 +257,9 @@ export async function syncNativeSession(
 export class NativeSessionWatcher {
   private watchedSessionIds = new Set<string>();
   private fileSignatures = new Map<string, string>();
+  /** sessionId → 其源文件路径：收回关注时连带清掉对应的文件签名 */
+  private sessionFiles = new Map<string, string>();
+  private lastPruneAt = 0;
   private timer: NodeJS.Timeout | null = null;
   private syncing = false;
 
@@ -233,19 +286,52 @@ export class NativeSessionWatcher {
   watchSession(sessionId: string): void {
     if (!sessionId) return;
     this.watchedSessionIds.add(sessionId);
-    // 保持关注集合轻量（最多最近 25 个）
+    // 保持关注集合轻量（最多最近 25 个），被挤出去的连带清掉文件签名
     if (this.watchedSessionIds.size > 25) {
       const first = this.watchedSessionIds.values().next().value;
-      if (first) this.watchedSessionIds.delete(first);
+      if (first) this.dropWatch(first);
     }
     // 立即执行一次探测，确保外部刚写的内容立刻呈现在眼前
     void this.poll();
+  }
+
+  /** 收回对某会话的关注（session.forget 等回收路径调用），同步清掉文件签名 */
+  unwatchSession(sessionId: string): void {
+    this.dropWatch(sessionId);
+  }
+
+  private dropWatch(sessionId: string): void {
+    this.watchedSessionIds.delete(sessionId);
+    const file = this.sessionFiles.get(sessionId);
+    if (file !== undefined) {
+      this.sessionFiles.delete(sessionId);
+      this.fileSignatures.delete(file);
+    }
+  }
+
+  /**
+   * 兜底清理（评审 P2）：forget 钩子之外（store 被外部清理等）也要能收回内存。
+   * 每分钟对照一次 store 会话表：游标 Map / 关注集里已不存在的会话直接丢弃；
+   * imp_ 隐式形态可能没有 store 行，仍在关注中的保留。
+   */
+  private pruneStale(): void {
+    this.lastPruneAt = Date.now();
+    const alive = new Set(this.store.listSessions().map((r) => r.id));
+    for (const sid of [...this.watchedSessionIds]) {
+      if (!alive.has(sid) && parseImplicitSessionId(sid) === null) this.dropWatch(sid);
+    }
+    for (const sid of [...sessionNativeSyncedCounts.keys()]) {
+      if (alive.has(sid)) continue;
+      if (sid.startsWith("imp_") && this.watchedSessionIds.has(sid)) continue;
+      sessionNativeSyncedCounts.delete(sid);
+    }
   }
 
   private async poll(): Promise<void> {
     if (this.syncing || this.watchedSessionIds.size === 0) return;
     this.syncing = true;
     try {
+      if (Date.now() - this.lastPruneAt > 60_000) this.pruneStale();
       const wss = this.getWss();
       for (const sid of Array.from(this.watchedSessionIds)) {
         let bareExec = "";
@@ -254,11 +340,11 @@ export class NativeSessionWatcher {
         if (s !== undefined && s.cliRef !== null && s.cliRef !== "") {
           bareExec = s.runtimeId.replace(/^daemon:/, "");
           cliRef = s.cliRef;
-        } else if (sid.startsWith("imp_")) {
-          const parts = sid.slice(4).split("_");
-          if (parts.length >= 2) {
-            bareExec = parts[0]!;
-            cliRef = parts.slice(1).join("_");
+        } else {
+          const implicit = parseImplicitSessionId(sid);
+          if (implicit !== null) {
+            bareExec = implicit.executorId;
+            cliRef = implicit.cliRef;
           }
         }
         if (!bareExec || !cliRef) continue;
@@ -281,17 +367,19 @@ export class NativeSessionWatcher {
           continue;
         }
 
+        this.sessionFiles.set(sid, targetFile);
         const prevSig = this.fileSignatures.get(targetFile);
         if (prevSig === undefined) {
           this.fileSignatures.set(targetFile, sig);
-          // 首次探测，执行一次对账确保不漏掉刚进来的新消息
-          await syncNativeSession(sid, this.store, this.traceSink, wss ?? undefined);
+          // 首次探测，执行一次对账确保不漏掉刚进来的新消息；
+          // 刚读的 detail 直传，避免同一周期里再读一遍源数据
+          await syncNativeSession(sid, this.store, this.traceSink, wss ?? undefined, detail);
           continue;
         }
 
         if (sig !== prevSig) {
           this.fileSignatures.set(targetFile, sig);
-          await syncNativeSession(sid, this.store, this.traceSink, wss ?? undefined);
+          await syncNativeSession(sid, this.store, this.traceSink, wss ?? undefined, detail);
         }
       }
     } finally {

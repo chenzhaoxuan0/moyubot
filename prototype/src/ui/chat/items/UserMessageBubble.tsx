@@ -21,6 +21,16 @@ function parseSlashCommand(text: string): { isCommand: boolean; name: string; ar
   };
 }
 
+/**
+ * 账本真实用户消息 id 的形态判定。daemon 侧只有两种构造：
+ * - `user-${turnCount}`（backend/src/runtime/host.ts，普通轮/首轮的用户 delta）；
+ * - `msg_ext_${idx+1}`（backend/src/history/sync.ts，外部原生会话同步轮）。
+ * 分叉锚点校验（resolveForkAtSeq）按账本里的这两种 id 匹配；本地合成气泡的
+ * 假 id（run 内 `u${seq}`、pushUserBubble 的 `user_opt_N`，echo 回填前）不在
+ * 其中 —— 不能当撤回/编辑锚点，否则 daemon 直接 unknown_anchor。
+ */
+const isLedgerMessageId = (id: string): boolean => /^(user-\d+|msg_ext_\d+)$/.test(id);
+
 export function UserMessageBubble({
   text,
   attachments,
@@ -57,8 +67,8 @@ export function UserMessageBubble({
     sourceStatus === "running" ||
     sourceStatus === "awaiting_permission" ||
     sourceStatus === "awaiting_input";
-  // 本地合成气泡的假 messageId（u${seq}，echo 尚未回填）不能做账本锚点
-  const anchorReady = /^user-\d+$/.test(messageId) || (Boolean(messageId) && !messageId.startsWith("temp_"));
+  // 本地合成气泡的假 messageId（u${seq} / user_opt_N，echo 尚未回填）不能做账本锚点
+  const anchorReady = Boolean(messageId) && isLedgerMessageId(messageId);
   const canEdit = !blocked && anchorReady;
   const canRecall = isLatestUserTurn && anchorReady;
   const disabledTitle = blocked ? "当前正在执行中，先让这一轮落定" : "锚点还没落进账本，稍等一下再试";

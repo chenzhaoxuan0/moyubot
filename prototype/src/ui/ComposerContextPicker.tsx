@@ -15,7 +15,7 @@ import {
   Wrench,
   Zap,
 } from "lucide-react";
-import { useWorkbench, selectActiveUnit } from "../store/useWorkbench.ts";
+import { useWorkbench, selectActiveUnit, MANIFEST_ALL_OFF } from "../store/useWorkbench.ts";
 import {
   AUTO_PRESET_NAME,
   DEFAULT_CONTEXT_MANIFEST,
@@ -100,18 +100,9 @@ export function ComposerContextPicker({ compact }: { compact?: boolean } = {}) {
       ? `本轮附加: ${count}项`
       : "附加上下文";
 
-  // 单独切换某一项
+  // 单独切换某一项（兜底底板 = 全关常量，与 run 的分叉/新段覆盖同一份）
   const toggleItem = (key: keyof ContextManifest) => {
-    const base = effectiveManifest ?? {
-      firstTurnInject: false,
-      agentsMd: "off",
-      soul: false,
-      user: false,
-      memorySemantic: false,
-      memoryDaily: false,
-      memoryStanding: false,
-      skills: false,
-    };
+    const base = effectiveManifest ?? { ...MANIFEST_ALL_OFF };
     const currentVal = base[key];
     const nextVal = key === "agentsMd" ? (currentVal === "off" ? "on" : "off") : !currentVal;
 

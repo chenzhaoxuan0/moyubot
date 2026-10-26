@@ -35,7 +35,11 @@ export interface ParsedQuestionnaire {
   readonly selectionMode?: "single" | "multiple";
 }
 
-function checkIsMultiSelect(raw: any, questionText = "", headerText = ""): boolean {
+function checkIsMultiSelect(
+  raw: Record<string, unknown> | null | undefined,
+  questionText = "",
+  headerText = "",
+): boolean {
   if (
     raw?.is_multi_select === true ||
     raw?.isMultiSelect === true ||
@@ -54,7 +58,7 @@ function checkIsMultiSelect(raw: any, questionText = "", headerText = ""): boole
  * 结构化问卷 / 决策卡 JSON 解析（全面支持多题 steps/questions 与多选题）
  */
 export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionnaire | null {
-  let obj: any = raw;
+  let obj: Record<string, unknown> | null = raw as Record<string, unknown> | null;
   if (typeof raw === "string") {
     const trimmed = raw.trim();
     try {
@@ -85,9 +89,9 @@ export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionna
   if (!obj || typeof obj !== "object") return null;
 
   // 深入一层解包常见包装器 arguments / input / params
-  if (obj.arguments && typeof obj.arguments === "object") obj = obj.arguments;
-  else if (obj.input && typeof obj.input === "object") obj = obj.input;
-  else if (obj.params && typeof obj.params === "object") obj = obj.params;
+  if (obj.arguments && typeof obj.arguments === "object") obj = obj.arguments as Record<string, unknown>;
+  else if (obj.input && typeof obj.input === "object") obj = obj.input as Record<string, unknown>;
+  else if (obj.params && typeof obj.params === "object") obj = obj.params as Record<string, unknown>;
 
   const isQuestionnaire =
     obj.mode === "questionnaire" ||
@@ -96,7 +100,7 @@ export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionna
 
   if (!isQuestionnaire) return null;
 
-  let rawStepsList: any[] = [];
+  let rawStepsList: Record<string, unknown>[] = [];
   if (Array.isArray(obj.steps) && obj.steps.length > 0) {
     rawStepsList = obj.steps;
   } else if (Array.isArray(obj.questions) && obj.questions.length > 0) {
@@ -118,7 +122,7 @@ export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionna
           ? String(obj.title)
           : undefined;
     const description = rawStep.description ? String(rawStep.description) : undefined;
-    const rawOptions = (Array.isArray(rawStep.options) ? rawStep.options : []) as any[];
+    const rawOptions: unknown[] = Array.isArray(rawStep.options) ? rawStep.options : [];
 
     if (rawOptions.length < 2) continue;
 
@@ -131,11 +135,12 @@ export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionna
         const fullText = /^[A-Za-z0-9]\s*[—·\.:、\-]/.test(cleanLabel) ? cleanLabel : `${key} · ${cleanLabel}`;
         return { key, label: cleanLabel, fullText, recommended };
       }
-      const rawId = opt.id !== undefined ? String(opt.id).trim() : String.fromCharCode(65 + oIdx);
+      const rec = opt as Record<string, unknown>;
+      const rawId = rec.id !== undefined ? String(rec.id).trim() : String.fromCharCode(65 + oIdx);
       const key = rawId.length === 1 ? rawId.toUpperCase() : String.fromCharCode(65 + oIdx);
-      const label = String(opt.label || opt.text || opt.title || `选项 ${key}`);
-      const desc = opt.description ? String(opt.description) : undefined;
-      const recommended = opt.recommended === true || label.includes("推荐");
+      const label = String(rec.label || rec.text || rec.title || `选项 ${key}`);
+      const desc = rec.description ? String(rec.description) : undefined;
+      const recommended = rec.recommended === true || label.includes("推荐");
       const cleanLabel = label.replace(/[（(]推荐[）)]/g, "").trim();
       const fullText = /^[A-Za-z0-9]\s*[—·\.:、\-]/.test(label) ? label : `${key} · ${cleanLabel}`;
 
@@ -328,11 +333,15 @@ export function detectQuestionnaireFromTimeline(
 
       const tn = ev.toolName.toLowerCase().replace(/[\s_\-]+/g, "");
       if (tn === "exitplanmode") {
-        let inp: any = ev.input;
+        let inp: unknown = ev.input;
         if (typeof inp === "string") {
           try { inp = JSON.parse(inp); } catch { /* ignore */ }
         }
-        const planText = typeof inp === "string" ? inp : (inp?.plan ?? inp?.summary ?? inp?.description ?? "模型已起草实施方案，请审阅批准。");
+        const inpObj = inp as Record<string, unknown> | null | undefined;
+        const planText: unknown =
+          typeof inp === "string"
+            ? inp
+            : (inpObj?.plan ?? inpObj?.summary ?? inpObj?.description ?? "模型已起草实施方案，请审阅批准。");
         const exitPlanStep: QuestionnaireStep = {
           id: "exit_plan",
           header: "📋 计划审批 (Plan Approval)",
@@ -364,7 +373,7 @@ export function detectQuestionnaireFromTimeline(
       }
 
       if (tn === "askuser" || tn === "askquestion" || tn === "askuserquestion" || tn === "questionnaire") {
-        let inp: any = ev.input;
+        let inp: unknown = ev.input;
         if (typeof inp === "string") {
           try {
             inp = JSON.parse(inp);
@@ -583,6 +592,10 @@ export function QuestionnaireComposer({
   const canGoNext = currentStepIndex < totalSteps - 1;
   const hasCurrentAnswer =
     currentAnswer.selectedKeys.size > 0 || currentAnswer.customInput.trim() !== "";
+  // 是否存在任何可提交内容：任一步骤已记录选项或非空自定义输入（含当前步骤）
+  const hasAnyAnswer = Object.values(stepAnswers).some(
+    (ans) => ans.selectedKeys.size > 0 || ans.customInput.trim() !== "",
+  );
 
   // 键盘快捷键监听：A/B/C/D、方向键选择与 Enter 提交
   useEffect(() => {
@@ -614,9 +627,10 @@ export function QuestionnaireComposer({
         }
       } else if (e.key === "Enter") {
         e.preventDefault();
+        // Enter 仅用于推进或提交，绝不用作跳过：无内容时按键不做任何事
         if (canGoNext && hasCurrentAnswer) {
           setCurrentStepIndex((i) => i + 1);
-        } else {
+        } else if (!canGoNext && hasAnyAnswer) {
           handleSubmit();
         }
       } else if (e.key === "Escape") {
@@ -631,7 +645,7 @@ export function QuestionnaireComposer({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentStep, currentAnswer, canGoNext, hasCurrentAnswer, isInputActive]);
+  }, [currentStep, currentAnswer, canGoNext, hasCurrentAnswer, hasAnyAnswer, isInputActive]);
 
   const handleSubmit = () => {
     const payloads: string[] = [];
@@ -675,9 +689,6 @@ export function QuestionnaireComposer({
         parts.push(currentAnswer.selectedKeys.size > 0 ? `其他: ${customText}` : customText);
       }
       finalPayload = parts.join("\n").trim();
-      if (!finalPayload) {
-        finalPayload = "跳过";
-      }
     }
 
     if (!finalPayload) return;
@@ -686,20 +697,21 @@ export function QuestionnaireComposer({
       useWorkbench.getState().pushUserBubble(activeSessionId, finalPayload);
     }
 
-    // 若当前是计划审批通过
-    if (
-      currentStep.header?.includes("计划审批") ||
-      currentStep.header?.includes("Plan Approval") ||
-      finalPayload.includes("退出只读计划模式") ||
-      finalPayload.includes("退出计划模式")
-    ) {
-      useWorkbench.getState().setPermissionMode("ask");
-    }
-
     setStepAnswers({});
     setIsInputFocused(false);
     onDismiss();
     void run(finalPayload);
+  };
+
+  // 跳过：发送字面量"跳过"，保持旧跳过语义（仅按钮触发，Enter 不触发）
+  const handleSkip = () => {
+    if (activeSessionId) {
+      useWorkbench.getState().pushUserBubble(activeSessionId, "跳过");
+    }
+    setStepAnswers({});
+    setIsInputFocused(false);
+    onDismiss();
+    void run("跳过");
   };
 
   const handleClose = () => {
@@ -879,6 +891,14 @@ export function QuestionnaireComposer({
                 )}
               </div>
 
+              {/* 跳过：始终可用，仅按钮触发（发送"跳过"） */}
+              <button
+                type="button"
+                onClick={handleSkip}
+                className="rounded-xl px-4 py-1.5 text-xs font-semibold bg-line-soft dark:bg-white/[0.08] text-ash hover:bg-line hover:text-ink transition cursor-pointer select-none shrink-0"
+              >
+                跳过
+              </button>
               {canGoNext && hasCurrentAnswer ? (
                 <button
                   type="button"
@@ -891,33 +911,22 @@ export function QuestionnaireComposer({
                 <button
                   type="button"
                   onClick={handleSubmit}
+                  disabled={!hasAnyAnswer}
                   className={cn(
-                    "rounded-xl px-4 py-1.5 text-xs font-semibold transition cursor-pointer select-none shrink-0",
-                    hasCurrentAnswer
-                      ? "bg-teal text-white shadow-sm hover:brightness-110 active:scale-95"
-                      : "bg-line-soft dark:bg-white/[0.08] text-ash hover:bg-line hover:text-ink",
+                    "rounded-xl px-4 py-1.5 text-xs font-semibold transition select-none shrink-0",
+                    hasAnyAnswer
+                      ? "bg-teal text-white shadow-sm hover:brightness-110 active:scale-95 cursor-pointer"
+                      : "bg-line-soft dark:bg-white/[0.08] text-ash cursor-not-allowed",
                   )}
                 >
-                  {hasCurrentAnswer ? "提交" : "跳过"}
+                  提交
                 </button>
               )}
             </div>
           </div>
         </div>
-
-        {/* 底部微小免责提示，与 MiniMax 官方一致 */}
-        <div className="mt-1 text-center text-[10px] text-ash/70 select-none">
-          内容由AI生成，重要信息请务必核查
-        </div>
       </div>
     </div>
   );
-}
-
-/**
- * 兼容旧引用的占位组件（实际交互已全部收归 Composer 位置）
- */
-export function QuestionnaireCard(): ReactElement | null {
-  return null;
 }
 

@@ -48,6 +48,16 @@ export interface ChatViewportProps {
   readonly chatColumnWidth: number;
 }
 
+/* --------------------------------------------------------- 轮次定位环形聚焦 */
+
+/** 虚拟 / 非虚拟两个分支共用的 ring 聚焦类（加环 + 过渡，1.5s 后撤环） */
+const TURN_RING_CLASSES = ["ring-2", "ring-teal/50", "transition-all", "duration-500"] as const;
+
+function flashTurnRing(el: Element): void {
+  el.classList.add(...TURN_RING_CLASSES);
+  setTimeout(() => el.classList.remove("ring-2", "ring-teal/50"), 1500);
+}
+
 export function ChatViewport({
   timeline,
   busy,
@@ -153,13 +163,10 @@ export function ChatViewport({
     (anchor: TurnNavAnchor) => {
       if (useVirtual && anchor.itemIndex !== undefined) {
         virtualizer.scrollToIndex(anchor.itemIndex, { align: "start", behavior: "smooth" });
+        // 虚拟滚动等首帧落位后再定位元素
         setTimeout(() => {
-          const container = containerRef.current;
-          const el = container?.querySelector(`[data-turn-id="${anchor.userMessageId}"]`);
-          if (el) {
-            el.classList.add("ring-2", "ring-teal/50", "transition-all", "duration-500");
-            setTimeout(() => el.classList.remove("ring-2", "ring-teal/50"), 1500);
-          }
+          const el = containerRef.current?.querySelector(`[data-turn-id="${anchor.userMessageId}"]`);
+          if (el) flashTurnRing(el);
         }, 300);
       } else {
         const container = containerRef.current;
@@ -167,8 +174,7 @@ export function ChatViewport({
         const el = container.querySelector(`[data-turn-id="${anchor.userMessageId}"]`);
         if (el) {
           el.scrollIntoView({ behavior: "smooth", block: "start" });
-          el.classList.add("ring-2", "ring-teal/50", "transition-all", "duration-500");
-          setTimeout(() => el.classList.remove("ring-2", "ring-teal/50"), 1500);
+          flashTurnRing(el);
         }
       }
     },

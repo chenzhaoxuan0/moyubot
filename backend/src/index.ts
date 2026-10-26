@@ -68,7 +68,7 @@ import { COMPUTER_MCP_PATH, controlActions, registerAcpEntriesProvider, setContr
 import { TerminalManager } from "./terminal/terminals.ts";
 import { Store } from "./store/db.ts";
 import { listNativeSessions, readNativeSession, readerOf, type NativeSessionSummary } from "./history/index.ts";
-import { syncNativeSession, NativeSessionWatcher } from "./history/sync.ts";
+import { syncNativeSession, forgetNativeSyncState, NativeSessionWatcher } from "./history/sync.ts";
 import { samePath } from "./history/util.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
 import { QuotaResumeWatcher } from "./automation/quotaResume.ts";
@@ -3746,6 +3746,9 @@ registerMethod("session.forget", (params) => {
   const { sessionId } = (params ?? {}) as { sessionId?: string };
   if (typeof sessionId !== "string") throw Object.assign(new Error("sessionId is required"), { code: "bad_params" });
   host.forgetSession(asSessionId(sessionId));
+  // 连带收回原生同步的内存态（同步游标 + watcher 关注/文件签名），防只增不减
+  forgetNativeSyncState(sessionId);
+  nativeWatcher.unwatchSession(sessionId);
   return { forgotten: sessionId };
 });
 registerMethod("permission.resolve", (params) => {

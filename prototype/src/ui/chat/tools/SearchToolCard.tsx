@@ -46,27 +46,39 @@ export function SearchToolCard({ data }: { data: ToolExecutionData }) {
         <div className="border-t border-line/60 bg-rail/20 p-3 text-caption space-y-2.5 select-text">
           {results.length > 0 ? (
             <div className="space-y-2">
-              {results.map((res, idx) => (
-                <div key={idx} className="rounded-card border border-line/50 bg-card p-2.5 shadow-2xs">
-                  <div className="flex items-center gap-1.5 text-caption font-medium">
-                    <Globe size={11} className="text-ash shrink-0" />
-                    <a
-                      href={res.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-teal hover:underline truncate flex-1 font-mono flex items-center gap-1"
-                    >
-                      <span>{res.title || res.url}</span>
-                      <ExternalLink size={10} className="shrink-0 opacity-70" />
-                    </a>
+              {results.map((res, idx) => {
+                const rawHost = hostOf(res.url);
+                // 域名：优先 payload 给的字段，否则从 URL 提取（去掉 www. 前缀）
+                const domain = res.domain || rawHost.replace(/^www\./, "");
+                // favicon：优先 payload 给的地址，否则按主机名现取（DuckDuckGo 图标服务）
+                const faviconSrc =
+                  res.favicon || (rawHost ? `https://icons.duckduckgo.com/ip3/${rawHost}.ico` : "");
+                return (
+                  <div key={idx} className="rounded-card border border-line/50 bg-card p-2.5 shadow-2xs">
+                    <div className="flex items-center gap-1.5 text-caption font-medium">
+                      {/* key 随 src 变化：流式更新换结果时重置错误回退态 */}
+                      <ResultFavicon key={faviconSrc} src={faviconSrc} />
+                      <a
+                        href={res.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-teal hover:underline truncate flex-1 font-mono flex items-center gap-1"
+                      >
+                        <span>{res.title || res.url}</span>
+                        <ExternalLink size={10} className="shrink-0 opacity-70" />
+                      </a>
+                    </div>
+                    {domain && (
+                      <div className="mt-1 truncate font-mono text-[11px] text-ash">{domain}</div>
+                    )}
+                    {res.snippet && (
+                      <p className="mt-1 text-body-sm text-graphite line-clamp-3 leading-relaxed">
+                        {res.snippet}
+                      </p>
+                    )}
                   </div>
-                  {res.snippet && (
-                    <p className="mt-1 text-body-sm text-graphite line-clamp-3 leading-relaxed">
-                      {res.snippet}
-                    </p>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <pre className="max-h-60 overflow-auto rounded border border-line/50 bg-card p-2 text-graphite whitespace-pre-wrap font-mono">
@@ -79,10 +91,43 @@ export function SearchToolCard({ data }: { data: ToolExecutionData }) {
   );
 }
 
+/** 结果 favicon：加载失败（无图 / 断网 / 域名无图标）时回退到 Globe 图标 */
+function ResultFavicon({ src }: { src: string }) {
+  const [failed, setFailed] = useState(false);
+  if (failed || !src) {
+    return <Globe size={11} className="shrink-0 text-ash" aria-hidden />;
+  }
+  return (
+    <img
+      src={src}
+      alt=""
+      width={12}
+      height={12}
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="h-3 w-3 shrink-0 rounded-xs"
+    />
+  );
+}
+
 interface SearchItem {
   title: string;
   url: string;
   snippet: string;
+  /** payload 自带的 favicon 地址（可选，缺失时按主机名现取） */
+  favicon?: string;
+  /** payload 自带的域名（可选，缺失时从 URL 提取） */
+  domain?: string;
+}
+
+/** 从 URL 提取主机名；非 http(s) / 解析失败返回空串 */
+function hostOf(url: string): string {
+  if (!/^https?:\/\//i.test(url)) return "";
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
 }
 
 function extractSearchQuery(input: unknown): string {
@@ -106,10 +151,14 @@ function parseSearchResults(rawOutput?: string): SearchItem[] {
     if (Array.isArray(parsed)) {
       for (const item of parsed) {
         if (typeof item === "object" && item !== null) {
+          const favicon = item.favicon ?? item.icon ?? item.favicon_url ?? item.faviconUrl;
+          const domain = item.domain ?? item.host ?? item.site_name ?? item.source;
           results.push({
             title: String(item.title || item.name || ""),
             url: String(item.url || item.link || ""),
             snippet: String(item.snippet || item.content || item.summary || ""),
+            favicon: typeof favicon === "string" && favicon ? favicon : undefined,
+            domain: typeof domain === "string" && domain ? domain : undefined,
           });
         }
       }
@@ -119,7 +168,7 @@ function parseSearchResults(rawOutput?: string): SearchItem[] {
     // 非纯 JSON，解析文本格式（如 formatRows 输出）
   }
 
-  // 2. 文本解析：按标题/链接/摘要块匹配
+  // 2. 文本解析：按标题/链接/摘要块匹配（此格式无 favicon/域名字段，渲染时从 URL 推导）
   const blocks = rawOutput.split(/\n\s*\n/);
   for (const block of blocks) {
     const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);

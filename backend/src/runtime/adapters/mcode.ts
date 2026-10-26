@@ -473,27 +473,7 @@ export class McodeAdapter implements ExecutorAdapter {
     };
     this.sessions.set(state.sessionId, state);
 
-    return {
-      id: state.sessionId,
-      send: async (text: string, loop) => {
-        if (loop?.contextLength !== undefined) state.contextLength = loop.contextLength;
-        if (loop?.mode !== undefined && loop.mode !== state.mode) {
-          state.mode = loop.mode;
-          state.modeApplied = false;
-        }
-        await this.runTurn(state, text);
-      },
-      cancel: async () => {
-        state.cancelled = true;
-        if (state.ref !== null && state.child !== null && state.initialized) {
-          this.notify(state, "session/cancel", { sessionId: state.ref });
-        }
-      },
-      resolvePermission: async (requestId, decision) => {
-        this.resolvePermission(state, requestId, decision);
-      },
-      externalRef: () => state.ref,
-    };
+    return this.sessionHandle(state);
   }
 
   reattach(sessionId: SessionId, ref: string, rootPath: string, sink: AdapterSink): AdapterSession {
@@ -521,8 +501,17 @@ export class McodeAdapter implements ExecutorAdapter {
       turn: null,
     };
     this.sessions.set(sessionId, state);
+    return this.sessionHandle(state);
+  }
+
+  /**
+   * start / reattach 共用的会话句柄（评审去重：send 的 loop 覆盖吸收
+   * （contextLength 即时改、mode 变更时撤销已下发的模式档）、cancel、
+   * resolvePermission、externalRef 四个闭包此前在两处逐字重复）。
+   */
+  private sessionHandle(state: McodeSession): AdapterSession {
     return {
-      id: sessionId,
+      id: state.sessionId,
       send: async (text: string, loop) => {
         if (loop?.contextLength !== undefined) state.contextLength = loop.contextLength;
         if (loop?.mode !== undefined && loop.mode !== state.mode) {
