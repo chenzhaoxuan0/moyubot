@@ -491,7 +491,48 @@ export function QuestionnaireComposer({
     inputRef.current?.focus();
   };
 
-  // 选择选项：单选互斥，多选增减（多选时保留已输入的“其他”内容）
+  // 清空并取消选择“其他”
+  const clearCustomInput = () => {
+    setStepAnswers((prev) => ({
+      ...prev,
+      [currentStepIndex]: {
+        selectedKeys: prev[currentStepIndex]?.selectedKeys ?? new Set<string>(),
+        customInput: "",
+        isInputSelected: false,
+      },
+    }));
+    setIsInputFocused(false);
+    if (document.activeElement === inputRef.current) {
+      inputRef.current?.blur();
+    }
+  };
+
+  // 切换（Toggle）自定义输入激活态
+  const toggleCustomInput = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isInputActive) {
+      clearCustomInput();
+    } else {
+      activateCustomInput();
+    }
+  };
+
+  // 失焦时的智能收起：若无内容输入，则熄灭高亮，避免空输入框一直亮着
+  const handleInputBlur = () => {
+    setIsInputFocused(false);
+    if (!currentAnswer.customInput.trim()) {
+      setStepAnswers((prev) => ({
+        ...prev,
+        [currentStepIndex]: {
+          selectedKeys: prev[currentStepIndex]?.selectedKeys ?? new Set<string>(),
+          customInput: "",
+          isInputSelected: false,
+        },
+      }));
+    }
+  };
+
+  // 选择选项：单选互斥，多选增减（多选时保留已输入的“其他”内容；若为空则取消亮起）
   const selectOption = (key: string) => {
     const nextKeys = new Set(currentAnswer.selectedKeys);
     if (currentStep.isMultiSelect) {
@@ -507,13 +548,14 @@ export function QuestionnaireComposer({
 
     setStepAnswers((prev) => {
       const prevStep = prev[currentStepIndex];
+      const hasCustomText = Boolean(prevStep?.customInput.trim());
       return {
         ...prev,
         [currentStepIndex]: {
           selectedKeys: nextKeys,
-          // 单选模式下清空自定义输入；多选模式下保留已填入的“其他”
+          // 单选模式下清空自定义输入；多选模式下：若有输入文本则保留，若无文本则自动取消高亮
           customInput: currentStep.isMultiSelect ? (prevStep?.customInput ?? "") : "",
-          isInputSelected: currentStep.isMultiSelect ? (prevStep?.isInputSelected ?? false) : false,
+          isInputSelected: currentStep.isMultiSelect ? hasCustomText : false,
         },
       };
     });
@@ -531,7 +573,7 @@ export function QuestionnaireComposer({
             ? (prevStep?.selectedKeys ?? new Set<string>())
             : new Set<string>(),
           customInput: val,
-          isInputSelected: true,
+          isInputSelected: Boolean(val.trim()),
         },
       };
     });
@@ -579,13 +621,17 @@ export function QuestionnaireComposer({
         }
       } else if (e.key === "Escape") {
         e.preventDefault();
-        handleClose();
+        if (isInputActive) {
+          clearCustomInput();
+        } else {
+          handleClose();
+        }
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentStep, currentAnswer, canGoNext, hasCurrentAnswer]);
+  }, [currentStep, currentAnswer, canGoNext, hasCurrentAnswer, isInputActive]);
 
   const handleSubmit = () => {
     const payloads: string[] = [];
@@ -779,8 +825,11 @@ export function QuestionnaireComposer({
             <div className="flex items-center gap-2">
               {/* 2. 中间层输入框条：仅此层在激活时呈现主题色边框（对齐图 2） */}
               <div
-                onMouseDown={activateCustomInput}
-                onClick={activateCustomInput}
+                onMouseDown={(e) => {
+                  if (e.target !== inputRef.current) {
+                    activateCustomInput();
+                  }
+                }}
                 className={cn(
                   "relative flex flex-1 items-center rounded-xl border px-3 py-1.5 transition-all duration-150 cursor-text",
                   isInputActive
@@ -788,24 +837,46 @@ export function QuestionnaireComposer({
                     : "border-line-soft/80 bg-rail/40 dark:bg-white/[0.03] hover:border-teal/40 hover:bg-line-soft/50 dark:hover:bg-white/[0.06]",
                 )}
               >
-                <PenLine
-                  size={14}
-                  className={cn("mr-2 shrink-0 transition-colors", isInputActive ? "text-teal" : "text-ash")}
-                />
+                {/* 笔图标：点击支持 Toggle 激活 / 取消 */}
+                <button
+                  type="button"
+                  onClick={toggleCustomInput}
+                  className="mr-2 shrink-0 p-0.5 rounded text-ash hover:text-ink transition cursor-pointer"
+                  title={isInputActive ? "点击取消选择其他" : "选择其他并输入"}
+                >
+                  <PenLine
+                    size={14}
+                    className={cn("transition-colors", isInputActive ? "text-teal" : "text-ash")}
+                  />
+                </button>
+
                 {/* 3. 最里层 input：绝对无任何外框与阴影，杜绝内外发光重叠（对齐图 2） */}
                 <input
                   ref={inputRef}
                   type="text"
                   value={currentAnswer.customInput}
                   onFocus={activateCustomInput}
-                  onMouseDown={activateCustomInput}
-                  onClick={activateCustomInput}
-                  onBlur={() => setIsInputFocused(false)}
+                  onBlur={handleInputBlur}
                   onChange={(e) => handleInputChange(e.target.value)}
                   placeholder="在这里输入..."
                   className="w-full bg-transparent text-body-sm text-ink outline-none border-none ring-0 shadow-none focus:outline-none focus:border-none focus:ring-0 focus:shadow-none placeholder:text-ash/70"
                   style={{ outline: "none", boxShadow: "none", border: "none" }}
                 />
+
+                {/* 取消选择其他 / 清空按钮 */}
+                {isInputActive && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      clearCustomInput();
+                    }}
+                    className="ml-1 p-0.5 rounded-full text-ash hover:text-ink hover:bg-line-soft transition cursor-pointer shrink-0"
+                    title="取消选择其他 / 清空输入"
+                  >
+                    <X size={13} />
+                  </button>
+                )}
               </div>
 
               {canGoNext && hasCurrentAnswer ? (
