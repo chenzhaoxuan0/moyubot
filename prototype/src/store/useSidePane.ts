@@ -43,25 +43,25 @@ function withoutUnread(unread: Readonly<Record<string, true>>, tabId: string): R
 }
 
 /**
- * v5（2026-10-27）：264 实测后用户定稿 300 —— 即本项目最初的默认宽。键位随之
- * 升一位做一次性重置，清掉复测期间可能拖出的存量值。读档时顺带清掉 v1-v4 残键。
+ * v6（2026-10-27）：300 实测后用户上调到 350。键位随之升一位做一次性重置，
+ * 清掉期间的拖拽存量值。读档时顺带清掉 v1-v5 残键。
  * v2 起盘上的宽度只来自用户拖拽落定（程序性 resize 不落盘，见 SidePanePanel 的
  * onResize 与 commitPaneWidth）—— 读到什么信什么。
  */
-const WIDTH_KEY = "agent-workbench:sidepane-width-px.v5";
+const WIDTH_KEY = "agent-workbench:sidepane-width-px.v6";
 const WIDTH_KEY_STALE = [
+  "agent-workbench:sidepane-width-px.v5",
   "agent-workbench:sidepane-width-px.v4",
   "agent-workbench:sidepane-width-px.v3",
   "agent-workbench:sidepane-width-px.v2",
   "agent-workbench:sidepane-width-px",
 ] as const;
 /**
- * 默认宽 = 300（2026-10-27 用户定稿：264 偏窄、300 合适；面板是按需查看的侧写
- * 列，300px 下功能主页与历史列表均可读）。最窄即默认宽：tab 条是 overflow-x-auto
- * 的横向滚动条，窄了只是标签条内滚动。
+ * 默认宽 = 350（2026-10-27 用户定稿：300 偏窄、350 合适）。最窄即默认宽：
+ * tab 条是 overflow-x-auto 的横向滚动条，窄了只是标签条内滚动。
  */
-const SIDE_PANE_DEFAULT = 300;
-const SIDE_PANE_MIN = 300;
+const SIDE_PANE_DEFAULT = 350;
+const SIDE_PANE_MIN = 350;
 /** 「最近关闭」上限（ZCode recentClosedSidePaneTabs 同款）：够后悔，不无限堆 */
 const RECENTLY_CLOSED_MAX = 8;
 
