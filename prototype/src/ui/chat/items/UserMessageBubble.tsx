@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowUp, CalendarClock, Check, Copy, PencilLine, X } from "lucide-react";
+import { ArrowUp, CalendarClock, Check, Copy, PencilLine, Undo2, X } from "lucide-react";
 import type { ChatAttachment } from "../../../core/attachments.ts";
 import { AttachmentsBar } from "../../AttachmentsBar.tsx";
 import { useWorkbench } from "../../../store/useWorkbench.ts";
@@ -39,7 +39,7 @@ export function UserMessageBubble({
   sessionId: string;
   /** 消息来源（docs/23）："automation" = 定时任务到点代发 —— 气泡上方亮「定时」徽标 */
   origin?: string;
-  /** 时间线最后一条用户消息：编辑重发只对它开放（latestQueryEditOnly） */
+  /** 时间线最后一条用户消息 */
   isLatestUserTurn: boolean;
   busy: boolean;
   /** 发送时间戳 */
@@ -49,6 +49,7 @@ export function UserMessageBubble({
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(text);
   const editAndResend = useWorkbench((s) => s.editAndResend);
+  const recallMessage = useWorkbench((s) => s.recallMessage);
   const sourceStatus = useWorkbench((s) => s.sessions.find((x) => String(x.id) === sessionId)?.status);
 
   const blocked =
@@ -57,9 +58,14 @@ export function UserMessageBubble({
     sourceStatus === "awaiting_permission" ||
     sourceStatus === "awaiting_input";
   // 本地合成气泡的假 messageId（u${seq}，echo 尚未回填）不能做账本锚点
-  const anchorReady = /^user-\d+$/.test(messageId);
-  const canEdit = isLatestUserTurn && !blocked && anchorReady;
-  const disabledTitle = blocked ? "先让这一轮落定" : "锚点还没落进账本，稍等一下再试";
+  const anchorReady = /^user-\d+$/.test(messageId) || (Boolean(messageId) && !messageId.startsWith("temp_"));
+  const canEdit = !blocked && anchorReady;
+  const canRecall = isLatestUserTurn && anchorReady;
+  const disabledTitle = blocked ? "当前正在执行中，先让这一轮落定" : "锚点还没落进账本，稍等一下再试";
+
+  const editTitle = isLatestUserTurn
+    ? "原位编辑并重发（替换本轮重新开始）"
+    : "从该历史消息开启新分支会话并重发";
 
   const openEdit = () => {
     setEditDraft(text);
@@ -71,6 +77,14 @@ export function UserMessageBubble({
     if (v === "") return;
     setEditing(false);
     void editAndResend({ ofSessionId: sessionId as never, anchorMessageId: messageId, text: v });
+  };
+
+  const handleRecall = () => {
+    void recallMessage({
+      ofSessionId: sessionId as never,
+      anchorMessageId: messageId,
+      text,
+    });
   };
 
   // ---- 编辑态：气泡原位替换为编辑器 ----
@@ -97,7 +111,9 @@ export function UserMessageBubble({
           />
           <div className="mt-1.5 flex items-center gap-2">
             <span className="min-w-0 flex-1 truncate text-caption text-ash">
-              重发将在新分支替换这一轮（原分支保留可回看，附件与文件改动不回滚）
+              {isLatestUserTurn
+                ? "重发将替换本轮对话（原分支保留可回看，附件与文件改动不回滚）"
+                : "发送将从此轮前开启新分支会话（原分支完整保留，以此修改作为新分支的首条消息）"}
             </span>
             <button
               onClick={() => setEditing(false)}
@@ -137,17 +153,29 @@ export function UserMessageBubble({
       })
     : null;
 
-  const editEntry = isLatestUserTurn ? (
+  const recallEntry = isLatestUserTurn ? (
+    <button
+      onClick={handleRecall}
+      disabled={!canRecall}
+      aria-label="撤回消息"
+      title={canRecall ? "撤回此消息：中止执行并将内容退回输入框重新编辑" : "正在发送中，稍候可撤回"}
+      className="flex shrink-0 cursor-pointer items-center rounded-btn p-1 text-ash opacity-60 transition hover:bg-line-soft hover:text-ink group-hover/user:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      <Undo2 size={12} />
+    </button>
+  ) : null;
+
+  const editEntry = (
     <button
       onClick={openEdit}
       disabled={!canEdit}
       aria-label="编辑重发"
-      title={canEdit ? "编辑这条消息并重新发送：在新分支里替换这一轮（原位编辑，不进输入框）" : disabledTitle}
+      title={canEdit ? editTitle : disabledTitle}
       className="flex shrink-0 cursor-pointer items-center rounded-btn p-1 text-ash opacity-60 transition hover:bg-line-soft hover:text-ink group-hover/user:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
     >
       <PencilLine size={12} />
     </button>
-  ) : null;
+  );
 
   const actionEntries = (
     <div className="flex shrink-0 items-center gap-1 opacity-60 transition group-hover/user:opacity-100">
@@ -156,6 +184,8 @@ export function UserMessageBubble({
           {timeLabel}
         </span>
       )}
+      {recallEntry}
+      {editEntry}
       <button
         onClick={copyText}
         aria-label="复制此消息"
@@ -164,7 +194,6 @@ export function UserMessageBubble({
       >
         {copied ? <Check size={12} className="text-teal" /> : <Copy size={12} />}
       </button>
-      {editEntry}
     </div>
   );
 

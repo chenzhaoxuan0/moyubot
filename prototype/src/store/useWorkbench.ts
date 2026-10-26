@@ -279,6 +279,15 @@ interface WorkbenchState {
   /** 放弃分叉意图 —— 零持久化 */
   cancelFork: () => void;
   /**
+   * 撤回对话气泡：将消息退回 Composer，时间线截断到该轮之前，并进入 revision 分叉意图态，
+   * 用户修改后在输入框发送，无缝从该分叉点继续参与 agent loop。
+   */
+  recallMessage: (input: {
+    ofSessionId: SessionId;
+    anchorMessageId: string;
+    text: string;
+  }) => Promise<void>;
+  /**
    * 编辑重发（就地编辑形态，参考 ZCode editUserQuery 的交互心智）：在用户消息
    * 原位编辑并点重发 —— revision 分叉意图 + 立即发送，不经过 composer 意图条。
    * 发送失败时意图保留（composer 提示条兜底可见可取消）。
@@ -950,7 +959,63 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     })),
   cancelFork: () => set({ pendingFork: null }),
 
+  recallMessage: async (input) => {
+    const s = get();
+    // 1. 若当前会话处于运行态或忙态，先停止当前运行
+    if (s.busy || s.sessions.find((x) => String(x.id) === String(input.ofSessionId))?.status === "running") {
+      try {
+        get().cancelRun();
+      } catch (err) {
+        console.warn("[workbench] 撤回时 cancelRun 失败（继续撤回流程）", err);
+      }
+    }
+
+    // 2. 将内容回填到底部输入框，触发自动聚焦
+    get().setDraft(input.text);
+
+    // 3. 记录分叉意图（revision）：下一条发送的消息将从此轮之前开启新段
+    set({
+      pendingFork: {
+        ofSessionId: input.ofSessionId,
+        anchorMessageId: input.anchorMessageId,
+        kind: "revision",
+      },
+    });
+
+    // 4. 从前端时间线即时剔除该用户消息及其之后产生的所有事件
+    set((state) => {
+      const idx = state.timeline.findIndex((t) => {
+        const ev = t.event;
+        return (
+          (ev.type === "message.delta" && ev.role === "user" && ev.messageId === input.anchorMessageId) ||
+          (ev.type === "message.completed" && ev.messageId === input.anchorMessageId)
+        );
+      });
+
+      if (idx >= 0) {
+        return {
+          timeline: state.timeline.slice(0, idx),
+          busy: false,
+        };
+      }
+      return { busy: false };
+    });
+
+    get().pushNotice(
+      "已撤回消息",
+      "内容已退回输入框，可重新编辑后发送（将在新分支中替换此轮）。",
+      { level: "info" },
+    );
+  },
+
   editAndResend: async (input) => {
+    if (get().busy) {
+      try {
+        get().cancelRun();
+      } catch {
+        // ignore
+      }
+    }
     // revision 意图 + 立即发送：run 的 fork 分支会带着意图直接开 revision 段
     set({
       pendingFork: {
