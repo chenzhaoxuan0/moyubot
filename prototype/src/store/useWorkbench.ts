@@ -14,7 +14,10 @@ import {
   asRuntimeId,
   asSessionId,
   asUnitId,
+  DEFAULT_CONTEXT_MANIFEST,
+  ensureContextPresets,
   normalizeContextManifest,
+  resolveActivePresetName,
   resolveEffectiveTurnManifest,
   LEGACY_CONTEXT_MANIFEST,
   type ContextManifest,
@@ -171,6 +174,21 @@ interface WorkbenchState {
    * 快捷开关（记忆选择器 / Context 面板）都走这一条路，渠道会话天然同步。
    */
   patchUnitContext: (unitId: UnitId | string, patch: Partial<ContextManifest>) => Promise<void>;
+  /**
+   * 上下文预设统一写层（2026-10-26 指针模型 v2）——设置页与输入框胶囊共用，
+   * 两个消费面控制的是同一份 bot.json。预设名单（contextPresets）是唯一事实源：
+   * 「默认」是名单里真实可编辑的一条；contextManifest 永远镜像选中预设的清单
+   * （run / 渠道会话读的就是它）；在哪个预设下改清单就是改哪个预设，自动保存。
+   */
+  selectContextPreset: (unitId: UnitId | string, name: string) => Promise<void>;
+  /** 改注入清单 = 合并写进当前选中的预设（含默认），随写 contextManifest 镜像 */
+  patchContextPresetManifest: (unitId: UnitId | string, patch: Partial<ContextManifest>) => Promise<void>;
+  /** 新建自定义预设（自动命名 自定义N，内容复制当前清单）并选中，返回新名；失败返回 null */
+  createContextPreset: (unitId: UnitId | string) => Promise<string | null>;
+  /** 预设改名（同步更新选中指针）；空名/重名会被拒并通知 */
+  renameContextPreset: (unitId: UnitId | string, oldName: string, newName: string) => Promise<void>;
+  /** 删除预设；删的是选中项时选中回落名单第一条并应用其清单；名单删空自动补种「默认」 */
+  deleteContextPreset: (unitId: UnitId | string, name: string) => Promise<void>;
   /**
    * 按 bot 写任意定义字段（2026-10-23，预设指针等小写的统一通道）：fresh 读取 +
    * 三锁 + **冲突自愈**（store 锁基线过期时拉盘上真值重试一次——与 patchUnitContext
@@ -603,6 +621,113 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
         { level: "warn" },
       );
       throw err;
+    }
+  },
+
+  selectContextPreset: async (unitId, name) => {
+    const u = get().units.find((x) => String(x.id) === String(unitId));
+    if (u === undefined) return;
+    const presets = ensureContextPresets(u.contextPresets);
+    const hit = presets.find((c) => c.name === name);
+    if (hit === undefined) return; // 名单里没有：静默忽略（并发删除/改名窗口）
+    try {
+      await get().putUnitFields(u.id, {
+        contextPresets: presets,
+        contextPresetActive: hit.name,
+        contextManifest: normalizeContextManifest(hit.manifest),
+      });
+    } catch {
+      /* putUnitFields 已弹通知 */
+    }
+  },
+
+  patchContextPresetManifest: async (unitId, patch) => {
+    const u = get().units.find((x) => String(x.id) === String(unitId));
+    if (u === undefined) return;
+    const presets = ensureContextPresets(u.contextPresets);
+    const activeName = resolveActivePresetName(u.contextPresetActive, presets);
+    // 底板用已应用的 contextManifest（与选中预设镜像同步），而不是预设快照 ——
+    // 两者在极端并发下可能短暂不一致时，以 run 实际读的那份为准
+    const merged: ContextManifest = { ...normalizeContextManifest(u.contextManifest), ...patch };
+    try {
+      await get().putUnitFields(u.id, {
+        contextPresets: presets.map((c) => (c.name === activeName ? { ...c, manifest: merged } : c)),
+        contextPresetActive: activeName,
+        contextManifest: merged,
+      });
+    } catch {
+      /* putUnitFields 已弹通知 */
+    }
+  },
+
+  createContextPreset: async (unitId) => {
+    const u = get().units.find((x) => String(x.id) === String(unitId));
+    if (u === undefined) return null;
+    const presets = ensureContextPresets(u.contextPresets);
+    const used = new Set(presets.map((c) => c.name));
+    let name = "";
+    for (let i = 1; i <= 99; i++) {
+      const candidate = `自定义${i}`;
+      if (!used.has(candidate)) {
+        name = candidate;
+        break;
+      }
+    }
+    if (name === "") name = `自定义${Date.now() % 1000}`;
+    try {
+      await get().putUnitFields(u.id, {
+        contextPresets: [...presets, { name, manifest: normalizeContextManifest(u.contextManifest) }],
+        contextPresetActive: name,
+      });
+      return name;
+    } catch {
+      return null;
+    }
+  },
+
+  renameContextPreset: async (unitId, oldName, newName) => {
+    const u = get().units.find((x) => String(x.id) === String(unitId));
+    const trimmed = newName.trim();
+    if (u === undefined) return;
+    if (trimmed === "") {
+      get().pushNotice("预设改名失败", "名字不能为空", { level: "warn" });
+      return;
+    }
+    const presets = ensureContextPresets(u.contextPresets);
+    if (presets.some((c) => c.name === trimmed && c.name !== oldName)) {
+      get().pushNotice("预设改名失败", `「${trimmed}」已存在，换一个名字`, { level: "warn" });
+      return;
+    }
+    const active = resolveActivePresetName(u.contextPresetActive, presets);
+    try {
+      await get().putUnitFields(u.id, {
+        contextPresets: presets.map((c) => (c.name === oldName ? { ...c, name: trimmed } : c)),
+        ...(active === oldName ? { contextPresetActive: trimmed } : {}),
+      });
+    } catch {
+      /* putUnitFields 已弹通知 */
+    }
+  },
+
+  deleteContextPreset: async (unitId, name) => {
+    const u = get().units.find((x) => String(x.id) === String(unitId));
+    if (u === undefined) return;
+    const next = ensureContextPresets((u.contextPresets ?? []).filter((c) => c.name !== name));
+    const active = resolveActivePresetName(
+      (u.contextPresetActive ?? "") === name ? undefined : u.contextPresetActive,
+      next,
+    );
+    const nextManifest = normalizeContextManifest(
+      next.find((c) => c.name === active)?.manifest ?? DEFAULT_CONTEXT_MANIFEST,
+    );
+    try {
+      await get().putUnitFields(u.id, {
+        contextPresets: next,
+        contextPresetActive: active,
+        contextManifest: nextManifest,
+      });
+    } catch {
+      /* putUnitFields 已弹通知 */
     }
   },
 

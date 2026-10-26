@@ -1,28 +1,24 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  BookOpenText,
   Brain,
   Check,
   CheckSquare,
-  ChevronRight,
   ExternalLink,
   FileCode,
   FileText,
-  RotateCcw,
   ShieldAlert,
   Sparkles,
   Square,
   User,
   Wrench,
-  Zap,
 } from "lucide-react";
 import { useWorkbench, selectActiveUnit, MANIFEST_ALL_OFF } from "../store/useWorkbench.ts";
 import {
-  AUTO_PRESET_NAME,
-  DEFAULT_CONTEXT_MANIFEST,
-  LEGACY_CONTEXT_MANIFEST,
+  ensureContextPresets,
   normalizeContextManifest,
+  resolveActivePresetName,
   resolveEffectiveTurnManifest,
-  sameContextManifest,
   type ContextManifest,
   type TurnContextConfig,
 } from "../core/units.ts";
@@ -35,9 +31,10 @@ import { cn } from "./cn.ts";
  * 核心设计哲学：
  * 1. 默认行为极度丝滑：首轮默认跟随 Bot 预设，续聊默认不重复注入；
  * 2. 极致的自由度与自主权：用户可在任意一轮随时开启/关闭注入，自主勾选要注入的文件；
- * 3. 快捷预设（2026-10-23 五次定稿，与 bot 设置多边同步）：预设选择是 bot 级概念
- *    （bot.json contextPresetActive），这里与设置同一条写路、同一份高亮；临时覆盖
- *    （跟随预设复位 / 手动勾选 / 清空）按 bot 记忆，切走再切回原样恢复；
+ * 3. 与 bot 设置同一套预设模型（2026-10-26 指针模型 v2）：预设名单是唯一事实源，
+ *    「默认」是名单里真实可编辑的一条；这里点胶囊/勾文件与设置页走同一条写路
+ *    （store 统一写层），勾选改动直接写进当前选中的预设（自动保存，无草稿槽）；
+ *    仅「清空」是本轮临时覆盖（mode:"off"，不动预设）；
  * 4. 默认「单轮生效」防污染：发送后自动复位为后续默认，亦可勾选「本会话保持」。
  */
 export function ComposerContextPicker({ compact }: { compact?: boolean } = {}) {
@@ -101,47 +98,53 @@ export function ComposerContextPicker({ compact }: { compact?: boolean } = {}) {
       : "附加上下文";
 
   // 单独切换某一项（兜底底板 = 全关常量，与 run 的分叉/新段覆盖同一份）
+  // 开关改动 = 改当前选中的预设（2026-10-26 指针模型 v2，与 bot 设置同一写层）：
+  // 在「默认」下勾选就是改默认预设（可保存），在自定义N下勾选就是改自定义N——
+  // 不再是「仅本轮临时覆盖」（旧 custom 模式造成两处 UI 看似各管一套的根源）。
+  const patchPresetManifest = useWorkbench((s) => s.patchContextPresetManifest);
+
   const toggleItem = (key: keyof ContextManifest) => {
     const base = effectiveManifest ?? { ...MANIFEST_ALL_OFF };
     const currentVal = base[key];
     const nextVal = key === "agentsMd" ? (currentVal === "off" ? "on" : "off") : !currentVal;
 
-    const nextCustom: ContextManifest = {
-      ...base,
-      firstTurnInject: true,
-      [key]: nextVal,
-    };
-
-    setTurnContextConfig({
-      mode: "custom",
-      customManifest: nextCustom,
-    });
+    if (unit === undefined) {
+      // 没有可写的单元（未选 bot）：退化为仅本轮的临时清单，点了至少有反应
+      setTurnContextConfig({
+        mode: "custom",
+        customManifest: { ...base, firstTurnInject: true, [key]: nextVal },
+      });
+      return;
+    }
+    // 本轮清空（mode off）下勾选：先回 bot_default，让这次编辑立即生效
+    if (turnContextConfig.mode === "off") {
+      setTurnContextConfig({ mode: "bot_default" });
+    }
+    void patchPresetManifest(unit.id, { [key]: nextVal } as Partial<ContextManifest>);
   };
 
-  // 快捷预设（2026-10-23 五次定稿，与 bot 设置**多边同步**）：预设选择是 bot 级概念，
-  // 存 bot.json contextPresetActive——这里点胶囊 = 与设置里点同款（写指针+清单），
-  // 设置里选了自定义1这里同样高亮自定义1；切走再切回从 bot.json/记忆表恢复。
-  // 「跟随预设」= 清除本轮覆盖（回到 bot 预设）；「清空」= 本轮不注入（临时覆盖）。
-  const presets = unit?.contextPresets ?? [];
-  const customs = presets.filter((c) => c.name !== AUTO_PRESET_NAME);
-  const autoPreset = presets.find((c) => c.name === AUTO_PRESET_NAME);
-  const activePreset = unit?.contextPresetActive ?? "";
-  const putUnitFields = useWorkbench((s) => s.putUnitFields);
-  const resetTurnContextConfig = useWorkbench((s) => s.resetTurnContextConfig);
+  // 快捷预设（与 bot 设置同一份名单、同一写层）：名单即事实源，「默认」是名单里
+  // 真实可编辑的一条；选中指针由 resolveActivePresetName 兜底（空串/旧 "default"
+  // 指针/已删条目 → 名单第一条），高亮口径与设置页完全一致。
+  const presets = ensureContextPresets(unit?.contextPresets);
+  const activePreset = resolveActivePresetName(unit?.contextPresetActive, presets);
+  const selectPresetAction = useWorkbench((s) => s.selectContextPreset);
 
-  /** 点预设胶囊：写 bot 级选中指针 + 应用清单（与 bot 设置同一条路），并清掉本轮覆盖 */
-  const selectPreset = (name: string, m: ContextManifest): void => {
+  /**
+   * 点预设胶囊：store 统一写层写指针 + 应用清单（与 bot 设置同一条路），并把
+   * 本轮切回 bot_default（清空态下点预设 = 恢复注入）。注意不能
+   * resetTurnContextConfig——它落回 DEFAULT_TURN_CONFIG（mode:"off"），点预设
+   * 反而亮「清空」，这是 347c09f 后「预设点了没反应」的根因。
+   */
+  const selectPreset = (name: string): void => {
     if (unit === undefined) return;
-    resetTurnContextConfig();
-    void putUnitFields(unit.id, { contextPresetActive: name, contextManifest: m }).catch(() => {});
+    setTurnContextConfig({ mode: "bot_default", customManifest: undefined });
+    void selectPresetAction(unit.id, name);
   };
 
-  /** 高亮口径：bot_default 看选中指针；custom 看临时清单与哪个预设内容一致 */
-  const presetActive = (name: string, m?: ContextManifest): boolean => {
-    if (turnContextConfig.mode === "custom") return m !== undefined && sameContextManifest(turnContextConfig.customManifest ?? DEFAULT_CONTEXT_MANIFEST, m);
-    if (turnContextConfig.mode !== "bot_default") return false;
-    return activePreset === name;
-  };
+  /** 高亮口径：mode 必须是 bot_default 且指针指向该条；custom/off 时预设行
+   *  不高亮（高亮落在「清空」或清单本身） */
+  const presetActive = (name: string): boolean => turnContextConfig.mode === "bot_default" && name === activePreset;
 
   const applyPreset = (preset: "bot_default" | "off") => {
     if (preset === "bot_default") {
@@ -166,7 +169,9 @@ export function ComposerContextPicker({ compact }: { compact?: boolean } = {}) {
               : "border-line-soft bg-card/60 text-graphite hover:bg-line-soft hover:text-ink",
           )}
         >
-          {isFirstTurn ? <Sparkles size={14} /> : <Zap size={14} />}
+          {/* 图标与右侧执行器/模型选择器的 Sparkles 区分：上下文注入用「翻开的
+              书」—— 一眼读出「资料/记忆注入」，而不是又一个魔棒 */}
+          <BookOpenText size={14} />
           {isEnabled && <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-teal" />}
         </button>
       ) : (
@@ -182,11 +187,7 @@ export function ComposerContextPicker({ compact }: { compact?: boolean } = {}) {
               : "border-line-soft bg-card/40 text-graphite hover:text-ink hover:bg-line-soft/60",
           )}
         >
-          {isFirstTurn ? (
-            <Sparkles size={13} className={cn(isEnabled ? "text-teal" : "text-graphite")} />
-          ) : (
-            <Zap size={13} className={cn(isEnabled ? "text-teal" : "text-graphite")} />
-          )}
+          <BookOpenText size={13} className={cn(isEnabled ? "text-teal" : "text-graphite")} />
           <span className="font-mono text-[11px] tracking-tight">{buttonLabel}</span>
         </button>
       )}
@@ -229,65 +230,25 @@ export function ComposerContextPicker({ compact }: { compact?: boolean } = {}) {
             </button>
           </div>
 
-          {/* 快捷预设（与 bot 设置同一份名单、同一份选中指针——多边同步） */}
+          {/* 快捷预设（与 bot 设置同一份名单、同一写层）：名单里第一条即「默认」，
+              真实可编辑；清空 = 仅本轮不注入（临时覆盖，不动预设） */}
           <div className="pt-2 pb-1.5">
             <div className="text-[10px] text-ash font-medium mb-1.5 flex items-center justify-between">
               <span>快捷预设</span>
               <span className="font-mono text-[9px] text-ash/80">与 bot 设置同步</span>
             </div>
             <div className="flex flex-wrap items-center gap-1 select-none">
-              <button
-                type="button"
-                onClick={() => resetTurnContextConfig()}
-                title="清除本轮覆盖，回到此 Bot 选中的预设"
-                className={cn(
-                  "rounded-full border px-2.5 py-1 text-[11px] transition truncate text-center",
-                  turnContextConfig.mode === "bot_default" && activePreset === ""
-                    ? "border-teal/40 bg-teal-tint text-teal font-medium"
-                    : "border-line-soft text-graphite hover:bg-line-soft hover:text-ink",
-                )}
-              >
-                跟随预设
-              </button>
-              <button
-                type="button"
-                onClick={() => selectPreset("default", DEFAULT_CONTEXT_MANIFEST)}
-                title="选中默认预设（Bare 全关）——与 bot 设置同款，全局生效"
-                className={cn(
-                  "rounded-full border px-2.5 py-1 text-[11px] transition truncate text-center",
-                  presetActive("default")
-                    ? "border-teal/40 bg-teal-tint text-teal font-medium"
-                    : "border-line-soft text-graphite hover:bg-line-soft hover:text-ink",
-                )}
-              >
-                默认
-              </button>
-              {autoPreset !== undefined && (
-                <button
-                  type="button"
-                  onClick={() => selectPreset(AUTO_PRESET_NAME, autoPreset.manifest)}
-                  title="自动保存草稿——未选中具名预设时的开关改动暂存在这里"
-                  className={cn(
-                    "rounded-full border px-2.5 py-1 text-[11px] transition truncate text-center",
-                    presetActive(AUTO_PRESET_NAME)
-                      ? "border-teal/40 bg-teal-tint text-teal font-medium"
-                      : "border-teal/25 text-teal/80 hover:bg-teal-tint/50 hover:text-teal",
-                  )}
-                >
-                  {AUTO_PRESET_NAME}
-                </button>
-              )}
-              {customs.map((c) => (
+              {presets.map((c) => (
                 <button
                   key={c.name}
                   type="button"
-                  onClick={() => selectPreset(c.name, c.manifest)}
-                  title={`选中「${c.name}」——与 bot 设置同款，全局生效；开关改动就地更新该预设`}
+                  onClick={() => selectPreset(c.name)}
+                  title={`选中「${c.name}」并应用——与 bot 设置同款，全局生效；此处的开关改动会写进这个预设`}
                   className={cn(
-                    "rounded-full border px-2.5 py-1 text-[11px] transition truncate text-center",
-                    presetActive(c.name, c.manifest)
+                    "rounded-full border px-2.5 py-1 text-[11px] transition truncate text-center cursor-pointer",
+                    presetActive(c.name)
                       ? "border-teal/40 bg-teal-tint text-teal font-medium"
-                      : "border-teal/25 text-teal/80 hover:bg-teal-tint/50 hover:text-teal",
+                      : "border-line-soft text-graphite hover:bg-line-soft hover:text-ink",
                   )}
                 >
                   {c.name}
@@ -296,9 +257,9 @@ export function ComposerContextPicker({ compact }: { compact?: boolean } = {}) {
               <button
                 type="button"
                 onClick={() => applyPreset("off")}
-                title="清空本轮注入（Bare，仅本轮临时覆盖）"
+                title="清空本轮注入（仅本轮临时覆盖，不改预设）"
                 className={cn(
-                  "rounded-full border px-2.5 py-1 text-[11px] transition truncate text-center",
+                  "rounded-full border px-2.5 py-1 text-[11px] transition truncate text-center cursor-pointer",
                   turnContextConfig.mode === "off"
                     ? "border-teal/40 bg-teal-tint text-teal font-medium"
                     : "border-line-soft text-graphite hover:bg-line-soft hover:text-ink",
@@ -309,10 +270,12 @@ export function ComposerContextPicker({ compact }: { compact?: boolean } = {}) {
             </div>
           </div>
 
-          {/* 7 大文件细粒度复选清单 */}
+          {/* 7 大文件细粒度清单：勾选 = 写入当前选中的预设（含默认），自动保存 */}
           <div className="py-2 border-t border-line-soft space-y-1">
             <div className="text-[10px] text-ash font-medium mb-1">
-              {turnContextConfig.mode === "custom" ? "自定义勾选文件（本轮生效）" : "生效文件清单（点击可自定义修改）"}
+              {turnContextConfig.mode === "off"
+                ? `本轮已清空 · 勾选任意项会改「${activePreset}」预设并恢复注入`
+                : `注入清单 · 编辑「${activePreset}」预设（改动自动保存）`}
             </div>
 
             {/* 1. STANDING.md */}

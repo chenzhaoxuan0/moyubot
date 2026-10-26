@@ -13,7 +13,8 @@ import { cn } from "./cn.ts";
  * 遵循用户界面清晰原则：
  * 1. 所有的状态灯光只保留在「左侧栏历史会话列表」的最前方，用于反映单个会话的运行/通知状态；
  * 2. 底栏最左侧第 1 位提供「会话指示灯说明」弹层，详述每种灯光含义与右键控制方式；
- * 3. 底栏的「工作状态」与「后台守护」彻底去灯化，采用纯文字展示，避免不同区域的灯光产生概念混淆。
+ * 3. 底栏的「工作状态」保持纯文字；「后台守护」2026-10-26 起只留图标（颜色 +
+ *    悬停说明表达三态），不再占底栏一行文字。
  *
  * popoverUp：栖在底栏时详情层朝上开（默认朝下，供其他位置复用）。
  * align：底栏内容居左，左锚定（"left"）避免弹层向左出窗。
@@ -295,8 +296,8 @@ export function WorkPhaseBadge({ popoverUp = false, align = "right" }: { popover
 }
 
 /**
- * 后台守护徽标 —— 三态纯文字（刻意去灯化：灯只属于左侧栏会话列表，见文件头
- * 原则 3；不引入任何彩色灯/圆点/状态色，状态差异全靠文字本身）。真实运行态
+ * 后台守护徽标 —— 图标即徽标（2026-10-26 起去文字，只留最前面的 Radio 图标，
+ * 三态靠颜色：离线 loss / 在线 teal / 待机灰；详情在悬停与弹层）。真实运行态
  * 数据源是三个 daemon 内存读数 RPC（都便宜）：
  * - 徽标头三态：channel.status（网关账号数）—— 离线 = daemon 未连接；
  *   待机 = 在线但 0 路网关；在线 · N 路渠道 = 网关账号总数
@@ -386,11 +387,18 @@ export function BackgroundGuardianBadge({ popoverUp = false, align = "right" }: 
       <button
         onClick={() => setOpen((o) => !o)}
         aria-label={`后台守护状态：${label}，点击了解详情`}
-        title={title}
-        className="group flex h-6 cursor-pointer items-center gap-1.5 rounded-btn px-2 text-caption text-graphite transition hover:bg-line-soft hover:text-ink"
+        title={`${label} · ${title}`}
+        className="group flex h-6 w-7 cursor-pointer items-center justify-center rounded-btn text-caption transition hover:bg-line-soft"
       >
-        <Radio size={12} className="text-ash transition group-hover:text-ink" />
-        <span>{label}</span>
+        {/* 图标即徽标（2026-10-26 用户拍板去文字）：状态差异用颜色 + 悬停说明表达
+            —— 离线红、在线（有渠道在跑）teal、待机/连接中灰 */}
+        <Radio
+          size={12}
+          className={cn(
+            "transition",
+            !connected ? "text-loss" : total > 0 ? "text-teal" : "text-ash group-hover:text-ink",
+          )}
+        />
       </button>
 
       {open && (

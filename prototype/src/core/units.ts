@@ -169,8 +169,39 @@ export const DEFAULT_CONTEXT_MANIFEST: ContextManifest = {
   skills: false,
 };
 
-/** 自动保存预设的固定草稿槽名：未选中预设时的开关改动落这里 */
-export const AUTO_PRESET_NAME = "自动保存";
+/**
+ * 默认预设名（2026-10-26 指针模型 v2）：「默认」不再是虚拟常量，而是预设名单里
+ * 一条真实可编辑的条目 —— 在默认下改注入清单就是改这条预设，可保存、可改名，
+ * 与自定义预设同权。旧的「自动保存」草稿槽概念废除（存量条目迁移为普通自定义
+ * 预设，可改名/删除）。
+ */
+export const DEFAULT_PRESET_NAME = "默认";
+
+/**
+ * 预设名单兜底：空名单时种一条「默认」（Bare 全关）。名单非空就完全信盘上 ——
+ * 用户把「默认」改名或删光是合法状态，不补种；选中指针的兜底见
+ * resolveActivePresetName（回落名单第一条）。
+ */
+export function ensureContextPresets(
+  presets: readonly NamedContextPreset[] | undefined,
+): NamedContextPreset[] {
+  const list = presets ?? [];
+  return list.length > 0 ? [...list] : [{ name: DEFAULT_PRESET_NAME, manifest: DEFAULT_CONTEXT_MANIFEST }];
+}
+
+/**
+ * 选中指针解析：指向名单里真实存在的条目；空串 / 旧虚拟默认的存量指针
+ * "default" / 指向已被删掉的条目 → 回落名单第一条（迁移后即「默认」）。
+ * 永远返回名单内的名字 —— 两个消费面（设置页 / 输入框胶囊）的高亮口径一致。
+ */
+export function resolveActivePresetName(
+  active: string | undefined,
+  presets: readonly NamedContextPreset[],
+): string {
+  const a = active ?? "";
+  if (a !== "" && a !== "default" && presets.some((c) => c.name === a)) return a;
+  return presets[0]?.name ?? DEFAULT_PRESET_NAME;
+}
 
 /** 注入矩阵的比对键（firstTurnInject 不参与「与预设一致」的判定） */
 const CONTEXT_MANIFEST_KEYS = ["agentsMd", "soul", "user", "memorySemantic", "memoryDaily", "memoryStanding", "skills"] as const;
@@ -382,10 +413,11 @@ export interface WorkUnit {
    */
   readonly pinnedSkills?: readonly string[];
   /**
-   * 本 bot 的自定义注入预设（2026-10-23）：预设行「存为自定义」把当前
-   * contextManifest 快照成一条命名预设存进 bot.json；bot 设置与输入框的上下文
-   * 胶囊两处同一份名单，点击一键取回。只作取回源，不参与注入判定
-   * （注入永远看 contextManifest 本身）。
+   * 本 bot 的注入预设名单（2026-10-26 指针模型 v2）：唯一事实源，第一条即
+   * 「默认」（真实可编辑，不再是虚拟常量）。bot 设置与输入框的上下文胶囊
+   * 两处同一份名单、同一写层；选中哪个预设，contextManifest 就镜像哪个预设
+   * 的清单，开关改动直接写进当前选中的预设（自动保存）。改名/删除/新建均
+   * 就地维护本名单。
    */
   readonly contextPresets?: readonly NamedContextPreset[];
   /**

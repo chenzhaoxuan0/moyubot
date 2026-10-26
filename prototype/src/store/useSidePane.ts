@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import * as sidePane from "../core/sidePaneTabs.ts";
 import type { UnitId } from "../core/units.ts";
-import { useShell } from "./useShell.ts";
+import { useShell, SIDEBAR_DEFAULT } from "./useShell.ts";
 
 /**
  * 右侧标签面板的 shell 状态 —— tabs/activeTabId 的领域规则全部在
@@ -51,14 +51,13 @@ const WIDTH_KEY = "agent-workbench:sidepane-width-px.v2";
  *  读档时一次性迁移清理 */
 const WIDTH_KEY_V1 = "agent-workbench:sidepane-width-px";
 /**
- * 最小宽 = tab 条不打架的下限：条内固定内容（⌄ 总览 22 + ＋ 22 + ✕ 23 + 内边距
- * 与间距 ≈ 83px）+ 桌面端给系统窗口钮让位的 --wco-w 带（132+4）≈ 219px，再放
- * 一个完整的「功能」标签（≈76px）≈ 295px。窄于此标签被挤瘪、条尾钮滑进系统
- * 钮带 —— 264 时代没事是因为当时条上还少一颗按钮。
- * 最窄即默认宽：面板是按需查看的侧写列，300px 下功能主页与历史列表均可读。
+ * 默认宽 = 左栏常规宽（2026-10-26 用户拍板：右栏默认打开与左栏等宽，此前 300
+ * 偏宽）。最窄即默认宽：tab 条本身是 overflow-x-auto 的横向滚动条，窄了只是
+ * 标签条内滚动（TitleBarClearance 仍让位系统窗口钮），300 时代「最后一个完整
+ * 功能标签」的静态宽度顾虑不再成立。
  */
-const SIDE_PANE_DEFAULT = 300;
-const SIDE_PANE_MIN = 300;
+const SIDE_PANE_DEFAULT = SIDEBAR_DEFAULT;
+const SIDE_PANE_MIN = SIDEBAR_DEFAULT;
 /** 「最近关闭」上限（ZCode recentClosedSidePaneTabs 同款）：够后悔，不无限堆 */
 const RECENTLY_CLOSED_MAX = 8;
 
@@ -123,7 +122,10 @@ function readWidth(): number {
     const raw = window.localStorage.getItem(WIDTH_KEY);
     if (raw !== null) {
       const n = Number(raw);
-      if (Number.isFinite(n) && n >= SIDE_PANE_MIN) return Math.round(n);
+      // 300 是旧默认（也是旧最小值）：盘上恰好 300 几乎必是「从未拖过」的默认
+      // 残留 —— 视为过期，回落新默认（与 useShell 对旧默认 200/351 的处理同款）。
+      // 真拖到 300 的用户会被这一次回落，拖一下就回来了，可接受。
+      if (Number.isFinite(n) && n > 0 && n !== 300) return Math.max(SIDE_PANE_MIN, Math.round(n));
       return SIDE_PANE_DEFAULT;
     }
     // v1 → v2 一次性迁移：v1 的值混有「晚挂载错宽 / 50% 自动分配宽被 onResize
