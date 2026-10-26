@@ -69,6 +69,12 @@ import { TerminalManager } from "./terminal/terminals.ts";
 import { Store } from "./store/db.ts";
 import { listNativeSessions, readNativeSession, readerOf, type NativeSessionSummary } from "./history/index.ts";
 import { syncNativeSession, forgetNativeSyncState, NativeSessionWatcher } from "./history/sync.ts";
+import {
+  knownNativeRefs,
+  materializeImportedSession,
+  startNativeAutoCollect,
+  TERMINAL_BACKFILL_MAX_AGE_MS,
+} from "./history/autocollect.ts";
 import { samePath } from "./history/util.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
 import { QuotaResumeWatcher } from "./automation/quotaResume.ts";
@@ -1262,6 +1268,16 @@ notifications.setPush((row) => broadcastNotification(wss, row));
 const nativeWatcher = new NativeSessionWatcher(store, traceSink, () => wss);
 nativeWatcher.start();
 
+// 外部会话自动收录：周期扫描各 bot 目录匹配的原生存储，把外部终端跑过、尚未
+// 认识的会话自动落为导入行（docs/13 发现层）——「在 bot 目录下任意终端跑 CLI，
+// 会话自己出现在侧栏」就是这条链路；bot.json 的 autoCollect=false 可按 bot 关闭
+const autoCollector = startNativeAutoCollect({
+  store,
+  listBots: () => botRegistry.listBots(),
+  backfillTerminalRefs: backfillUnitTerminalRefs,
+  getWss: () => wss,
+});
+
 // ---- 待办 / GTD（backlog）—— 引擎需要 wss 广播，必须在 attachWs 之后构造 ----------
 
 backlogEngine = new BacklogEngine({
@@ -1943,6 +1959,27 @@ async function resolveNativeTerminalSession(
   return { title: best.title.trim(), resumeRef: best.sessionId };
 }
 
+/**
+ * 回填一个单元 terminal_runs 里缺失的 resumeRef（unit.history 手动终端行回溯的
+ * 单元化版本，自动收录在差集前调用）：工作台自己派发的 TUI 会话先进 known 集，
+ * 不会被自动收录重复落成 imp_ 行。回溯走 TTL 缓存，每轮开销可忽略。
+ */
+async function backfillUnitTerminalRefs(unitId: string, rootPath: string): Promise<void> {
+  for (const r of store.listTerminalRuns(unitId, 20)) {
+    if (r.resumeRef !== null && r.resumeRef !== "") continue;
+    // 古老的死运行没有原生 id 可回溯，每轮重试无意义
+    if (Date.now() - r.startedAt > TERMINAL_BACKFILL_MAX_AGE_MS) continue;
+    const resolved = await resolveNativeTerminalSession(r.runtimeId, rootPath, r.startedAt, r.finishedAt);
+    if (resolved !== null && resolved.resumeRef !== null) {
+      store.updateTerminalRunResume(
+        r.id,
+        resolved.title !== "" ? resolved.title : (r.title ?? "交互式会话"),
+        resolved.resumeRef,
+      );
+    }
+  }
+}
+
 registerMethod("unit.history", async (params) => {
   const p = (params ?? {}) as { unitId?: string; limit?: number };
   const targetUnitId = typeof p.unitId === "string" && p.unitId.trim() !== "" ? p.unitId.trim() : null;
@@ -2247,19 +2284,9 @@ registerMethod("history.native.detail", async (params) => {
 // 面向「工作台外、直接在外部终端里跑的 CLI 会话」：按 bot 工作区 + 执行器列出
 // 原生会话（cc-switch 式的查询面），勾选后落进 sessions 表（source = "imported"，
 // id 用 imp_ 前缀与真实会话隔离，cli_ref 存原生 id）。导入后的行在 unit.history
-// 里以 terminal 形态出现 —— 点击走 TUI resume（原生 id），展开走原生转录回看。
-
-/** 工作台已认识的 (执行器|原生会话 id) 集：sessions.cliRef + terminal_runs.resume_ref */
-function knownNativeRefs(): Set<string> {
-  const known = new Set<string>();
-  for (const s of store.listSessions()) {
-    if (s.cliRef !== null && s.cliRef !== "") known.add(`${s.runtimeId}|${s.cliRef}`);
-  }
-  for (const r of store.listTerminalRuns(undefined, 500)) {
-    if (r.resumeRef !== null && r.resumeRef !== "") known.add(`${r.runtimeId.replace(/^daemon:/, "")}|${r.resumeRef}`);
-  }
-  return known;
-}
+// 里以 session 形态出现（launchMode=chat）——点击进聊天页（events.since 触发原生
+// 转录投影）、右键可 TUI resume（原生 id）。自动收录（autocollect.ts）与之共用
+// 落库与去重口径；手动面是自动收录关闭或漏收时的显式兜底。
 
 registerMethod("history.import.list", async (params) => {
   const p = (params ?? {}) as { unitId?: string; runtimeId?: string; limit?: number };
@@ -2275,7 +2302,7 @@ registerMethod("history.import.list", async (params) => {
   const executorIds = typeof p.runtimeId === "string" && p.runtimeId !== "" ? [p.runtimeId.replace(/^daemon:/, "")] : [];
   const limit = Math.min(Math.max(typeof p.limit === "number" ? Math.round(p.limit) : 60, 1), 200);
   const rows = await listNativeSessions(rootPath, executorIds, limit);
-  const known = knownNativeRefs();
+  const known = knownNativeRefs(store);
   return {
     rootPath,
     sessions: rows.map((r) => ({ ...r, known: known.has(`${r.executorId}|${r.sessionId}`) })),
@@ -2297,7 +2324,7 @@ registerMethod("history.import.apply", async (params) => {
   const bots = await botRegistry.listBots().catch(() => [] as { id?: string; rootPath?: unknown; name?: unknown }[]);
   const bot = bots.find((b) => String(b.id ?? "") === p.unitId);
   const rootPath = bot !== undefined && typeof bot.rootPath === "string" && bot.rootPath !== "" ? bot.rootPath : null;
-  const known = knownNativeRefs();
+  const known = knownNativeRefs(store);
   let imported = 0;
   let skipped = 0;
   const keys: string[] = [];
@@ -2308,31 +2335,25 @@ registerMethod("history.import.apply", async (params) => {
       skipped++;
       continue;
     }
-    const startedAt = typeof s.startedAt === "number" && Number.isFinite(s.startedAt) ? s.startedAt : 0;
-    const updatedAt = typeof s.updatedAt === "number" && Number.isFinite(s.updatedAt) ? s.updatedAt : startedAt;
-    const title = typeof s.title === "string" && s.title.trim() !== "" ? s.title.trim().slice(0, 120) : "（外部导入会话）";
-    const rowId = `imp_${bare}_${nativeId}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 200);
-    store.upsertSession({
-      // imp_ 前缀与真实会话 id 空间隔离；原生 id 里可能出现的不安全字符压成 _
-      id: rowId,
+    const rowId = materializeImportedSession(store, {
       unitId: p.unitId,
-      runtimeId: bare,
-      title,
-      status: "done",
-      startedAt,
-      endedAt: updatedAt,
-      cliRef: nativeId,
       rootPath,
-      source: "imported",
-      conversationId: null,
-      lastSeq: 0,
-      turnCount: 0,
-      forkOfSession: null,
-      forkAtSeq: null,
-      forkKind: null,
-      stats: { messages: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: 0 },
+      executorId: bare,
+      native: {
+        sessionId: nativeId,
+        title: typeof s?.title === "string" ? s.title : "",
+        startedAt: typeof s?.startedAt === "number" && Number.isFinite(s.startedAt) ? s.startedAt : 0,
+        updatedAt: typeof s?.updatedAt === "number" && Number.isFinite(s.updatedAt) ? s.updatedAt : 0,
+      },
+      known,
     });
-    known.add(`${bare}|${nativeId}`);
+    if (rowId === null) {
+      skipped++;
+      continue;
+    }
+    // 导入是显式关注动作：落库即开始实时同步外部续写（不用等打开一次），
+    // 25 个的 watch 上限正是给「正在看 / 刚导入」的会话留的
+    nativeWatcher.watchSession(rowId);
     keys.push(`session-${rowId}`);
     imported++;
   }
@@ -3793,6 +3814,8 @@ registerMethod("session.syncNative", async (params) => {
 });
 registerMethod("history.refreshNative", () => {
   nativeListCache.clear();
+  // 手动刷新的期待是「现在就把新会话找出来」：顺带跑一轮自动收录，不等 30s 轮询
+  void autoCollector.collectNow();
   return { refreshed: true };
 });
 // 孤儿治理面（WP-10）：列出可回收的死会话 / 回收指定会话（轨迹文件永不删）。

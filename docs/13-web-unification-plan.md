@@ -274,3 +274,23 @@ typecheck 与 daemon 冒烟通过。
 反向请求原语泛化（Phase 2 扩展项）——现有 permission.requested 已覆盖各家
 审批流，泛化留待第二个真实用例。
 
+---
+
+## 十一、补充：外部会话自动收录（2026-10-27）
+
+「会话事实源在磁盘上，Web 是另一个读者」补上发现层：此前外部终端跑的 CLI
+会话只有**手动导入**一条路（history.import.\* 查询面），新会话不会自己出现。
+现在 daemon 周期扫描（30s 一轮，`backend/src/history/autocollect.ts`）各 bot
+目录匹配的原生存储，把未认识的外部会话自动落为导入行（imp_ 前缀，与手动导入
+共用 `materializeImportedSession` 与 known 去重口径），广播 `session.started`
+（source="imported"）让侧栏即时刷新。
+
+保守规则（自动收录比手动导入更严格，误收会凭空污染侧栏）：cwd 不明不收、
+read() 无正文的执行器不收（antigravity/cursor）、空会话不收（stat messages.jsonl
+size=0，挡 mcode 模型探测残留）；差集前先回填该单元 terminal_runs 的 resumeRef
+（与 unit.history 同款回溯），工作台自己派发的 TUI 会话不会被重复收录。
+开关在 bot 设置「导入会话」分区（bot.json `autoCollect`，缺省 = 开）；
+`history.import.apply` 落库即 `watchSession`（手动导入 = 显式关注，立即开始
+实时同步）。自动收录**不**自动 watch——25 个的 watch 上限是给「正在看 /
+刚导入」的会话的，打开（session.resume / events.since）才同步的语义不变。
+

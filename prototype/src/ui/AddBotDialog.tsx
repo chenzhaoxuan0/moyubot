@@ -11,6 +11,7 @@ import {
   Package,
   Pin,
   Plus,
+  Radar,
   RefreshCw,
   Search,
   Wand2,
@@ -68,6 +69,8 @@ export interface AddBotDraft {
   readonly agentsMd?: string;
   readonly channels: readonly BotChannel[];
   readonly resident?: boolean;
+  /** 外部会话自动收录（写穿 bot.json；缺省 = 开） */
+  readonly autoCollect?: boolean;
   /** 弱标签（ADR 0011 第 2 条）：新建恒 "bot"；编辑模式的切换由对话框自己补写 */
   readonly kind: UnitKind;
   /**
@@ -163,6 +166,7 @@ export function AddBotDialog({
   const [modelHint, setModelHint] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
   const [resident, setResident] = useState(false);
+  const [autoCollect, setAutoCollect] = useState(true);
   /** 单元形态（弱标签）：编辑模式可切 bot ↔ 项目（ADR 0011 第 2 条） */
   const [kind, setKind] = useState<UnitKind>("bot");
   /** 目录浏览器的起始根候选（打开时向 daemon 要；daemon 未连接则浏览禁用、手输兜底） */
@@ -211,6 +215,7 @@ export function AddBotDialog({
     setModelHint(binding?.modelHint ?? runtimes.find((r) => r.id === rid)?.defaultModel ?? null);
     setAvatar(b.avatar ?? null);
     setResident(Boolean(b.resident));
+    setAutoCollect(b.autoCollect !== false);
     setKind(b.kind ?? "bot");
     setChannels(b.channels ?? []);
     setAgentsMdMeta(b.agentsMdMeta);
@@ -378,6 +383,7 @@ export function AddBotDialog({
       agentsMd: agentsMd.trim() === "" ? undefined : agentsMd,
       channels,
       resident,
+      autoCollect,
       kind,
       // 搜索分区没动过就不带（调用方据 undefined 跳过 search.configure）
       ...(searchDraft.touched
@@ -888,6 +894,35 @@ export function AddBotDialog({
                 <p className="mt-0.5 text-caption text-ash">
                   工作目录：<span className="font-mono">{rootPath || "（未设置）"}</span>
                 </p>
+              </div>
+              <div className="flex items-center justify-between gap-3 rounded-input border border-line bg-canvas/40 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <Radar size={13} className={autoCollect ? "text-teal" : "text-ash"} />
+                  <div>
+                    <p className="text-body-sm font-medium text-ink">自动收录这个目录的外部会话</p>
+                    <p className="text-caption text-ash">
+                      在任意终端用 CLI 在此目录跑过的会话自动进侧栏（约 30 秒内，含历史会话）
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoCollect(!autoCollect)}
+                  className={cn(
+                    "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-hidden",
+                    autoCollect ? "bg-teal" : "bg-line",
+                  )}
+                  role="switch"
+                  aria-checked={autoCollect}
+                  title={autoCollect ? "关闭自动收录（手动导入仍可用）" : "开启自动收录"}
+                >
+                  <span
+                    className={cn(
+                      "pointer-events-none inline-block h-4 w-4 transform rounded-full bg-canvas shadow-xs ring-0 transition duration-200 ease-in-out",
+                      autoCollect ? "translate-x-4" : "translate-x-0",
+                    )}
+                  />
+                </button>
               </div>
               {rootPath ? (
                 <ImportSessionsSection unitId={String(initial!.id)} />

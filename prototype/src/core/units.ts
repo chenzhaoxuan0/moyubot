@@ -485,6 +485,12 @@ export interface WorkUnit {
    */
   readonly resident?: boolean;
   /**
+   * 外部会话自动收录（写穿 bot.json，缺省 = 开）：daemon 周期扫描这个工作目录
+   * 匹配的原生存储，把外部终端跑过、尚未认识的 CLI 会话自动落为导入行进侧栏。
+   * 关闭是显式选择——关闭后仍可在「导入会话」分区手动补收。
+   */
+  readonly autoCollect?: boolean;
+  /**
    * 合成 bot（总管 steward / 心跳 heartbeat）：系统级自建 bot，不可降级或移除常驻。
    */
   readonly synthetic?: boolean;

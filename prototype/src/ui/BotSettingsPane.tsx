@@ -44,6 +44,7 @@ export function BotSettingsPane({ unitId }: { unitId: UnitId }): ReactElement | 
             rootPath: draft.rootPath,
             kind: draft.kind,
             resident: draft.resident,
+            autoCollect: draft.autoCollect,
             identity: {
               ...fresh.identity,
               role: draft.role,

@@ -15,9 +15,12 @@ import { cn } from "./cn.ts";
  * 工作区 + 执行器过滤，daemon 走 14 家原生 reader）。
  *
  * 数据流：history.import.list（带 known 标记 = 已在工作台历史中的行，不可重复
- * 导）→ 勾选 → history.import.apply 落 sessions 表（source = "imported"）。
- * 导入后的行在侧栏带「导入」标签，点击走 TUI resume（原生会话 id）、展开走
- * 原生转录回看。
+ * 导）→ 勾选 → history.import.apply 落 sessions 表（source = "imported"），
+ * 落库即开始实时同步外部续写。导入后的行在侧栏带「导入」标签，点击进聊天页
+ * （原生转录投影）、右键可从 TUI 继续。
+ *
+ * 自动收录（autocollect，bot 设置「导入会话」分区的开关，默认开）会周期把
+ * 该目录新出现的外部会话自动收进来——本组件是它关闭或漏收时的手动兜底。
  *
  * 两个消费方共用一份：bot 设置（AddBotDialog 编辑态，unit 固定）与软件设置
  * （SettingsPage，外层带单元选择器）。
@@ -125,6 +128,10 @@ export function ImportSessionsSection({ unitId }: { unitId: string }): ReactElem
           刷新
         </button>
       </div>
+
+      <p className="text-caption text-ash">
+        自动收录开启时，这个目录的新外部会话会自动进侧栏；这里用于补收关闭自动收录或漏收的会话。
+      </p>
 
       {err !== null && <p className="text-caption text-loss">查询失败：{err}</p>}
       {rows === null && err === null && <p className="text-caption text-ash">正在查询外部会话…</p>}
