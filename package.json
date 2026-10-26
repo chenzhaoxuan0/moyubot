@@ -2,7 +2,7 @@
   "name": "agent-workbench",
   "private": true,
   "version": "0.1.0",
-  "author": "chenzhaoxuan0",
+  "author": "chenzhaoxuan0 <chenzhaoxuan0@users.noreply.github.com>",
   "type": "module",
   "description": "本地个人统一工作台 —— 一条命令起全栈（前端 5280 + daemon 5281）",
   "main": "electron/main.cjs",

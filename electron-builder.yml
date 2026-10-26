@@ -33,7 +33,7 @@ extraResources:
   - from: backend/dist/daemon-deploy/node_modules
     to: daemon/daemon-deploy/node_modules
 
-icon: electron/icon.png
+icon: electron/icon-512.png   # mac icns 生成要求 ≥512（icon.png 是 256 的母图）
 
 win:
   target:
