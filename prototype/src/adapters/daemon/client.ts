@@ -1587,7 +1587,7 @@ export async function fetchUnitHistory(
   const r = await client.rpc<{ entries: UnitHistoryEntry[] }>(
     "unit.history",
     unitId ? { unitId, limit } : { limit },
-    15000,
+    25000,
   );
   return r.entries;
 }

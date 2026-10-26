@@ -29,6 +29,7 @@ export function UserMessageBubble({
   origin,
   isLatestUserTurn,
   busy,
+  at,
 }: {
   text: string;
   attachments?: readonly ChatAttachment[];
@@ -41,6 +42,8 @@ export function UserMessageBubble({
   /** 时间线最后一条用户消息：编辑重发只对它开放（latestQueryEditOnly） */
   isLatestUserTurn: boolean;
   busy: boolean;
+  /** 发送时间戳 */
+  at?: number;
 }) {
   const parsed = parseSlashCommand(text);
   const [editing, setEditing] = useState(false);
@@ -125,6 +128,15 @@ export function UserMessageBubble({
     });
   };
 
+  const timeLabel = at
+    ? new Date(at).toLocaleTimeString("zh-CN", {
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    : null;
+
   const editEntry = isLatestUserTurn ? (
     <button
       onClick={openEdit}
@@ -138,7 +150,12 @@ export function UserMessageBubble({
   ) : null;
 
   const actionEntries = (
-    <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition group-hover/user:opacity-100">
+    <div className="flex shrink-0 items-center gap-1 opacity-60 transition group-hover/user:opacity-100">
+      {timeLabel && (
+        <span className="font-mono text-[11px] text-ash select-none mr-0.5">
+          {timeLabel}
+        </span>
+      )}
       <button
         onClick={copyText}
         aria-label="复制此消息"

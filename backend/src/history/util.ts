@@ -106,9 +106,9 @@ export function entriesFromContent(role: "user" | "assistant", content: unknown,
       if (t.trim() !== "") out.push({ kind: "thinking", text: t, at });
     } else if (type === "toolCall" || type === "tool_use") {
       const name = str(part["toolName"]) ?? str(part["name"]) ?? "tool";
-      const args = part["args"] ?? part["input"];
-      const brief = typeof args === "string" ? args.slice(0, 400) : JSON.stringify(args)?.slice(0, 400) ?? "";
-      out.push({ kind: "tool", text: brief, toolName: name, at });
+      const args = part["arguments"] ?? part["args"] ?? part["input"];
+      const text = typeof args === "string" ? args : JSON.stringify(args) ?? "";
+      out.push({ kind: "tool", text, toolName: name, at });
     } else if (type === "toolResult" || type === "tool_result") {
       const name = str(part["toolName"]) ?? "tool";
       out.push({ kind: "tool", text: textOf(part["content"]).slice(0, 2000), toolName: `${name} ·结果`, at });

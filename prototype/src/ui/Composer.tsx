@@ -38,6 +38,10 @@ import {
 import { createAttachmentFromFile } from "./attachmentFile.ts";
 import { useIsMobile } from "./mobile/useIsMobile.ts";
 import { cn } from "./cn.ts";
+import {
+  QuestionnaireComposer,
+  detectQuestionnaireFromTimeline,
+} from "./chat/items/QuestionnaireCard.tsx";
 
 /**
  * 输入区 —— 全页焦点元素。
@@ -387,6 +391,31 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
     histSavedDraft.current = "";
     void run(v, { attachments: currentAttachments });
   };
+
+  const timeline = useWorkbench((s) => s.timeline);
+  const activeSessionId = useWorkbench((s) => s.activeSessionId);
+  const detectedQuestionnaire = useMemo(() => {
+    const sessionTimeline = timeline.filter(
+      (t) => "sessionId" in t.event && t.event.sessionId === activeSessionId,
+    );
+    return detectQuestionnaireFromTimeline(sessionTimeline);
+  }, [timeline, activeSessionId]);
+
+  const [dismissedFor, setDismissedFor] = useState<string | null>(null);
+
+  // 当切换会话时重置关闭状态
+  useEffect(() => {
+    setDismissedFor(null);
+  }, [activeSessionId]);
+
+  if (detectedQuestionnaire && dismissedFor !== detectedQuestionnaire.rawText) {
+    return (
+      <QuestionnaireComposer
+        questionnaire={detectedQuestionnaire}
+        onDismiss={() => setDismissedFor(detectedQuestionnaire.rawText)}
+      />
+    );
+  }
 
   const placeholder = busy
     ? "上一轮仍在进行 —— 现在发送将排队，本轮完成后自动发出（可立刻发送 / 编辑 / 删除）"

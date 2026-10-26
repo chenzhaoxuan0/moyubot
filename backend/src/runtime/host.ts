@@ -62,6 +62,15 @@ const LIST_COMMANDS_HARD_TIMEOUT_MS = 20_000;
 /** 命令清单磁盘缓存的新鲜期（毫秒）—— 与适配器内存缓存同口径；过期触发后台刷新 */
 const LIST_COMMANDS_DISK_TTL_MS = 10 * 60 * 1000;
 
+/** 计划模式（Plan Mode）系统指令：约束模型仅在只读边界探索并出具方案 */
+export const PLAN_MODE_INSTRUCTION = `[PLAN MODE ACTIVE]
+You are currently in Plan Mode. The user has set the session to read-only planning.
+- Your primary objective is to investigate the workspace and produce a comprehensive, step-by-step implementation plan.
+- You MUST NOT edit, create, or delete any files.
+- You MUST NOT execute any destructive or mutating commands (e.g. git commit, git push, build scripts that modify files).
+- You SHOULD read files, search the codebase, and list directory contents to fully understand the context.
+- When your plan is ready, you MUST call the \`ExitPlanMode\` tool (with parameter \`plan\` summarizing the step-by-step changes) or clearly present your complete step-by-step plan and ask the user for approval.`;
+
 /** 对 WS 暴露的适配器摘要 */
 export interface AdapterInfo {
   readonly id: string;
@@ -161,6 +170,7 @@ interface HostSession {
   readonly rootPath: string;
   title: string;
   status: SessionStatus;
+  mode?: StartRequest["mode"];
   readonly startedAt: number;
   endedAt: number | undefined;
   /** 来源徽标（docs/09 §六.2）。缺省 = 工作台 */
@@ -219,8 +229,9 @@ interface HostSession {
   readonly events: Array<{ seq: number; at: number; event: RuntimeEvent }>;
 }
 
-/** 本轮 loop 参数覆盖（推理力度 / 上下文长度档）；不改变会话级配置 */
+/** 本轮 loop 参数覆盖（模式 / 推理力度 / 上下文长度档）；不改变会话级配置 */
 export interface SendLoopParams {
+  readonly mode?: StartRequest["mode"];
   readonly reasoningLevel?: string;
   readonly contextLength?: string;
 }
@@ -1201,7 +1212,12 @@ export class RuntimeHost {
     // 绝不能再 join input.prompt（review P0：曾把用户指令拼两遍发给执行器）。
     // handoff 关闭时保持逐字节旧行为。
     const base = injected === null ? input.prompt : injected.prompt;
-    const effectivePrompt = handoffBlock === null ? base : `${handoffBlock}\n\n${base}`;
+    let effectivePrompt = handoffBlock === null ? base : `${handoffBlock}\n\n${base}`;
+
+    // 计划模式：前置注入 Plan Mode 只读规划指引
+    if (input.mode === "plan" && !effectivePrompt.includes("[PLAN MODE ACTIVE]")) {
+      effectivePrompt = `${PLAN_MODE_INSTRUCTION}\n\n${effectivePrompt}`;
+    }
 
     // modelHint 的回落在这里一次解决，并把「实际生效」与「被丢掉的 hint」都算出来。
     // 契约原文说 hint 失效会被静默忽略——那正是 docs/09 §六.1 要补掉的静默：
@@ -1255,6 +1271,7 @@ export class RuntimeHost {
       rootPath,
       title: input.prompt.length > 60 ? input.prompt.slice(0, 60) + "…" : input.prompt,
       status: "running",
+      mode: input.mode,
       startedAt: Date.now(),
       endedAt: undefined,
       source: input.source ?? "workbench",
@@ -1727,6 +1744,9 @@ export class RuntimeHost {
     contextInject?: { readonly manifest?: ContextManifest },
     origin?: string,
   ): void {
+    if (loop?.mode !== undefined) {
+      h.mode = loop.mode;
+    }
     h.turnBusy = true;
     h.status = "running";
     this.emitStamped(h, { type: "session.status", sessionId: h.id, status: "running" });
@@ -1801,7 +1821,10 @@ export class RuntimeHost {
           log.warn("turn context injection skipped", { error: err instanceof Error ? err.message : String(err) });
         }
       }
-      return h.impl!.send(promptToSend, loop === undefined ? undefined : { reasoningLevel: loop.reasoningLevel, contextLength: loop.contextLength });
+      if (h.mode === "plan" && !promptToSend.includes("[PLAN MODE ACTIVE]")) {
+        promptToSend = `${PLAN_MODE_INSTRUCTION}\n\n${promptToSend}`;
+      }
+      return h.impl!.send(promptToSend, loop === undefined ? undefined : { mode: h.mode, reasoningLevel: loop.reasoningLevel, contextLength: loop.contextLength });
     })().catch((err: unknown) => {
       log.error("turn failed", { sessionId: h.id, error: err instanceof Error ? err.message : String(err) });
       const errorEvent: RuntimeEvent = { type: "error", sessionId: h.id, message: err instanceof Error ? err.message : String(err), recoverable: false };
@@ -2063,6 +2086,24 @@ export class RuntimeHost {
   private evaluateGate(h: HostSession, event: Extract<RuntimeEvent, { type: "permission.requested" }>): void {
     const key = `${h.id}:${event.requestId}`;
     this.pendingPerms.set(key, { kind: event.kind, detail: event.detail });
+
+    // 若当前处于 plan 计划模式：自动拦截写与执行操作，强制保持只读规划安全边界
+    if (h.mode === "plan") {
+      const isMutatingKind = event.kind === "file_write" || event.kind === "shell";
+      if (isMutatingKind) {
+        this.pendingPerms.delete(key);
+        log.info("permission auto-denied in plan mode (read-only planning enforcement)", {
+          sessionId: h.id,
+          requestId: event.requestId,
+          kind: event.kind,
+        });
+        void h.impl?.resolvePermission(event.requestId, "deny").catch((err: unknown) =>
+          log.warn("plan mode deny failed", { error: err instanceof Error ? err.message : String(err) }),
+        );
+        return;
+      }
+    }
+
     const decision = this.gate.evaluate(h.runtimeId, event.kind, h.lastTool ?? "", event.detail);
     if (decision !== null) {
       // 同步占位：自动裁决成立的同一 tick 就摘牌，晚到的人工点击在

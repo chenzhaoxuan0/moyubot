@@ -74,15 +74,70 @@ function findList(rawInput: unknown): readonly unknown[] | null {
 }
 
 /**
- * 识别清单类工具调用 → 合成 plan.proposed。返回 null = 不是清单工具 / 提取
- * 不出任何步骤（空清单不发声：初始化前的空 TodoWrite 没有信息量）。
+ * 识别清单类工具调用（及 ExitPlanMode 计划审批）→ 合成 plan.proposed。
+ * 返回 null = 不是清单工具 / 提取不出任何步骤。
  */
 export function planProposedFromTodoTool(
   sessionId: SessionId,
   toolName: string,
   input: unknown,
 ): RuntimeEvent | null {
-  if (!TODO_TOOLS.has(normTool(toolName))) return null;
+  const norm = normTool(toolName);
+
+  if (norm === "exitplanmode") {
+    let inp = input;
+    if (typeof inp === "string") {
+      try {
+        inp = JSON.parse(inp);
+      } catch {
+        // ignore
+      }
+    }
+    const steps: PlanStep[] = [];
+    if (typeof inp === "object" && inp !== null) {
+      const rec = inp as Record<string, unknown>;
+      const list = findList(rec);
+      if (list && list.length > 0) {
+        for (const item of list) {
+          if (item && typeof item === "object") {
+            const e = item as Record<string, unknown>;
+            const title = [e.content, e.step, e.title, e.text, e.name].find(
+              (v): v is string => typeof v === "string" && v.trim() !== "",
+            );
+            if (title) steps.push({ id: `p${steps.length}`, title: title.trim(), status: normalizeStatus(e.status) });
+          }
+        }
+      }
+      if (steps.length === 0 && typeof rec.plan === "string") {
+        const lines = rec.plan.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+        for (const line of lines) {
+          const clean = line.replace(/^[\d+.\-*#\s]+/, "").trim();
+          if (clean.length > 0) {
+            steps.push({ id: `p${steps.length}`, title: clean, status: "pending" });
+          }
+        }
+      }
+    } else if (typeof inp === "string") {
+      const lines = inp.split("\n").map((l) => l.trim()).filter((l) => l.length > 0);
+      for (const line of lines) {
+        const clean = line.replace(/^[\d+.\-*#\s]+/, "").trim();
+        if (clean.length > 0) {
+          steps.push({ id: `p${steps.length}`, title: clean, status: "pending" });
+        }
+      }
+    }
+    if (steps.length > 0) {
+      return {
+        type: "plan.proposed",
+        sessionId,
+        planId: "plan_approval",
+        title: "实施方案审批",
+        steps,
+      };
+    }
+  }
+
+  if (!TODO_TOOLS.has(norm)) return null;
   const list = findList(input);
   if (list === null || list.length === 0) return null;
   const steps: PlanStep[] = [];

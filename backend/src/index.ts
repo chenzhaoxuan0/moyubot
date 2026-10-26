@@ -1832,7 +1832,7 @@ function cachedNativeList(executorId: string, rootPath: string | null): Promise<
   const flying = nativeListInFlight.get(key);
   if (flying !== undefined) return flying;
   const reader = readerOf(executorId);
-  const p = (reader !== null ? reader.list(rootPath, 200) : Promise.resolve([]))
+  const p = (reader !== null ? reader.list(rootPath, 50) : Promise.resolve([]))
     .catch(() => [] as readonly NativeSessionSummary[])
     .then((rows) => {
       nativeListCache.set(key, { at: Date.now(), rows });
@@ -1901,11 +1901,19 @@ registerMethod("unit.history", async (params) => {
   const botMap = new Map(allBots.map((b) => [String(b.id ?? ""), b]));
   const defaultBotRootPath = targetUnitId ? (botMap.get(targetUnitId)?.rootPath ? String(botMap.get(targetUnitId)?.rootPath) : "") : "";
 
+  // 进程内已解析会话标题缓存（避免每次 unit.history 对几十个会话同步查 SQLite 首条消息）
+  const sessionTitleCache = new Map<string, string>();
+
+  // 单词请求时间预算保护：若原生扫描累计耗时过长，熔断后续扫描，保障 RPC 毫秒级返回
+  const reqStart = Date.now();
+  const canAttemptMore = () => Date.now() - reqStart < 400;
+
   for (const a of store.listAutomations()) {
     if (targetUnitId !== null && a.unitId !== targetUnitId) continue;
     const uName = botMap.get(a.unitId)?.name ?? a.unitId;
     const autoRootPath = (botMap.get(a.unitId)?.rootPath ? String(botMap.get(a.unitId)?.rootPath) : "") || defaultBotRootPath;
-    for (const r of store.listAutomationRuns(a.id, limit)) {
+    const subLimit = Math.min(limit, 20);
+    for (const r of store.listAutomationRuns(a.id, subLimit)) {
       const isTerminal = r.sessionId !== null && r.sessionId.startsWith("autoterm_");
       // host 会话运行按定义行的 launchMode 展示（chat = 对话页前台拉起过）；
       // sessionId 为 null 的失败行只能信定义行本身
@@ -1914,8 +1922,12 @@ registerMethod("unit.history", async (params) => {
       // 列，不落库 —— 每调用按 TTL 缓存现匹配，命中的成本只是内存过滤）
       let terminalResumeRef: string | null = null;
       if (isTerminal && r.sessionId !== null) {
-        const resolved = await resolveNativeTerminalSession(a.runtimeId, autoRootPath, r.startedAt, r.finishedAt);
-        terminalResumeRef = resolved?.resumeRef ?? null;
+        const attemptKey = `auto-${r.id}`;
+        if ((!terminalResumeAttempted.has(attemptKey) || r.status === "running") && canAttemptMore()) {
+          terminalResumeAttempted.add(attemptKey);
+          const resolved = await resolveNativeTerminalSession(a.runtimeId, autoRootPath, r.startedAt, r.finishedAt);
+          terminalResumeRef = resolved?.resumeRef ?? null;
+        }
       }
       entries.push({
         key: `automation-${r.id}`,
@@ -1944,14 +1956,19 @@ registerMethod("unit.history", async (params) => {
     if (targetUnitId !== null && item.unitId !== targetUnitId) continue;
     const uName = botMap.get(item.unitId)?.name ?? item.unitName ?? item.unitId;
     const blRootPath = (botMap.get(item.unitId)?.rootPath ? String(botMap.get(item.unitId)?.rootPath) : "") || defaultBotRootPath;
-    for (const r of store.listBacklogRuns(item.id, limit)) {
+    const subLimit = Math.min(limit, 20);
+    for (const r of store.listBacklogRuns(item.id, subLimit)) {
       const isTerminal = r.sessionId !== null && r.sessionId.startsWith("autoterm_");
       if (r.sessionId !== null && !isTerminal) claimedSessionIds.add(r.sessionId);
       // terminal 模式的待办行同 automation：TTL 缓存现匹配原生 ref（不落库）
       let terminalResumeRef: string | null = null;
       if (isTerminal && r.sessionId !== null) {
-        const resolved = await resolveNativeTerminalSession(r.runtimeId, blRootPath, r.startedAt, r.finishedAt);
-        terminalResumeRef = resolved?.resumeRef ?? null;
+        const attemptKey = `bl-${r.id}`;
+        if ((!terminalResumeAttempted.has(attemptKey) || r.status === "running") && canAttemptMore()) {
+          terminalResumeAttempted.add(attemptKey);
+          const resolved = await resolveNativeTerminalSession(r.runtimeId, blRootPath, r.startedAt, r.finishedAt);
+          terminalResumeRef = resolved?.resumeRef ?? null;
+        }
       }
       entries.push({
         key: `backlog-${r.id}`,
@@ -1984,7 +2001,7 @@ registerMethod("unit.history", async (params) => {
     // 第一顺位，这里是兜底。结算行每进程只试一次；running 行全局节流 ≥10s/行
     // （原生 id 可能还没刷出来，允许重试，但不能让多路轮询变成同步读风暴）。
     // 回溯本身走 history reader + TTL 缓存，见 resolveNativeTerminalSession 注释。
-    if (!resumeRef) {
+    if (!resumeRef && canAttemptMore()) {
       const now = Date.now();
       const mayAttempt =
         r.status === "running"
@@ -2030,11 +2047,19 @@ registerMethod("unit.history", async (params) => {
     const imported = s.source === "imported";
     let title = s.title.trim();
     if (title === "" || title === "（无标题会话）") {
-      const firstMsg = store.listMessages(s.id, 1)[0];
-      if (firstMsg?.text) {
-        const line = firstMsg.text.trim().split(/\r?\n/)[0]?.trim() ?? "";
-        if (line !== "") {
-          title = line.length > 60 ? `${line.slice(0, 60)}…` : line;
+      const cached = sessionTitleCache.get(s.id);
+      if (cached) {
+        title = cached;
+      } else {
+        const firstMsg = store.listMessages(s.id, 1)[0];
+        if (firstMsg?.text) {
+          const line = firstMsg.text.trim().split(/\r?\n/)[0]?.trim() ?? "";
+          if (line !== "") {
+            title = line.length > 60 ? `${line.slice(0, 60)}…` : line;
+          }
+        }
+        if (title !== "" && title !== "（无标题会话）") {
+          sessionTitleCache.set(s.id, title);
         }
       }
     }
@@ -3449,7 +3474,7 @@ registerMethod("session.start", async (params) => {
   // host（host 不认识注册表）。扫不到定义（外部根/测试路径）= 不带，注入器退回
   // legacy 行为。前端**不再**传全局 scopes 作为真相源；memoryOptions 只做 /mem 覆盖。
   const botDef = await botRegistry.getBot(p.unitId);
-  return host.startSession({
+  const session = await host.startSession({
     runtimeId: p.runtimeId,
     unitId: asUnitId(p.unitId),
     unitName: p.unitName ?? p.unitId,
@@ -3491,11 +3516,16 @@ registerMethod("session.start", async (params) => {
           ? String((botDef as { customPrompt?: unknown }).customPrompt)
           : undefined,
   });
+  if (session && session.id) {
+    nativeWatcher.watchSession(String(session.id));
+  }
+  return session;
 });
 registerMethod("session.send", async (params) => {
   const p = (params ?? {}) as {
     sessionId?: string;
     text?: string;
+    mode?: "plan" | "build" | "edit" | "yolo";
     reasoningLevel?: string;
     contextLength?: string;
     contextInject?: { manifest?: ContextManifest };
@@ -3504,6 +3534,7 @@ registerMethod("session.send", async (params) => {
   if (typeof p.sessionId !== "string" || typeof p.text !== "string") {
     throw Object.assign(new Error("sessionId and text are required"), { code: "bad_params" });
   }
+  nativeWatcher.watchSession(p.sessionId);
   // 附件路径内联（docs/21 P4a）：给了路径就由 daemon 组装 prompt——GUI 与 CLI 同一条路
   const text =
     p.attachments !== undefined && p.attachments.length > 0
@@ -3513,6 +3544,7 @@ registerMethod("session.send", async (params) => {
     asSessionId(p.sessionId),
     text,
     {
+      mode: p.mode,
       reasoningLevel: p.reasoningLevel,
       contextLength: typeof p.contextLength === "string" && p.contextLength !== "" ? p.contextLength : undefined,
     },
@@ -3632,6 +3664,7 @@ registerMethod("session.resumable", (params) => {
 registerMethod("session.resume", (params) => {
   const { sessionId } = (params ?? {}) as { sessionId?: string };
   if (typeof sessionId !== "string") throw Object.assign(new Error("sessionId is required"), { code: "bad_params" });
+  nativeWatcher.watchSession(sessionId);
   return host.resumeSession(asSessionId(sessionId));
 });
 registerMethod("session.messages", (params) => {

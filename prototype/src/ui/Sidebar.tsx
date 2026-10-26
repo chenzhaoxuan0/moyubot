@@ -34,6 +34,7 @@ import { useShell } from "../store/useShell.ts";
 import { useGit } from "../store/useGit.ts";
 import { useAppearance } from "../store/useAppearance.ts";
 import { BrandLogo } from "./BrandLogo.tsx";
+import { detectQuestionnaireFromTimeline } from "./chat/items/QuestionnaireCard.tsx";
 import type { AvatarFrame } from "../core/appearance.ts";
 import { describeRule, formatAbsolute, formatAbsoluteHuman, formatRelative, type Automation } from "../core/automation.ts";
 import { DaemonClient, defaultDaemonEndpoint, dispatchTerminal, fetchAutomations, fetchUnitHistory, renameHistoryEntry, type UnitHistoryEntry } from "../adapters/daemon/client.ts";
@@ -637,42 +638,38 @@ function deriveHistoryLight(
   sessionStatusById: ReadonlyMap<string, string>,
   unread: boolean,
   lightOverride?: HistoryLight | null,
+  isCurrentAwaitingDecision?: boolean,
 ): HistoryLight {
-  // 用户手动覆盖（消灯、标绿灯、设为完成等）具有最高优先级
+  // 1. 用户手动覆盖（消灯、标绿灯、设为完成等）具有最高优先级
   if (lightOverride !== undefined && lightOverride !== null) {
     return lightOverride;
   }
+  // 2. 失败显红灯
   if (entry.status === "failed") return "failed";
-  if (unread && entry.endedAt !== null) return "unread";
-  // 已明确结束的会话绝不亮蓝灯
+
+  // 3. 正在执行/等待决策（蓝色呼吸灯）—— 最高实时优先级！
+  // 无论是当前窗口在展示决策卡，还是 store 中会话状态为 running / awaiting_permission / awaiting_input，
+  // 均视为任务处于活动进行中，必须亮蓝色呼吸灯
+  const storeStatus = entry.sessionId !== null ? sessionStatusById.get(entry.sessionId) : undefined;
+  if (
+    isCurrentAwaitingDecision ||
+    storeStatus === "running" ||
+    storeStatus === "awaiting_permission" ||
+    storeStatus === "awaiting_input" ||
+    (entry.status === "running" && entry.endedAt === null)
+  ) {
+    return "executing";
+  }
+
+  // 4. 新结果未读常亮绿灯
+  if (unread) return "unread";
+
+  // 5. 存活中的进程（静态浅蓝灯，不呼吸）
+  if (storeStatus === "idle") return "alive";
+
+  // 6. 其它已明确结束的历史会话不亮灯
   if (entry.endedAt !== null) return "none";
 
-  if (entry.status === "running") {
-    // 前端 store 里该会话的实时状态优先（turn 进行中才是「执行任务」）
-    const storeStatus = entry.sessionId !== null ? sessionStatusById.get(entry.sessionId) : undefined;
-    if (storeStatus !== undefined) {
-      if (storeStatus === "running" || storeStatus === "awaiting_permission" || storeStatus === "awaiting_input") {
-        return "executing";
-      }
-      if (storeStatus === "idle") return "alive";
-      if (storeStatus === "failed") return "failed";
-      return "none";
-    }
-
-    // store 尚未加载该会话时：
-    // 只有后台自动化的正在运行（kind 为 automation/backlog）且在合理时间内（启动 < 24h）才判定为执行中呼吸灯
-    const isRecent = Date.now() - entry.startedAt < 24 * 3600_000;
-    if ((entry.kind === "automation" || entry.kind === "backlog") && isRecent) {
-      return "executing";
-    }
-
-    // 交互式会话且未在 store 中打开时：若是近期条目且非已结束，最多作为存活中的进程（静态蓝灯，不呼吸）；
-    // 超过 24h 且前端没有活跃句柄的历史会话，不显示呼吸灯，避免幽灵灯骚扰
-    if (isRecent) {
-      return "alive";
-    }
-    return "none";
-  }
   return "none";
 }
 
@@ -736,6 +733,8 @@ function UnitRow({
   /** 会话实时状态（turn 进行中 = 呼吸灯的事实来源） */
   const sessions = useWorkbench((s) => s.sessions);
   const activeSessionId = useWorkbench((s) => s.activeSessionId);
+  const timeline = useWorkbench((s) => s.timeline);
+  const busy = useWorkbench((s) => s.busy);
   const mainView = useShell((s) => s.mainView);
   /** 终端标签实例（TUI 还开着的历史行 → 点行直切那个标签，不发 resume） */
   const terminalInstances = useTerminalStore((s) => s.instances);
@@ -1089,6 +1088,12 @@ function UnitRow({
             const lightOverride =
               historyPrefs.lightOverrides[e.key] ??
               (e.sessionId !== null ? historyPrefs.lightOverrides[`session-${e.sessionId}`] : undefined);
+            const rowActive =
+              mainView === "chat" && e.sessionId !== null && String(activeSessionId) === e.sessionId;
+            const isRowAwaitingDecision =
+              Boolean(rowActive && (busy || detectQuestionnaireFromTimeline(
+                timeline.filter((t) => "sessionId" in t.event && t.event.sessionId === activeSessionId)
+              ) !== null));
             const light = deriveHistoryLight(
               e,
               sessionStatusById,
@@ -1098,9 +1103,8 @@ function UnitRow({
                 e.endedAt,
               ),
               lightOverride,
+              isRowAwaitingDecision,
             );
-            const rowActive =
-              mainView === "chat" && e.sessionId !== null && String(activeSessionId) === e.sessionId;
             const openDefault = (): void => {
               // 1. 符合直觉：只要点击该会话，立即消除未读绿灯（标为已查看）
               useHistoryPrefs

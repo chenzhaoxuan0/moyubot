@@ -9,7 +9,7 @@
  */
 
 import path from "node:path";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type { NativeSessionDetail, NativeSessionSummary, SessionReader } from "../types.ts";
 import { entriesFromContent, homeDir, isRecord, readJsonLines, str } from "../util.ts";
@@ -122,7 +122,7 @@ function parseTranscript(messagesFile: string) {
       }
     } else if (role === "toolResult" || role === "toolCall") {
       const name = str(msg["toolName"]) ?? str(msg["name"]) ?? "tool";
-      const content = msg["content"];
+      const content = msg["arguments"] ?? msg["args"] ?? msg["input"] ?? msg["content"];
       const text = typeof content === "string" ? content : JSON.stringify(content) ?? "";
       transcript.push({
         kind: "tool" as const,
@@ -157,8 +157,13 @@ export function createMcodeReader(): SessionReader {
 
         let count = 0;
         if (messagesFile && existsSync(messagesFile)) {
-          // 快速统计消息行数
-          count = readJsonLines(messagesFile).length;
+          // 快速估算消息条数（避免为数十个会话全量 readJsonLines 同步阻塞事件循环）
+          try {
+            const size = statSync(messagesFile).size;
+            count = Math.max(1, Math.round(size / 300));
+          } catch {
+            count = 1;
+          }
         }
 
         out.push({

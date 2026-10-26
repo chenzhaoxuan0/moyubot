@@ -6,7 +6,7 @@ import { STATUSBAR_MIN, useShell } from "../store/useShell.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { useNotifications } from "../store/useNotifications.ts";
-import { sidePaneOccupies } from "../core/sidePaneTabs.ts";
+import { notifyTabId, sidePaneOccupies } from "../core/sidePaneTabs.ts";
 import { cn } from "./cn.ts";
 
 /**
@@ -124,13 +124,24 @@ export function GlobalStatusBar() {
 function NotificationStatusItem() {
   const unreadCount = useNotifications((s) => s.items.filter((n) => !n.read).length);
   const activeTabId = useSidePane((s) => s.activeTabId);
+  const tabs = useSidePane((s) => s.tabs);
   const paneCollapsed = useSidePane((s) => s.collapsed);
-  const isNotificationsOpen = activeTabId === "notify" && !paneCollapsed;
+  const isNotificationsOpen =
+    !paneCollapsed &&
+    (activeTabId === notifyTabId || tabs.find((t) => t.id === activeTabId)?.type === "notify");
 
   const handleClick = () => {
     const sidePane = useSidePane.getState();
-    if (sidePane.activeTabId === "notify" && !sidePane.collapsed) {
-      sidePane.toggleCollapsed();
+    const isNowOpen =
+      !sidePane.collapsed &&
+      (sidePane.activeTabId === notifyTabId ||
+        sidePane.tabs.find((t) => t.id === sidePane.activeTabId)?.type === "notify");
+
+    if (isNowOpen) {
+      sidePane.closeTab(notifyTabId);
+      if (!useSidePane.getState().collapsed) {
+        sidePane.toggleCollapsed();
+      }
     } else {
       sidePane.openNotifications();
     }

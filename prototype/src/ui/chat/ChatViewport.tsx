@@ -448,6 +448,7 @@ function SingleItemRow({
           origin={typeof item.data.origin === "string" ? item.data.origin : undefined}
           isLatestUserTurn={item.id === lastUserTurnId}
           busy={busy}
+          at={item.at}
         />
       );
 

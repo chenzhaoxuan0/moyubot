@@ -144,7 +144,7 @@ interface TurnAcc {
 interface McodeSession {
   readonly sessionId: SessionId;
   readonly rootPath: string;
-  readonly mode: StartRequest["mode"];
+  mode: StartRequest["mode"];
   /** 用户选的模型（工作台 ModelId = 模型基础名，ACP 侧真实值查 _modelValues） */
   model: ModelId | null;
   /** 上下文长度档（执行器侧原始 value）；send loop 可逐轮覆盖 */
@@ -477,6 +477,10 @@ export class McodeAdapter implements ExecutorAdapter {
       id: state.sessionId,
       send: async (text: string, loop) => {
         if (loop?.contextLength !== undefined) state.contextLength = loop.contextLength;
+        if (loop?.mode !== undefined && loop.mode !== state.mode) {
+          state.mode = loop.mode;
+          state.modeApplied = false;
+        }
         await this.runTurn(state, text);
       },
       cancel: async () => {
@@ -521,6 +525,10 @@ export class McodeAdapter implements ExecutorAdapter {
       id: sessionId,
       send: async (text: string, loop) => {
         if (loop?.contextLength !== undefined) state.contextLength = loop.contextLength;
+        if (loop?.mode !== undefined && loop.mode !== state.mode) {
+          state.mode = loop.mode;
+          state.modeApplied = false;
+        }
         await this.runTurn(state, text);
       },
       cancel: async () => {

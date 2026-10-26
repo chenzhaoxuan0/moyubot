@@ -326,6 +326,7 @@ class DaemonRuntimeAdapter implements RuntimeAdapter {
 
   /** 账本回放（ADR 0012）：热环 + 落盘账本，重建聊天页时间线用 */
   async eventsSince(sessionId: SessionId): Promise<readonly { seq: number; at: number; event: RuntimeEvent }[]> {
+    this.#sessions.add(String(sessionId));
     const rows = await this.#client.rpc<Array<{ seq: number; at: number; event: RuntimeEvent }>>(
       "session.events.since",
       { sessionId, afterSeq: 0 },
@@ -343,6 +344,7 @@ class DaemonRuntimeAdapter implements RuntimeAdapter {
     await this.#client.rpc("session.send", {
       sessionId: req.sessionId,
       text: req.text,
+      mode: req.loop?.mode,
       reasoningLevel: req.loop?.reasoningLevel,
       contextLength: req.loop?.contextLength,
       ...(req.contextInject !== undefined ? { contextInject: req.contextInject } : {}),

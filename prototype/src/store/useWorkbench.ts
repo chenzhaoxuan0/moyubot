@@ -315,6 +315,11 @@ interface WorkbenchState {
       worktree?: { path: string; branch: string };
     },
   ) => Promise<void>;
+  /**
+   * 立即在前端时间线中合成一条用户气泡（乐观呈现），并登记 echo 消费窗口。
+   * 用于问卷/决策卡等交互组件在提交瞬间立即在对话流中给出即时视觉反馈。
+   */
+  pushUserBubble: (sessionId: SessionId, text: string) => number;
   /** 停止当前运行 */
   cancelRun: () => void;
   /** 立刻发送一条排队消息：取消当前轮，轮落定后这条优先进去 */
@@ -1594,7 +1599,9 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
           text: fullPrompt,
           attachments,
           loop: {
+            mode: loop.mode,
             ...(loop.reasoningLevel ? { reasoningLevel: loop.reasoningLevel } : {}),
+            ...(loop.contextLength ? { contextLength: loop.contextLength } : {}),
           },
           contextInject,
         });
@@ -1673,7 +1680,9 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
             text: fullPrompt,
             attachments,
             loop: {
+              mode: loop.mode,
               ...(loop.reasoningLevel ? { reasoningLevel: loop.reasoningLevel } : {}),
+              ...(loop.contextLength ? { contextLength: loop.contextLength } : {}),
             },
             contextInject,
           });
@@ -1745,6 +1754,28 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     // 用户消息是时间线的第一行（ZCode：右对齐的用户气泡）。
     pushUserBubble(session.id);
     markSessionViewed(session.id);
+  },
+
+  pushUserBubble: (sessionId, text) => {
+    const itemId = ++seq;
+    registerEcho(sessionId, text, itemId);
+    set((s) => ({
+      timeline: [
+        ...s.timeline,
+        {
+          id: itemId,
+          event: {
+            type: "message.delta",
+            sessionId,
+            messageId: `user_opt_${itemId}`,
+            role: "user" as const,
+            text,
+          } as const,
+          at: Date.now(),
+        },
+      ],
+    }));
+    return itemId;
   },
 
   /**

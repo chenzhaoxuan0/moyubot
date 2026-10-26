@@ -21,10 +21,9 @@ export interface SyncOutcome {
   readonly newMessages: number;
 }
 
-/**
- * 对指定会话执行一次原生源文件对账与同步。
- * 如果源文件消息比工作台记录的多，补齐 missing 的 message.delta / message.completed 事件。
- */
+// 记录内存中每个会话已同步的原生 transcript 偏移量
+const sessionNativeSyncedCounts = new Map<string, number>();
+
 export async function syncNativeSession(
   sessionId: string,
   store: Store,
@@ -62,11 +61,27 @@ export async function syncNativeSession(
     return { changed: false, newMessages: 0 };
   }
 
-  const existingMsgs = store.listMessages(sessionId, 5000);
-  const currentCount = existingMsgs.length;
   const nativeCount = detail.transcript.length;
 
-  // 如果消息数没增加，但源文件更新时间比数据库新，更新元数据即可
+  // 1. 确定已同步游标（绝不拿只存 user/assistant 的 store.messages 条数当作全量 transcript 的游标）
+  let currentCount = sessionNativeSyncedCounts.get(sessionId);
+  if (currentCount === undefined) {
+    // 首次进入：扫描账本中最后一条同步事件的索引编号（msg_ext_N / tc_ext_N）
+    const traceRows = await traceSink.readSessionNdjson(asSessionId(sessionId), 0);
+    let maxExtIdx = 0;
+    if (traceRows.trim() !== "") {
+      const matches = traceRows.matchAll(/(?:msg_ext_|tc_ext_)(\d+)/g);
+      for (const m of matches) {
+        const num = parseInt(m[1]!, 10);
+        if (num > maxExtIdx) maxExtIdx = num;
+      }
+    }
+    // 若账本中已有同步事件，则以此为准；若账本完全无同步事件且数据库已有记录，以 s.turnCount 兜底
+    currentCount = maxExtIdx > 0 ? maxExtIdx : 0;
+    sessionNativeSyncedCounts.set(sessionId, currentCount);
+  }
+
+  // 如果原生消息条数没有增加，更新状态后返回
   if (nativeCount <= currentCount) {
     if (s && detail.updatedAt > (s.endedAt ?? 0)) {
       store.setSessionStatus(s.id, s.status, detail.updatedAt, {
@@ -78,7 +93,7 @@ export async function syncNativeSession(
     return { changed: false, newMessages: 0 };
   }
 
-  log.info("[native-sync] 检测到外部会话新增消息，同步到工作台", {
+  log.info("[native-sync] 检测到外部会话新增消息，实时同步到工作台", {
     sessionId,
     executorId,
     currentCount,
@@ -155,6 +170,9 @@ export async function syncNativeSession(
     }
   }
 
+  // 更新已同步游标
+  sessionNativeSyncedCounts.set(sessionId, nativeCount);
+
   if (s) {
     store.setSessionStatus(s.id, s.status, detail.updatedAt, {
       ...s.stats,
@@ -163,9 +181,19 @@ export async function syncNativeSession(
     store.setSessionProgress(s.id, lastSeq, nativeCount);
   }
 
-  // 广播状态更新让前端侧栏刷新
+  // 广播状态更新让前端侧栏与任务栏无缝刷新
   if (wss) {
-    broadcastEvent(wss, { type: "session.status", sessionId: sid, status: "idle" }, ++lastSeq);
+    const lastEntry = detail.transcript[detail.transcript.length - 1];
+    const isAwaiting = Boolean(
+      lastEntry &&
+      lastEntry.kind === "tool" &&
+      (lastEntry.toolName?.toLowerCase() === "ask_user" ||
+        lastEntry.toolName?.toLowerCase() === "questionnaire" ||
+        lastEntry.toolName?.toLowerCase() === "ask_question" ||
+        lastEntry.toolName?.toLowerCase() === "askuserquestion")
+    );
+    const syncStatus = isAwaiting ? "awaiting_input" : "idle";
+    broadcastEvent(wss, { type: "session.status", sessionId: sid, status: syncStatus }, ++lastSeq);
   }
 
   return { changed: true, newMessages: nativeCount - currentCount };
@@ -178,7 +206,7 @@ export async function syncNativeSession(
  */
 export class NativeSessionWatcher {
   private watchedSessionIds = new Set<string>();
-  private fileMtimes = new Map<string, number>();
+  private fileSignatures = new Map<string, string>();
   private timer: NodeJS.Timeout | null = null;
   private syncing = false;
 
@@ -192,7 +220,7 @@ export class NativeSessionWatcher {
     if (this.timer !== null) return;
     this.timer = setInterval(() => {
       void this.poll();
-    }, 1500);
+    }, 500);
   }
 
   stop(): void {
@@ -205,11 +233,13 @@ export class NativeSessionWatcher {
   watchSession(sessionId: string): void {
     if (!sessionId) return;
     this.watchedSessionIds.add(sessionId);
-    // 保持关注集合轻量（最多最近 20 个）
-    if (this.watchedSessionIds.size > 20) {
+    // 保持关注集合轻量（最多最近 25 个）
+    if (this.watchedSessionIds.size > 25) {
       const first = this.watchedSessionIds.values().next().value;
       if (first) this.watchedSessionIds.delete(first);
     }
+    // 立即执行一次探测，确保外部刚写的内容立刻呈现在眼前
+    void this.poll();
   }
 
   private async poll(): Promise<void> {
@@ -218,10 +248,22 @@ export class NativeSessionWatcher {
     try {
       const wss = this.getWss();
       for (const sid of Array.from(this.watchedSessionIds)) {
+        let bareExec = "";
+        let cliRef = "";
         const s = this.store.getSession(sid);
-        if (!s || !s.cliRef) continue;
-        const bareExec = s.runtimeId.replace(/^daemon:/, "");
-        const detail = await readNativeSession(bareExec, s.cliRef).catch(() => null);
+        if (s !== undefined && s.cliRef !== null && s.cliRef !== "") {
+          bareExec = s.runtimeId.replace(/^daemon:/, "");
+          cliRef = s.cliRef;
+        } else if (sid.startsWith("imp_")) {
+          const parts = sid.slice(4).split("_");
+          if (parts.length >= 2) {
+            bareExec = parts[0]!;
+            cliRef = parts.slice(1).join("_");
+          }
+        }
+        if (!bareExec || !cliRef) continue;
+
+        const detail = await readNativeSession(bareExec, cliRef).catch(() => null);
         if (!detail || !detail.source) continue;
 
         let targetFile = detail.source;
@@ -231,21 +273,24 @@ export class NativeSessionWatcher {
 
         if (!existsSync(targetFile)) continue;
 
-        let mtime = 0;
+        let sig = "";
         try {
-          mtime = statSync(targetFile).mtimeMs;
+          const st = statSync(targetFile);
+          sig = `${st.mtimeMs}_${st.size}`;
         } catch {
           continue;
         }
 
-        const prevMtime = this.fileMtimes.get(targetFile);
-        if (prevMtime === undefined) {
-          this.fileMtimes.set(targetFile, mtime);
+        const prevSig = this.fileSignatures.get(targetFile);
+        if (prevSig === undefined) {
+          this.fileSignatures.set(targetFile, sig);
+          // 首次探测，执行一次对账确保不漏掉刚进来的新消息
+          await syncNativeSession(sid, this.store, this.traceSink, wss ?? undefined);
           continue;
         }
 
-        if (mtime > prevMtime) {
-          this.fileMtimes.set(targetFile, mtime);
+        if (sig !== prevSig) {
+          this.fileSignatures.set(targetFile, sig);
           await syncNativeSession(sid, this.store, this.traceSink, wss ?? undefined);
         }
       }

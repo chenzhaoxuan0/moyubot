@@ -216,8 +216,8 @@ export interface SendMessageRequest {
   readonly sessionId: SessionId;
   readonly text: string;
   readonly attachments?: readonly import("./attachments.ts").ChatAttachment[];
-  /** 下一轮的 loop 参数覆盖（会话级 mode 不变，reasoning 可逐轮调） */
-  readonly loop?: Omit<LoopParams, "mode">;
+  /** 下一轮的 loop 参数覆盖（mode 可用于切换计划/实施，reasoning/context 可逐轮调） */
+  readonly loop?: Partial<LoopParams>;
   /** 本轮续聊附带注入的上下文清单（用户主动勾选时生效） */
   readonly contextInject?: { readonly manifest?: import("./units.ts").ContextManifest };
 }

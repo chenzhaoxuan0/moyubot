@@ -1,7 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { PenLine, X } from "lucide-react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
+import { ChevronDown, ChevronUp, PenLine, X } from "lucide-react";
 import { useWorkbench } from "../../../store/useWorkbench.ts";
+import { useShell } from "../../../store/useShell.ts";
+import { useIsMobile } from "../../mobile/useIsMobile.ts";
 import { cn } from "../../cn.ts";
+import type { RuntimeEvent } from "../../../core/events.ts";
 
 export interface QuestionnaireOption {
   readonly key: string;
@@ -11,18 +14,44 @@ export interface QuestionnaireOption {
   readonly recommended?: boolean;
 }
 
-export interface ParsedQuestionnaire {
+export interface QuestionnaireStep {
+  readonly id: string;
   readonly question: string;
   readonly header?: string;
-  readonly title?: string;
   readonly description?: string;
   readonly options: readonly QuestionnaireOption[];
+  readonly isMultiSelect: boolean;
+}
+
+export interface ParsedQuestionnaire {
+  readonly steps: readonly QuestionnaireStep[];
+  readonly title?: string;
   readonly rawText: string;
+  // 兼容单步快捷属性
+  readonly question: string;
+  readonly header?: string;
+  readonly description?: string;
+  readonly options: readonly QuestionnaireOption[];
   readonly selectionMode?: "single" | "multiple";
 }
 
+function checkIsMultiSelect(raw: any, questionText = "", headerText = ""): boolean {
+  if (
+    raw?.is_multi_select === true ||
+    raw?.isMultiSelect === true ||
+    raw?.multiSelect === true ||
+    raw?.multiple === true ||
+    raw?.selectionMode === "multiple" ||
+    raw?.type === "multiselect"
+  ) {
+    return true;
+  }
+  const combined = `${questionText} ${headerText}`;
+  return /(多选|可多选|哪些|多选题|select all|multiple choice)/i.test(combined);
+}
+
 /**
- * 结构化问卷 / 决策卡 JSON 解析（专门对齐 mcode 等 CLI 的 mode: "questionnaire" 真实格式）
+ * 结构化问卷 / 决策卡 JSON 解析（全面支持多题 steps/questions 与多选题）
  */
 export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionnaire | null {
   let obj: any = raw;
@@ -55,65 +84,112 @@ export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionna
 
   if (!obj || typeof obj !== "object") return null;
 
+  // 深入一层解包常见包装器 arguments / input / params
+  if (obj.arguments && typeof obj.arguments === "object") obj = obj.arguments;
+  else if (obj.input && typeof obj.input === "object") obj = obj.input;
+  else if (obj.params && typeof obj.params === "object") obj = obj.params;
+
   const isQuestionnaire =
     obj.mode === "questionnaire" ||
-    (Array.isArray(obj.steps) && obj.steps.length > 0 && Array.isArray(obj.steps[0]?.options));
+    (Array.isArray(obj.steps) && obj.steps.length > 0 && (Array.isArray(obj.steps[0]?.options) || obj.steps[0]?.question)) ||
+    (Array.isArray(obj.questions) && obj.questions.length > 0 && Array.isArray(obj.questions[0]?.options));
 
   if (!isQuestionnaire) return null;
 
-  const step = Array.isArray(obj.steps) && obj.steps.length > 0 ? obj.steps[0] : obj;
-  const question = String(step.question || step.header || obj.title || "请点选你想要的那一项。");
-  const header = step.header ? String(step.header) : obj.title ? String(obj.title) : undefined;
-  const description = step.description ? String(step.description) : undefined;
-  const rawOptions = (Array.isArray(step.options) ? step.options : []) as any[];
+  let rawStepsList: any[] = [];
+  if (Array.isArray(obj.steps) && obj.steps.length > 0) {
+    rawStepsList = obj.steps;
+  } else if (Array.isArray(obj.questions) && obj.questions.length > 0) {
+    rawStepsList = obj.questions;
+  } else {
+    rawStepsList = [obj];
+  }
 
-  if (rawOptions.length < 2) return null;
+  const parsedSteps: QuestionnaireStep[] = [];
+  for (let idx = 0; idx < rawStepsList.length; idx++) {
+    const rawStep = rawStepsList[idx];
+    if (!rawStep || typeof rawStep !== "object") continue;
 
-  const options: QuestionnaireOption[] = rawOptions.map((opt, idx) => {
-    const rawId = opt.id !== undefined ? String(opt.id).trim() : String.fromCharCode(65 + idx);
-    const key = rawId.length === 1 ? rawId.toUpperCase() : String.fromCharCode(65 + idx);
-    const label = String(opt.label || opt.text || opt.title || `选项 ${key}`);
-    const desc = opt.description ? String(opt.description) : undefined;
-    const recommended = opt.recommended === true;
+    const question = String(rawStep.question || rawStep.header || obj.title || `问题 ${idx + 1}`);
+    const header =
+      rawStep.header && rawStep.header !== question
+        ? String(rawStep.header)
+        : idx === 0 && obj.title && obj.title !== question
+          ? String(obj.title)
+          : undefined;
+    const description = rawStep.description ? String(rawStep.description) : undefined;
+    const rawOptions = (Array.isArray(rawStep.options) ? rawStep.options : []) as any[];
 
-    // 回填文本：如果 label 已经以 A 开头则直接使用，否则前缀 `${key} · ${label}`
-    const fullText = /^[A-Za-z0-9]\s*[—·\.:、\-]/.test(label) ? label : `${key} · ${label}`;
+    if (rawOptions.length < 2) continue;
 
-    return {
-      key,
-      label,
-      description: desc,
-      recommended,
-      fullText,
-    };
-  });
+    const options: QuestionnaireOption[] = rawOptions.map((opt, oIdx) => {
+      if (typeof opt === "string") {
+        const key = String.fromCharCode(65 + oIdx);
+        const label = opt.trim();
+        const recommended = label.includes("推荐") || label.includes("(推荐)") || label.includes("（推荐）");
+        const cleanLabel = label.replace(/[（(]推荐[）)]/g, "").trim();
+        const fullText = /^[A-Za-z0-9]\s*[—·\.:、\-]/.test(cleanLabel) ? cleanLabel : `${key} · ${cleanLabel}`;
+        return { key, label: cleanLabel, fullText, recommended };
+      }
+      const rawId = opt.id !== undefined ? String(opt.id).trim() : String.fromCharCode(65 + oIdx);
+      const key = rawId.length === 1 ? rawId.toUpperCase() : String.fromCharCode(65 + oIdx);
+      const label = String(opt.label || opt.text || opt.title || `选项 ${key}`);
+      const desc = opt.description ? String(opt.description) : undefined;
+      const recommended = opt.recommended === true || label.includes("推荐");
+      const cleanLabel = label.replace(/[（(]推荐[）)]/g, "").trim();
+      const fullText = /^[A-Za-z0-9]\s*[—·\.:、\-]/.test(label) ? label : `${key} · ${cleanLabel}`;
 
+      return {
+        key,
+        label: cleanLabel,
+        description: desc,
+        recommended,
+        fullText,
+      };
+    });
+
+    const isMultiSelect = checkIsMultiSelect(rawStep, question, header);
+
+    parsedSteps.push({
+      id: String(rawStep.id || idx),
+      question,
+      header,
+      description,
+      options,
+      isMultiSelect,
+    });
+  }
+
+  if (parsedSteps.length === 0) return null;
+
+  const firstStep = parsedSteps[0]!;
   return {
-    question,
-    header,
+    steps: parsedSteps,
     title: obj.title ? String(obj.title) : undefined,
-    description,
-    options,
     rawText: typeof raw === "string" ? raw : JSON.stringify(raw),
-    selectionMode: step.selectionMode === "multiple" ? "multiple" : "single",
+    question: firstStep.question,
+    header: firstStep.header,
+    description: firstStep.description,
+    options: firstStep.options,
+    selectionMode: firstStep.isMultiSelect ? "multiple" : "single",
   };
 }
 
 /**
  * 启发式提取文本中的问卷/选项卡内容：
- * 0. 优先尝试解析结构化 mode: "questionnaire" JSON（mcode / minimax 真实标准）
+ * 0. 优先尝试解析结构化 mode: "questionnaire" JSON
  * 1. 行内管道分隔：A · xxx | B · xxx | C · xxx
- * 2. 换行字母列表：A. xxx \n B. xxx \n C. xxx 或 A · xxx \n B · xxx
+ * 2. 换行字母列表：A. xxx \n B. xxx \n C. xxx
  * 3. 换行数字列表：1. xxx \n 2. xxx (当数量 >= 2 时)
  */
 export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | null {
   if (!text || typeof text !== "string") return null;
 
-  // 0. 优先识别真实 questionnaire JSON（包括被 markdown 代码块或文本夹带的 JSON）
+  // 0. 优先识别真实 questionnaire JSON
   const structured = parseStructuredQuestionnaireJson(text);
   if (structured) return structured;
 
-  // 1. 尝试行内管道分隔（如：A · 重发心跳提议横幅 | B · 清理 mock_tool 放行规则 | C · ...）
+  // 1. 尝试行内管道分隔
   const pipeRegex = /([A-Za-z0-9])\s*[·\.:、\-]\s*([^|\n]+)/g;
   const lines = text.trim().split(/\r?\n/);
 
@@ -132,7 +208,6 @@ export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | n
             fullText: `${key} · ${content}`,
           };
         });
-        // 向上寻找提问句（如：请选择... / 确定...）
         let question = "请点选你想要的那一项。";
         for (let j = i - 1; j >= Math.max(0, i - 4); j--) {
           const prev = lines[j]?.trim();
@@ -149,32 +224,47 @@ export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | n
             break;
           }
         }
-        return { question, options, rawText: line };
+        const isMulti = checkIsMultiSelect(null, question);
+        const step: QuestionnaireStep = {
+          id: "step_0",
+          question,
+          options,
+          isMultiSelect: isMulti,
+        };
+        return {
+          steps: [step],
+          question,
+          options,
+          rawText: line,
+          selectionMode: isMulti ? "multiple" : "single",
+        };
       }
     }
   }
 
-  // 2. 尝试多行列表（连续的 A. xxx / B. xxx 或 1. xxx / 2. xxx）
+  // 2. 换行列表匹配（如 A. xxx 或 1. xxx）
   const multilineOptions: QuestionnaireOption[] = [];
-  let foundQuestion = "请点选你想要的那一项。";
-  let optionStartIndex = -1;
+  const listRegex = /^(?:[#*>\s-]*)\s*([A-Da-d0-9])\s*[·\.:、\-]\s*(.+)$/;
+  let foundQuestion = "请选择一项，我会按你的选择直接执行。";
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]?.trim() ?? "";
-    const listMatch = line.match(/^[(\[【]?\s*([A-Za-z0-9])[)\]】·\.:、\-]\s*(.+)$/);
-    if (listMatch) {
-      if (optionStartIndex === -1) optionStartIndex = i;
-      const key = listMatch[1]?.toUpperCase() ?? "";
-      const content = listMatch[2]?.trim() ?? "";
+    const line = lines[i]?.trim();
+    if (!line) continue;
+    const match = line.match(listRegex);
+    if (match) {
+      const key = match[1]!.toUpperCase();
+      const content = match[2]!.trim();
+      const recommended = content.includes("推荐") || content.includes("（推荐）") || content.includes("(推荐)");
+      const cleanLabel = content.replace(/[（(]推荐[）)]/g, "").trim();
       multilineOptions.push({
         key,
-        label: `${key} · ${content}`,
+        label: `${key} · ${cleanLabel}`,
         fullText: `${key} · ${content}`,
+        recommended,
       });
-    } else if (multilineOptions.length >= 2 && line === "") {
-      break;
     } else if (
       multilineOptions.length === 0 &&
+      line.length < 80 &&
       (line.includes("选") || line.includes("？") || line.includes("?"))
     ) {
       foundQuestion = line.replace(/^#+\s*/, "").replace(/[：:]$/, "。");
@@ -182,10 +272,19 @@ export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | n
   }
 
   if (multilineOptions.length >= 2 && multilineOptions.length <= 8) {
+    const isMulti = checkIsMultiSelect(null, foundQuestion);
+    const step: QuestionnaireStep = {
+      id: "step_0",
+      question: foundQuestion,
+      options: multilineOptions,
+      isMultiSelect: isMulti,
+    };
     return {
+      steps: [step],
       question: foundQuestion,
       options: multilineOptions,
       rawText: multilineOptions.map((o) => o.label).join("\n"),
+      selectionMode: isMulti ? "multiple" : "single",
     };
   }
 
@@ -193,303 +292,561 @@ export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | n
 }
 
 /**
- * 问卷决策选项卡片 —— 对齐 ZCode V4InteractionDialogs 与用户交互标准：
- * - 纯净选项卡片（A / B / C / D 徽标单选）
- * - 完整支持：结构化工具调用（ask_question / AskUserQuestion）与对话文本智能识别
- * - 「在这里输入…」补充输入框
- * - 唯一底栏动作：「提交」（无跳过，不替用户做决定）
- * - 支持 A/B/C/D 快捷选单、上下方向键导航与 Enter 快捷提交
+ * 从当前时间线中精准反查最后一次未响应的问卷/决策卡
  */
-export function QuestionnaireCard(): ReactElement | null {
-  const timeline = useWorkbench((s) => s.timeline);
-  const activeSessionId = useWorkbench((s) => s.activeSessionId);
-  const sessionStatus = useWorkbench(
-    (s) => s.sessions.find((x) => x.id === s.activeSessionId)?.status,
-  );
-  const run = useWorkbench((s) => s.run);
+export function detectQuestionnaireFromTimeline(
+  timeline: readonly { id: number | string; event: RuntimeEvent; at: number }[],
+): ParsedQuestionnaire | null {
+  if (!timeline || timeline.length === 0) return null;
 
-  // 查找最后一条 assistant 消息（聚合完整文本）或问卷工具调用
-  const detectedQuestionnaire = useMemo<ParsedQuestionnaire | null>(() => {
-    if (timeline.length === 0) return null;
+  let assistantMessageId: string | null = null;
+  let assistantCompletedText: string | null = null;
+  let toolAskQuestion: ParsedQuestionnaire | null = null;
 
-    // 检查是否最后一条 assistant 之后已经有新的 user 消息了
-    let assistantMessageId: string | null = null;
-    let assistantCompletedText: string | null = null;
-    let foundSubsequentUser = false;
-    let toolAskQuestion: ParsedQuestionnaire | null = null;
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const item = timeline[i];
+    if (!item) continue;
+    const ev = item.event;
 
-    for (let i = timeline.length - 1; i >= 0; i--) {
-      const item = timeline[i];
-      if (!item) continue;
-      const ev = item.event;
+    // 如果后方已存在用户回复，说明当前问卷已作答或过时，不再展示
+    if (ev.type === "message.delta" && ev.role === "user") {
+      if (!toolAskQuestion && !assistantCompletedText && !assistantMessageId) {
+        return null;
+      }
+    }
 
-      if (ev.type === "message.delta" && ev.role === "user") {
-        if (!assistantMessageId && !toolAskQuestion) {
-          foundSubsequentUser = true;
-          break;
-        }
+    // 1. 优先提取结构化工具调用（ask_user / questionnaire / ask_question / askUserQuestion）
+    if (ev.type === "tool.started" && !toolAskQuestion) {
+      const parsedTool = parseStructuredQuestionnaireJson(ev.input);
+      if (parsedTool) {
+        toolAskQuestion = {
+          ...parsedTool,
+          rawText: `tool_${ev.callId}`,
+        };
+        break;
       }
 
-      // 1. 支持结构化工具调用（对齐 ZCode Elicitation / AskUserQuestion / ask_question）
-      if (ev.type === "tool.started" && !assistantMessageId) {
-        const parsedTool = parseStructuredQuestionnaireJson(ev.input);
-        if (parsedTool) {
-          toolAskQuestion = {
-            ...parsedTool,
-            rawText: `tool_${ev.callId}`,
-          };
-          break;
+      const tn = ev.toolName.toLowerCase().replace(/[\s_\-]+/g, "");
+      if (tn === "exitplanmode") {
+        let inp: any = ev.input;
+        if (typeof inp === "string") {
+          try { inp = JSON.parse(inp); } catch { /* ignore */ }
         }
-        const tn = ev.toolName.toLowerCase();
-        if (tn === "ask_question" || tn === "askuserquestion" || tn === "questionnaire" || tn === "ask_user") {
-          const inp = ev.input as Record<string, unknown> | undefined;
-          if (inp) {
-            const rawOpts = (Array.isArray(inp.options) ? inp.options : Array.isArray((inp.questions as any)?.[0]?.options) ? (inp.questions as any)[0].options : []) as unknown[];
-            if (rawOpts.length >= 2) {
-              const options: QuestionnaireOption[] = rawOpts.map((opt, idx) => {
-                const key = String.fromCharCode(65 + idx);
-                const text = typeof opt === "string" ? opt : String((opt as any)?.label ?? (opt as any)?.value ?? (opt as any)?.text ?? "");
-                return {
-                  key,
-                  label: `${key} · ${text}`,
-                  fullText: `${key} · ${text}`,
-                };
-              });
-              const qTitle = String(inp.question ?? inp.header ?? inp.message ?? (inp.questions as any)?.[0]?.question ?? "请点选你想要的那一项。");
-              toolAskQuestion = {
-                question: qTitle,
-                options,
-                rawText: `tool_${ev.callId}`,
-              };
-              break;
-            }
+        const planText = typeof inp === "string" ? inp : (inp?.plan ?? inp?.summary ?? inp?.description ?? "模型已起草实施方案，请审阅批准。");
+        const exitPlanStep: QuestionnaireStep = {
+          id: "exit_plan",
+          header: "📋 计划审批 (Plan Approval)",
+          question: `方案规划已就绪，是否批准退出计划模式并开始实施？\n${typeof planText === "string" ? planText.slice(0, 200) : ""}`,
+          options: [
+            {
+              key: "A",
+              label: "A · 批准并开始实施代码变更 (Approve & Implement)",
+              fullText: "批准实施计划。请退出只读计划模式，开始按步骤修改代码并执行测试。",
+              recommended: true,
+            },
+            {
+              key: "B",
+              label: "B · 退出计划模式 (Exit Plan Mode)",
+              fullText: "已审阅计划，请退出计划模式。",
+            },
+          ],
+          isMultiSelect: false,
+        };
+        toolAskQuestion = {
+          steps: [exitPlanStep],
+          header: exitPlanStep.header,
+          question: exitPlanStep.question,
+          options: exitPlanStep.options,
+          rawText: `tool_${ev.callId}`,
+          selectionMode: "single",
+        };
+        break;
+      }
+
+      if (tn === "askuser" || tn === "askquestion" || tn === "askuserquestion" || tn === "questionnaire") {
+        let inp: any = ev.input;
+        if (typeof inp === "string") {
+          try {
+            inp = JSON.parse(inp);
+          } catch {
+            /* ignore */
+          }
+        }
+        if (inp && typeof inp === "object") {
+          const parsedInp = parseStructuredQuestionnaireJson(inp);
+          if (parsedInp) {
+            toolAskQuestion = {
+              ...parsedInp,
+              rawText: `tool_${ev.callId}`,
+            };
+            break;
           }
         }
       }
-
-      // 2. 查找 assistant 消息
-      if (ev.type === "message.completed") {
-        assistantMessageId = ev.messageId;
-        assistantCompletedText = ev.text;
-        break;
-      }
-      if (ev.type === "message.delta" && ev.role === "assistant") {
-        assistantMessageId = ev.messageId;
-        break;
-      }
     }
 
-    if (foundSubsequentUser) return null;
-    if (toolAskQuestion) return toolAskQuestion;
-    if (!assistantMessageId) return null;
-
-    // 拼装完整文本
-    let fullText = assistantCompletedText ?? "";
-    if (!fullText) {
-      const chunks: string[] = [];
-      for (const t of timeline) {
-        if (t.event.type === "message.delta" && t.event.role === "assistant" && t.event.messageId === assistantMessageId) {
-          chunks.push(t.event.text);
-        }
-      }
-      fullText = chunks.join("");
+    // 2. 收集最后一条 assistant 消息（作为纯文本兜底识别）
+    if (ev.type === "message.completed" && !assistantCompletedText) {
+      assistantCompletedText = ev.text;
     }
+    if (ev.type === "message.delta" && ev.role === "assistant" && !assistantMessageId) {
+      assistantMessageId = ev.messageId;
+    }
+  }
 
-    if (!fullText) return null;
-    return parseQuestionnaireOptions(fullText);
-  }, [timeline]);
+  if (toolAskQuestion) return toolAskQuestion;
+  if (!assistantMessageId && !assistantCompletedText) return null;
 
-  const [dismissedFor, setDismissedFor] = useState<string | null>(null);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [customInput, setCustomInput] = useState("");
+  // 拼装完整文本并尝试文本识别
+  let fullText = assistantCompletedText ?? "";
+  if (!fullText && assistantMessageId) {
+    const chunks: string[] = [];
+    for (const t of timeline) {
+      if (t.event.type === "message.delta" && t.event.role === "assistant" && t.event.messageId === assistantMessageId) {
+        chunks.push(t.event.text);
+      }
+    }
+    fullText = chunks.join("");
+  }
+
+  if (!fullText) return null;
+  return parseQuestionnaireOptions(fullText);
+}
+
+interface StepAnswerState {
+  readonly selectedKeys: Set<string>;
+  readonly customInput: string;
+  readonly isInputSelected: boolean;
+}
+
+/**
+ * 决策输入面板（对齐 MiniMax Code 官方形态）：
+ * - 嵌入在底部输入框（Composer）的原位，不霸占中间聊天区的高度
+ * - 高度自适应选项行数，紧凑精致
+ * - 支持单选题（圆形徽标 rounded-full）与多选题（圆角矩形徽标 rounded-md）
+ * - 支持多步骤/多题切换（^ 2/ 共 3 步 v）
+ * - 精确层级：最外层卡片无发光，最内层输入框无外框，仅中间输入条呈现主题色边框
+ */
+export function QuestionnaireComposer({
+  questionnaire,
+  onDismiss,
+}: {
+  readonly questionnaire: ParsedQuestionnaire;
+  readonly onDismiss: () => void;
+}): ReactElement {
+  const { isMobile } = useIsMobile();
+  const chatColumnWidth = useShell((s) => s.chatColumnWidth);
+  const run = useWorkbench((s) => s.run);
+  const activeSessionId = useWorkbench((s) => s.activeSessionId);
+  const setDraft = useWorkbench((s) => s.setDraft);
+
+  const steps = questionnaire.steps.length > 0 ? questionnaire.steps : [
+    {
+      id: "step_0",
+      question: questionnaire.question,
+      header: questionnaire.header,
+      description: questionnaire.description,
+      options: questionnaire.options,
+      isMultiSelect: questionnaire.selectionMode === "multiple",
+    },
+  ];
+
+  const totalSteps = steps.length;
+  const [currentStepIndex, setCurrentStepIndex] = useState(0);
+
+  // 记录每个步骤的已选和输入状态
+  const [stepAnswers, setStepAnswers] = useState<Record<number, StepAnswerState>>({});
+  const [isInputFocused, setIsInputFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 当遇到新的选项集时，重置选中态
-  useEffect(() => {
-    if (detectedQuestionnaire && detectedQuestionnaire.rawText !== dismissedFor) {
-      setSelectedKey(null);
-      setCustomInput("");
+  const currentStep = steps[currentStepIndex] ?? steps[0]!;
+  const currentAnswer: StepAnswerState = stepAnswers[currentStepIndex] ?? {
+    selectedKeys: new Set<string>(),
+    customInput: "",
+    isInputSelected: false,
+  };
+
+  const isInputActive =
+    currentAnswer.isInputSelected ||
+    isInputFocused ||
+    currentAnswer.customInput.trim() !== "";
+
+  // 激活自定义输入
+  const activateCustomInput = () => {
+    setStepAnswers((prev) => {
+      const prevStep = prev[currentStepIndex];
+      return {
+        ...prev,
+        [currentStepIndex]: {
+          // 单选模式下互斥清空已选选项；多选模式下允许同时勾选 ABCD 并输入“其他”
+          selectedKeys: currentStep.isMultiSelect
+            ? (prevStep?.selectedKeys ?? new Set<string>())
+            : new Set<string>(),
+          customInput: prevStep?.customInput ?? "",
+          isInputSelected: true,
+        },
+      };
+    });
+    setIsInputFocused(true);
+    inputRef.current?.focus();
+  };
+
+  // 选择选项：单选互斥，多选增减（多选时保留已输入的“其他”内容）
+  const selectOption = (key: string) => {
+    const nextKeys = new Set(currentAnswer.selectedKeys);
+    if (currentStep.isMultiSelect) {
+      if (nextKeys.has(key)) {
+        nextKeys.delete(key);
+      } else {
+        nextKeys.add(key);
+      }
+    } else {
+      nextKeys.clear();
+      nextKeys.add(key);
     }
-  }, [detectedQuestionnaire, dismissedFor]);
 
-  // 全局快捷键监听（对齐 ZCode：支持 A/B/C/D、方向键选择与 Enter 提交）
+    setStepAnswers((prev) => {
+      const prevStep = prev[currentStepIndex];
+      return {
+        ...prev,
+        [currentStepIndex]: {
+          selectedKeys: nextKeys,
+          // 单选模式下清空自定义输入；多选模式下保留已填入的“其他”
+          customInput: currentStep.isMultiSelect ? (prevStep?.customInput ?? "") : "",
+          isInputSelected: currentStep.isMultiSelect ? (prevStep?.isInputSelected ?? false) : false,
+        },
+      };
+    });
+    setIsInputFocused(false);
+  };
+
+  const handleInputChange = (val: string) => {
+    setStepAnswers((prev) => {
+      const prevStep = prev[currentStepIndex];
+      return {
+        ...prev,
+        [currentStepIndex]: {
+          // 单选模式下输入清空选项；多选模式下选项与自定义输入共存
+          selectedKeys: currentStep.isMultiSelect
+            ? (prevStep?.selectedKeys ?? new Set<string>())
+            : new Set<string>(),
+          customInput: val,
+          isInputSelected: true,
+        },
+      };
+    });
+  };
+
+  const canGoPrev = currentStepIndex > 0;
+  const canGoNext = currentStepIndex < totalSteps - 1;
+  const hasCurrentAnswer =
+    currentAnswer.selectedKeys.size > 0 || currentAnswer.customInput.trim() !== "";
+
+  // 键盘快捷键监听：A/B/C/D、方向键选择与 Enter 提交
   useEffect(() => {
-    if (!detectedQuestionnaire || dismissedFor === detectedQuestionnaire.rawText) return;
-
     const onKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement === inputRef.current) {
-        if (e.key === "Enter" && !e.shiftKey) {
-          e.preventDefault();
+      const activeTag = (document.activeElement?.tagName ?? "").toLowerCase();
+      const inInput = activeTag === "input" || activeTag === "textarea";
+
+      const keyUpper = e.key.toUpperCase();
+      const matched = currentStep.options.find((o) => o.key.toUpperCase() === keyUpper);
+      if (matched && !inInput) {
+        e.preventDefault();
+        selectOption(matched.key);
+        return;
+      }
+
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        if (inInput) return;
+        e.preventDefault();
+        const opts = currentStep.options;
+        const keysArr = Array.from(currentAnswer.selectedKeys);
+        const lastSelected = keysArr[keysArr.length - 1];
+        const currentIdx = opts.findIndex((o) => o.key === lastSelected);
+        if (e.key === "ArrowDown") {
+          const nextIdx = currentIdx < opts.length - 1 ? currentIdx + 1 : 0;
+          selectOption(opts[nextIdx]!.key);
+        } else {
+          const prevIdx = currentIdx > 0 ? currentIdx - 1 : opts.length - 1;
+          selectOption(opts[prevIdx]!.key);
+        }
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (canGoNext && hasCurrentAnswer) {
+          setCurrentStepIndex((i) => i + 1);
+        } else {
           handleSubmit();
         }
-        return;
-      }
-
-      if (e.key === "Escape") {
-        setDismissedFor(detectedQuestionnaire.rawText);
-        return;
-      }
-
-      const key = e.key.toUpperCase();
-      const matched = detectedQuestionnaire.options.find((o) => o.key === key);
-      if (matched) {
+      } else if (e.key === "Escape") {
         e.preventDefault();
-        setSelectedKey(matched.key);
-      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        const opts = detectedQuestionnaire.options;
-        const currIdx = opts.findIndex((o) => o.key === selectedKey);
-        if (e.key === "ArrowDown") {
-          const nextIdx = currIdx < opts.length - 1 ? currIdx + 1 : 0;
-          setSelectedKey(opts[nextIdx]!.key);
-        } else {
-          const prevIdx = currIdx > 0 ? currIdx - 1 : opts.length - 1;
-          setSelectedKey(opts[prevIdx]!.key);
-        }
-      } else if (e.key === "Enter" && (selectedKey !== null || customInput.trim() !== "")) {
-        e.preventDefault();
-        handleSubmit();
+        handleClose();
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [detectedQuestionnaire, dismissedFor, selectedKey, customInput]);
-
-  if (!detectedQuestionnaire || dismissedFor === detectedQuestionnaire.rawText) return null;
+  }, [currentStep, currentAnswer, canGoNext, hasCurrentAnswer]);
 
   const handleSubmit = () => {
-    const selectedOption = detectedQuestionnaire.options.find((o) => o.key === selectedKey);
-    let finalPayload = "";
+    const payloads: string[] = [];
 
-    if (selectedOption && customInput.trim()) {
-      finalPayload = `${selectedOption.fullText}\n补充说明：${customInput.trim()}`;
-    } else if (selectedOption) {
-      finalPayload = selectedOption.fullText;
-    } else if (customInput.trim()) {
-      finalPayload = customInput.trim();
+    steps.forEach((step, idx) => {
+      const ans = stepAnswers[idx];
+      if (!ans) return;
+
+      const stepParts: string[] = [];
+      if (ans.selectedKeys.size > 0) {
+        const selectedOptions = step.options.filter((o) => ans.selectedKeys.has(o.key));
+        if (selectedOptions.length > 0) {
+          stepParts.push(selectedOptions.map((o) => o.fullText).join("\n"));
+        }
+      }
+      if (ans.customInput.trim()) {
+        const customText = ans.customInput.trim();
+        stepParts.push(ans.selectedKeys.size > 0 ? `其他: ${customText}` : customText);
+      }
+
+      if (stepParts.length > 0) {
+        if (totalSteps > 1) {
+          payloads.push(`【第 ${idx + 1} 题: ${step.question}】\n` + stepParts.join("\n"));
+        } else {
+          payloads.push(stepParts.join("\n"));
+        }
+      }
+    });
+
+    let finalPayload = payloads.join("\n\n").trim();
+    if (!finalPayload) {
+      const parts: string[] = [];
+      if (currentAnswer.selectedKeys.size > 0) {
+        const selected = currentStep.options.filter((o) => currentAnswer.selectedKeys.has(o.key));
+        if (selected.length > 0) {
+          parts.push(selected.map((o) => o.fullText).join("\n"));
+        }
+      }
+      if (currentAnswer.customInput.trim()) {
+        const customText = currentAnswer.customInput.trim();
+        parts.push(currentAnswer.selectedKeys.size > 0 ? `其他: ${customText}` : customText);
+      }
+      finalPayload = parts.join("\n").trim();
+      if (!finalPayload) {
+        finalPayload = "跳过";
+      }
     }
 
     if (!finalPayload) return;
 
-    setDismissedFor(detectedQuestionnaire.rawText);
+    if (activeSessionId) {
+      useWorkbench.getState().pushUserBubble(activeSessionId, finalPayload);
+    }
+
+    // 若当前是计划审批通过
+    if (
+      currentStep.header?.includes("计划审批") ||
+      currentStep.header?.includes("Plan Approval") ||
+      finalPayload.includes("退出只读计划模式") ||
+      finalPayload.includes("退出计划模式")
+    ) {
+      useWorkbench.getState().setPermissionMode("ask");
+    }
+
+    setStepAnswers({});
+    setIsInputFocused(false);
+    onDismiss();
     void run(finalPayload);
   };
 
-  const canSubmit = selectedKey !== null || customInput.trim() !== "";
+  const handleClose = () => {
+    if (currentAnswer.customInput.trim()) {
+      setDraft(currentAnswer.customInput.trim());
+    }
+    onDismiss();
+  };
+
+  const handleNextStep = () => {
+    if (canGoNext) {
+      setCurrentStepIndex((i) => i + 1);
+    } else {
+      handleSubmit();
+    }
+  };
 
   return (
-    <aside
-      className="mx-4 my-2 overflow-hidden rounded-2xl border border-line-soft bg-surface/98 dark:bg-rail/98 backdrop-blur-xl shadow-2xl transition-all duration-200"
-      aria-label="决策选项卡"
-    >
-      {/* 头部标题与关闭按钮 */}
-      <div className="border-b border-line-soft/60 px-5 py-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            {(detectedQuestionnaire.header || detectedQuestionnaire.title) && (
-              <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-teal">
-                {detectedQuestionnaire.header || detectedQuestionnaire.title}
-              </div>
-            )}
-            <h3 className="text-body-md font-semibold text-ink select-none leading-snug">
-              {detectedQuestionnaire.question}
-            </h3>
-            {detectedQuestionnaire.description && (
-              <p className="mt-1 text-caption text-graphite/85 leading-relaxed">
-                {detectedQuestionnaire.description}
-              </p>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={() => setDismissedFor(detectedQuestionnaire.rawText)}
-            className="rounded-full p-1 text-ash hover:bg-line-soft hover:text-ink transition cursor-pointer shrink-0 mt-0.5"
-            title="关闭选单（直接在输入框自由回复）"
-          >
-            <X size={18} />
-          </button>
-        </div>
-      </div>
-
-      {/* 选项列表 */}
-      <div className="space-y-2 p-4">
-        {detectedQuestionnaire.options.map((option) => {
-          const isSelected = selectedKey === option.key;
-          return (
-            <button
-              key={option.key}
-              type="button"
-              onClick={() => setSelectedKey(option.key)}
-              className={cn(
-                "group flex w-full items-start gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-all duration-150 cursor-pointer select-none",
-                isSelected
-                  ? "border-teal/60 bg-teal-500/10 text-teal-700 dark:text-teal-300 ring-1 ring-teal/30 shadow-sm"
-                  : "border-line-soft bg-rail/60 text-ink hover:border-teal/40 hover:bg-line-soft/50",
+    <div className="shrink-0">
+      <div
+        style={{ maxWidth: chatColumnWidth }}
+        className={cn("mx-auto w-full", isMobile ? "px-3 pb-2 pt-1" : "px-3 pb-4 pt-2 @min-[560px]:px-8")}
+      >
+        {/* 1. 最外层大容器：常规 border-line，不加任何主题色发光外框（对齐图 2） */}
+        <div className="relative rounded-2xl border border-line bg-canvas/98 dark:bg-[#18181c]/98 shadow-2xl backdrop-blur-xl overflow-hidden transition-all duration-200">
+          {/* 顶栏：标题、上下题切换（对齐图 1）与关闭按钮 */}
+          <div className="flex items-center justify-between border-b border-line-soft/60 px-4 py-2.5">
+            <div className="min-w-0 flex-1">
+              {(currentStep.header || questionnaire.title) && (
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-teal">
+                  {currentStep.header || questionnaire.title}
+                </div>
               )}
-            >
-              <span
-                className={cn(
-                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-caption font-bold transition-colors mt-0.5",
-                  isSelected
-                    ? "bg-teal text-white shadow-subtle"
-                    : "bg-line-soft text-graphite group-hover:bg-line group-hover:text-ink",
-                )}
-              >
-                {option.key}
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-body-sm font-medium leading-relaxed">
-                    {option.label}
+              <h3 className="text-body-sm font-semibold text-ink dark:text-zinc-100 select-none leading-snug truncate">
+                {currentStep.question}
+              </h3>
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0 ml-2">
+              {/* 多步翻题器（图 1 形式：^ 2/ 共 3 步 v） */}
+              {totalSteps > 1 && (
+                <div className="flex items-center gap-1 text-xs text-ash bg-line-soft/60 dark:bg-white/[0.05] rounded-lg px-2 py-1">
+                  <button
+                    type="button"
+                    disabled={!canGoPrev}
+                    onClick={() => setCurrentStepIndex((i) => Math.max(0, i - 1))}
+                    className="rounded p-0.5 hover:bg-line hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent transition cursor-pointer"
+                    title="上一题"
+                  >
+                    <ChevronUp size={14} />
+                  </button>
+                  <span className="font-mono text-[11px] select-none text-graphite dark:text-zinc-300 px-0.5">
+                    {currentStepIndex + 1}/ 共 {totalSteps} 步
                   </span>
+                  <button
+                    type="button"
+                    disabled={!canGoNext}
+                    onClick={() => setCurrentStepIndex((i) => Math.min(totalSteps - 1, i + 1))}
+                    className="rounded p-0.5 hover:bg-line hover:text-ink disabled:opacity-25 disabled:hover:bg-transparent transition cursor-pointer"
+                    title="下一题"
+                  >
+                    <ChevronDown size={14} />
+                  </button>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleClose}
+                className="rounded-full p-1 text-ash hover:bg-line-soft hover:text-ink transition cursor-pointer"
+                title="关闭选单（在输入框自由回复）"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          </div>
+
+          {/* 选项列表（自适应撑开） */}
+          <div className="space-y-1.5 p-3">
+            {currentStep.options.map((option) => {
+              const isSelected = currentAnswer.selectedKeys.has(option.key);
+              return (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => selectOption(option.key)}
+                  className={cn(
+                    "group flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-all duration-150 cursor-pointer select-none",
+                    isSelected
+                      ? "border-teal/60 bg-teal-500/10 text-teal-700 dark:text-teal-300 ring-1 ring-teal/30 shadow-sm"
+                      : "border-line-soft/80 bg-rail/40 dark:bg-white/[0.03] text-ink dark:text-zinc-200 hover:border-teal/40 hover:bg-line-soft/50 dark:hover:bg-white/[0.06]",
+                  )}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    {/* 单选为圆形 rounded-full，多选为圆角矩形 rounded-md（对齐图 3 用户要求） */}
+                    <span
+                      className={cn(
+                        "flex h-6 w-6 shrink-0 items-center justify-center font-mono text-xs font-bold transition-all",
+                        currentStep.isMultiSelect ? "rounded-md" : "rounded-full",
+                        isSelected
+                          ? "bg-teal text-white shadow-subtle"
+                          : "bg-line-soft dark:bg-white/[0.08] text-graphite dark:text-zinc-300 group-hover:bg-line group-hover:text-ink",
+                      )}
+                    >
+                      {option.key}
+                    </span>
+                    <span className="text-body-sm font-medium leading-relaxed truncate">
+                      {option.label}
+                    </span>
+                  </div>
                   {option.recommended && (
-                    <span className="inline-flex items-center rounded-full bg-teal/15 px-2 py-0.5 text-[10px] font-semibold text-teal dark:text-teal-300">
+                    <span className="inline-flex items-center rounded-full bg-line-soft dark:bg-white/[0.1] px-2 py-0.5 text-[10px] font-medium text-graphite dark:text-zinc-400 shrink-0">
                       推荐
                     </span>
                   )}
-                </div>
-                {option.description && (
-                  <p className="mt-1 text-[11px] text-ash leading-normal">
-                    {option.description}
-                  </p>
-                )}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* 底部补充输入框与提交区（严格无跳过按钮） */}
-      <div className="border-t border-line-soft/60 bg-rail/40 px-4 py-3">
-        <div className="flex items-center gap-3">
-          <div className="relative flex flex-1 items-center rounded-xl border border-line-soft bg-surface px-3 py-2 shadow-inner focus-within:border-teal/60 focus-within:ring-1 focus-within:ring-teal/30">
-            <PenLine size={16} className="mr-2 text-ash shrink-0" />
-            <input
-              ref={inputRef}
-              type="text"
-              value={customInput}
-              onChange={(e) => setCustomInput(e.target.value)}
-              placeholder="在这里输入补充内容或自定义要求…"
-              className="w-full bg-transparent text-body-sm text-ink placeholder:text-ash/60 focus:outline-none"
-            />
+                </button>
+              );
+            })}
           </div>
 
-          <button
-            type="button"
-            disabled={!canSubmit}
-            onClick={handleSubmit}
-            className={cn(
-              "flex h-10 items-center justify-center rounded-xl px-6 text-body-sm font-medium text-white transition-all duration-150 select-none shadow-sm cursor-pointer",
-              canSubmit
-                ? "bg-teal hover:bg-teal-600 active:scale-[0.98]"
-                : "bg-ash/40 text-white/60 cursor-not-allowed opacity-50",
-            )}
-          >
-            提交
-          </button>
+          {/* 底部输入框与提交/下一题/跳过按钮 */}
+          <div className="border-t border-line-soft/60 bg-rail/30 dark:bg-white/[0.02] px-3 py-2">
+            <div className="flex items-center gap-2">
+              {/* 2. 中间层输入框条：仅此层在激活时呈现主题色边框（对齐图 2） */}
+              <div
+                onMouseDown={activateCustomInput}
+                onClick={activateCustomInput}
+                className={cn(
+                  "relative flex flex-1 items-center rounded-xl border px-3 py-1.5 transition-all duration-150 cursor-text",
+                  isInputActive
+                    ? "border-teal/60 bg-teal-500/10 text-teal-700 dark:text-teal-300 ring-1 ring-teal/30 shadow-sm"
+                    : "border-line-soft/80 bg-rail/40 dark:bg-white/[0.03] hover:border-teal/40 hover:bg-line-soft/50 dark:hover:bg-white/[0.06]",
+                )}
+              >
+                <PenLine
+                  size={14}
+                  className={cn("mr-2 shrink-0 transition-colors", isInputActive ? "text-teal" : "text-ash")}
+                />
+                {/* 3. 最里层 input：绝对无任何外框与阴影，杜绝内外发光重叠（对齐图 2） */}
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={currentAnswer.customInput}
+                  onFocus={activateCustomInput}
+                  onMouseDown={activateCustomInput}
+                  onClick={activateCustomInput}
+                  onBlur={() => setIsInputFocused(false)}
+                  onChange={(e) => handleInputChange(e.target.value)}
+                  placeholder="在这里输入..."
+                  className="w-full bg-transparent text-body-sm text-ink outline-none border-none ring-0 shadow-none focus:outline-none focus:border-none focus:ring-0 focus:shadow-none placeholder:text-ash/70"
+                  style={{ outline: "none", boxShadow: "none", border: "none" }}
+                />
+              </div>
+
+              {canGoNext && hasCurrentAnswer ? (
+                <button
+                  type="button"
+                  onClick={handleNextStep}
+                  className="rounded-xl px-4 py-1.5 text-xs font-semibold bg-teal text-white shadow-sm hover:brightness-110 active:scale-95 transition cursor-pointer select-none shrink-0"
+                >
+                  下一题
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  className={cn(
+                    "rounded-xl px-4 py-1.5 text-xs font-semibold transition cursor-pointer select-none shrink-0",
+                    hasCurrentAnswer
+                      ? "bg-teal text-white shadow-sm hover:brightness-110 active:scale-95"
+                      : "bg-line-soft dark:bg-white/[0.08] text-ash hover:bg-line hover:text-ink",
+                  )}
+                >
+                  {hasCurrentAnswer ? "提交" : "跳过"}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* 底部微小免责提示，与 MiniMax 官方一致 */}
+        <div className="mt-1 text-center text-[10px] text-ash/70 select-none">
+          内容由AI生成，重要信息请务必核查
         </div>
       </div>
-    </aside>
+    </div>
   );
 }
+
+/**
+ * 兼容旧引用的占位组件（实际交互已全部收归 Composer 位置）
+ */
+export function QuestionnaireCard(): ReactElement | null {
+  return null;
+}
+
