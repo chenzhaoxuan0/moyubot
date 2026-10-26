@@ -102,9 +102,18 @@ export function ComposerContextPicker({ compact }: { compact?: boolean } = {}) {
 
   // 单独切换某一项
   const toggleItem = (key: keyof ContextManifest) => {
-    const base = effectiveManifest ?? LEGACY_CONTEXT_MANIFEST;
+    const base = effectiveManifest ?? {
+      firstTurnInject: false,
+      agentsMd: "off",
+      soul: false,
+      user: false,
+      memorySemantic: false,
+      memoryDaily: false,
+      memoryStanding: false,
+      skills: false,
+    };
     const currentVal = base[key];
-    const nextVal = key === "agentsMd" ? (currentVal === "on" ? "off" : "on") : !currentVal;
+    const nextVal = key === "agentsMd" ? (currentVal === "off" ? "on" : "off") : !currentVal;
 
     const nextCustom: ContextManifest = {
       ...base,

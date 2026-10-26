@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
+import { AlertTriangle, Bell, CheckCircle2, Info, X } from "lucide-react";
 import { BackgroundGuardianBadge, SessionLightLegendBadge, WorkPhaseBadge } from "./StatusIndicators.tsx";
 import { Taskbar } from "./taskbar/Taskbar.tsx";
 import { STATUSBAR_MIN, useShell } from "../store/useShell.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
+import { useNotifications } from "../store/useNotifications.ts";
 import { sidePaneOccupies } from "../core/sidePaneTabs.ts";
 import { cn } from "./cn.ts";
 
@@ -110,11 +111,56 @@ export function GlobalStatusBar() {
       >
         <Taskbar />
       </div>
-      {/* 右侧面板正下方：展示底栏通知或留空对齐 */}
-      <div className="flex shrink-0 items-center justify-end px-2.5" style={{ minWidth: rightZone > 0 ? rightZone : "fit-content" }}>
+      {/* 右侧面板正下方：展示底栏通知、VS Code 风格 Notification 图标或留空对齐 */}
+      <div className="flex shrink-0 items-center justify-end gap-2 px-2.5" style={{ minWidth: rightZone > 0 ? rightZone : "fit-content" }}>
         <BottomToastBar />
+        <span className="h-3 w-px bg-line/60" />
+        <NotificationStatusItem />
       </div>
     </footer>
+  );
+}
+
+function NotificationStatusItem() {
+  const unreadCount = useNotifications((s) => s.items.filter((n) => !n.read).length);
+  const activeTabId = useSidePane((s) => s.activeTabId);
+  const paneCollapsed = useSidePane((s) => s.collapsed);
+  const isNotificationsOpen = activeTabId === "notify" && !paneCollapsed;
+
+  const handleClick = () => {
+    const sidePane = useSidePane.getState();
+    if (sidePane.activeTabId === "notify" && !sidePane.collapsed) {
+      sidePane.toggleCollapsed();
+    } else {
+      sidePane.openNotifications();
+    }
+  };
+
+  const hasUnread = unreadCount > 0;
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      aria-label="通知中心"
+      title={hasUnread ? `通知 (${unreadCount} 条未读)` : "通知 - 无新通知"}
+      className={cn(
+        "relative flex h-6 w-6 items-center justify-center rounded transition cursor-pointer select-none",
+        isNotificationsOpen
+          ? "bg-teal/15 text-teal"
+          : hasUnread
+            ? "text-ink hover:bg-line-soft hover:text-ink"
+            : "text-ash hover:bg-line-soft hover:text-ink",
+      )}
+    >
+      <Bell size={13} className="shrink-0" />
+      {hasUnread && (
+        <span
+          className="absolute -top-0.5 -right-0.5 flex h-2 w-2 rounded-full bg-teal ring-2 ring-rail animate-pulse"
+          aria-hidden="true"
+        />
+      )}
+    </button>
   );
 }
 

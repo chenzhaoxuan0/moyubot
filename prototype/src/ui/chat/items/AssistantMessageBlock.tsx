@@ -48,20 +48,22 @@ export function AssistantMessageBlock({
   const [copied, setCopied] = useState(false);
   const [liveSec, setLiveSec] = useState(0);
 
+  const isActuallyLive = streaming && sourceStatus === "running";
+
   // 流式中实时更新已执行秒数（对齐截图与用户诉求）
   useEffect(() => {
-    if (!streaming || !turnStartedAt) return;
+    if (!isActuallyLive || !turnStartedAt) return;
     const update = () => {
       setLiveSec(Math.max(1, Math.round((Date.now() - turnStartedAt) / 1000)));
     };
     update();
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
-  }, [streaming, turnStartedAt]);
+  }, [isActuallyLive, turnStartedAt]);
 
-  const displayDuration = streaming
-    ? (liveSec > 0 && liveSec < 1800 ? `已执行 ${liveSec}秒` : "执行中…")
-    : durationMs !== undefined && durationMs > 0 && durationMs < 1800_000
+  const displayDuration = isActuallyLive
+    ? (liveSec > 0 ? `已执行 ${liveSec}秒` : "执行中…")
+    : durationMs !== undefined && durationMs > 0
       ? `耗时 ${formatDuration(durationMs)}`
       : null;
 

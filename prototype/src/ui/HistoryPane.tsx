@@ -15,6 +15,7 @@ import {
   MessageSquare,
   Radio,
   RotateCcw,
+  RotateCw,
   Sparkles,
   Terminal,
   Trash2,
@@ -165,10 +166,26 @@ export function HistoryPane({
   const [organizing, setOrganizing] = useState(false);
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [reloadNonce, setReloadNonce] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
   /** 两步确认：第一下亮红「确认删除」，第二下才动手（不弹模态） */
   const [armed, setArmed] = useState(false);
+
+  const handleManualRefresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const { DaemonClient, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
+      const client = DaemonClient.get(defaultDaemonEndpoint());
+      await client.rpc("history.refreshNative", {});
+    } catch (e) {
+      console.warn("[HistoryPane] refreshNative failed:", e);
+    }
+    setReloadNonce((n) => n + 1);
+    window.dispatchEvent(new CustomEvent("awb:history-refresh", { detail: { unitId } }));
+    setTimeout(() => setRefreshing(false), 600);
+  };
 
   /**
    * 在 TUI 中恢复：按条目执行器派发终端，带各家 resume 口径的参数（见 RESUME_ARGS）。
@@ -445,6 +462,17 @@ export function HistoryPane({
                 ? `${displayedEntries?.length ?? 0} / ${entries.length} 条`
                 : `${entries.length} 条`}
         </span>
+
+        <button
+          type="button"
+          onClick={handleManualRefresh}
+          disabled={refreshing}
+          title="从源文件同步最新历史记录（包含外部 CLI 发起的新会话与变动）"
+          className="flex shrink-0 items-center gap-1 rounded-chip px-2 py-0.5 text-caption font-medium text-graphite transition hover:bg-line-soft hover:text-ink cursor-pointer disabled:opacity-50"
+        >
+          <RotateCw size={11} className={cn("shrink-0", refreshing && "animate-spin text-teal")} />
+          <span>刷新</span>
+        </button>
       </div>
 
       {tab === "native" ? (

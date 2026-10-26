@@ -7,16 +7,101 @@ export interface QuestionnaireOption {
   readonly key: string;
   readonly label: string;
   readonly fullText: string;
+  readonly description?: string;
+  readonly recommended?: boolean;
 }
 
 export interface ParsedQuestionnaire {
   readonly question: string;
+  readonly header?: string;
+  readonly title?: string;
+  readonly description?: string;
   readonly options: readonly QuestionnaireOption[];
   readonly rawText: string;
+  readonly selectionMode?: "single" | "multiple";
+}
+
+/**
+ * 结构化问卷 / 决策卡 JSON 解析（专门对齐 mcode 等 CLI 的 mode: "questionnaire" 真实格式）
+ */
+export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionnaire | null {
+  let obj: any = raw;
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    try {
+      obj = JSON.parse(trimmed);
+    } catch {
+      // 提取 markdown 中的 ```json 代码块
+      const codeBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (codeBlockMatch) {
+        try {
+          obj = JSON.parse(codeBlockMatch[1]!);
+        } catch {
+          obj = null;
+        }
+      } else {
+        // 提取被大括号包裹的 questionnaire 对象
+        const jsonMatch = trimmed.match(/\{[\s\S]*"mode"\s*:\s*"questionnaire"[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            obj = JSON.parse(jsonMatch[0]);
+          } catch {
+            obj = null;
+          }
+        }
+      }
+    }
+  }
+
+  if (!obj || typeof obj !== "object") return null;
+
+  const isQuestionnaire =
+    obj.mode === "questionnaire" ||
+    (Array.isArray(obj.steps) && obj.steps.length > 0 && Array.isArray(obj.steps[0]?.options));
+
+  if (!isQuestionnaire) return null;
+
+  const step = Array.isArray(obj.steps) && obj.steps.length > 0 ? obj.steps[0] : obj;
+  const question = String(step.question || step.header || obj.title || "请点选你想要的那一项。");
+  const header = step.header ? String(step.header) : obj.title ? String(obj.title) : undefined;
+  const description = step.description ? String(step.description) : undefined;
+  const rawOptions = (Array.isArray(step.options) ? step.options : []) as any[];
+
+  if (rawOptions.length < 2) return null;
+
+  const options: QuestionnaireOption[] = rawOptions.map((opt, idx) => {
+    const rawId = opt.id !== undefined ? String(opt.id).trim() : String.fromCharCode(65 + idx);
+    const key = rawId.length === 1 ? rawId.toUpperCase() : String.fromCharCode(65 + idx);
+    const label = String(opt.label || opt.text || opt.title || `选项 ${key}`);
+    const desc = opt.description ? String(opt.description) : undefined;
+    const recommended = opt.recommended === true;
+
+    // 回填文本：如果 label 已经以 A 开头则直接使用，否则前缀 `${key} · ${label}`
+    const fullText = /^[A-Za-z0-9]\s*[—·\.:、\-]/.test(label) ? label : `${key} · ${label}`;
+
+    return {
+      key,
+      label,
+      description: desc,
+      recommended,
+      fullText,
+    };
+  });
+
+  return {
+    question,
+    header,
+    title: obj.title ? String(obj.title) : undefined,
+    description,
+    options,
+    rawText: typeof raw === "string" ? raw : JSON.stringify(raw),
+    selectionMode: step.selectionMode === "multiple" ? "multiple" : "single",
+  };
 }
 
 /**
  * 启发式提取文本中的问卷/选项卡内容：
+ * 0. 优先尝试解析结构化 mode: "questionnaire" JSON（mcode / minimax 真实标准）
  * 1. 行内管道分隔：A · xxx | B · xxx | C · xxx
  * 2. 换行字母列表：A. xxx \n B. xxx \n C. xxx 或 A · xxx \n B · xxx
  * 3. 换行数字列表：1. xxx \n 2. xxx (当数量 >= 2 时)
@@ -24,7 +109,11 @@ export interface ParsedQuestionnaire {
 export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | null {
   if (!text || typeof text !== "string") return null;
 
-  // 1. 尝试行内管道分隔（如截图中的：A · 重发心跳提议横幅 | B · 清理 mock_tool 放行规则 | C · ...）
+  // 0. 优先识别真实 questionnaire JSON（包括被 markdown 代码块或文本夹带的 JSON）
+  const structured = parseStructuredQuestionnaireJson(text);
+  if (structured) return structured;
+
+  // 1. 尝试行内管道分隔（如：A · 重发心跳提议横幅 | B · 清理 mock_tool 放行规则 | C · ...）
   const pipeRegex = /([A-Za-z0-9])\s*[·\.:、\-]\s*([^|\n]+)/g;
   const lines = text.trim().split(/\r?\n/);
 
@@ -143,6 +232,14 @@ export function QuestionnaireCard(): ReactElement | null {
 
       // 1. 支持结构化工具调用（对齐 ZCode Elicitation / AskUserQuestion / ask_question）
       if (ev.type === "tool.started" && !assistantMessageId) {
+        const parsedTool = parseStructuredQuestionnaireJson(ev.input);
+        if (parsedTool) {
+          toolAskQuestion = {
+            ...parsedTool,
+            rawText: `tool_${ev.callId}`,
+          };
+          break;
+        }
         const tn = ev.toolName.toLowerCase();
         if (tn === "ask_question" || tn === "askuserquestion" || tn === "questionnaire" || tn === "ask_user") {
           const inp = ev.input as Record<string, unknown> | undefined;
@@ -287,18 +384,32 @@ export function QuestionnaireCard(): ReactElement | null {
       aria-label="决策选项卡"
     >
       {/* 头部标题与关闭按钮 */}
-      <div className="flex items-center justify-between border-b border-line-soft/60 px-5 py-3">
-        <h3 className="text-body-md font-semibold text-ink select-none">
-          {detectedQuestionnaire.question}
-        </h3>
-        <button
-          type="button"
-          onClick={() => setDismissedFor(detectedQuestionnaire.rawText)}
-          className="rounded-full p-1 text-ash hover:bg-line-soft hover:text-ink transition cursor-pointer"
-          title="关闭选单（直接在输入框自由回复）"
-        >
-          <X size={18} />
-        </button>
+      <div className="border-b border-line-soft/60 px-5 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            {(detectedQuestionnaire.header || detectedQuestionnaire.title) && (
+              <div className="mb-0.5 text-[11px] font-semibold uppercase tracking-wider text-teal">
+                {detectedQuestionnaire.header || detectedQuestionnaire.title}
+              </div>
+            )}
+            <h3 className="text-body-md font-semibold text-ink select-none leading-snug">
+              {detectedQuestionnaire.question}
+            </h3>
+            {detectedQuestionnaire.description && (
+              <p className="mt-1 text-caption text-graphite/85 leading-relaxed">
+                {detectedQuestionnaire.description}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setDismissedFor(detectedQuestionnaire.rawText)}
+            className="rounded-full p-1 text-ash hover:bg-line-soft hover:text-ink transition cursor-pointer shrink-0 mt-0.5"
+            title="关闭选单（直接在输入框自由回复）"
+          >
+            <X size={18} />
+          </button>
+        </div>
       </div>
 
       {/* 选项列表 */}
@@ -311,7 +422,7 @@ export function QuestionnaireCard(): ReactElement | null {
               type="button"
               onClick={() => setSelectedKey(option.key)}
               className={cn(
-                "group flex w-full items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-all duration-150 cursor-pointer select-none",
+                "group flex w-full items-start gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-all duration-150 cursor-pointer select-none",
                 isSelected
                   ? "border-teal/60 bg-teal-500/10 text-teal-700 dark:text-teal-300 ring-1 ring-teal/30 shadow-sm"
                   : "border-line-soft bg-rail/60 text-ink hover:border-teal/40 hover:bg-line-soft/50",
@@ -319,7 +430,7 @@ export function QuestionnaireCard(): ReactElement | null {
             >
               <span
                 className={cn(
-                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-caption font-bold transition-colors",
+                  "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg font-mono text-caption font-bold transition-colors mt-0.5",
                   isSelected
                     ? "bg-teal text-white shadow-subtle"
                     : "bg-line-soft text-graphite group-hover:bg-line group-hover:text-ink",
@@ -327,9 +438,23 @@ export function QuestionnaireCard(): ReactElement | null {
               >
                 {option.key}
               </span>
-              <span className="min-w-0 flex-1 text-body-sm font-medium leading-relaxed">
-                {option.label}
-              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-body-sm font-medium leading-relaxed">
+                    {option.label}
+                  </span>
+                  {option.recommended && (
+                    <span className="inline-flex items-center rounded-full bg-teal/15 px-2 py-0.5 text-[10px] font-semibold text-teal dark:text-teal-300">
+                      推荐
+                    </span>
+                  )}
+                </div>
+                {option.description && (
+                  <p className="mt-1 text-[11px] text-ash leading-normal">
+                    {option.description}
+                  </p>
+                )}
+              </div>
             </button>
           );
         })}

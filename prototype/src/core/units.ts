@@ -264,7 +264,7 @@ export function resolveEffectiveTurnManifest(
   isFirstTurn: boolean,
 ): ContextManifest | null {
   const normBot = normalizeContextManifest(botManifest);
-  const mode = config?.mode ?? (isFirstTurn ? "bot_default" : "off");
+  const mode = config?.mode ?? "off";
 
   if (mode === "off") return null;
   if (mode === "custom" && config?.customManifest) {

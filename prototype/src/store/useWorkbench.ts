@@ -476,8 +476,8 @@ function getInitialActiveUnit(): UnitId {
   return asUnitId("");
 }
 
-/** 临时注入配置的默认态（跟随 bot 预设） */
-const DEFAULT_TURN_CONFIG: TurnContextConfig = { mode: "bot_default", persistForSession: false };
+/** 临时注入配置的默认态（清空裸跑，不自动注入任何文件） */
+const DEFAULT_TURN_CONFIG: TurnContextConfig = { mode: "off", persistForSession: false };
 
 /**
  * 临时注入配置双写（2026-10-23 按 bot 记忆）：视图 turnContextConfig + 记忆表
@@ -588,7 +588,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   },
 
   turnContextConfig: {
-    mode: "bot_default",
+    mode: "off",
     persistForSession: false,
   },
 
@@ -1480,6 +1480,22 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       set({ busy: true });
       const source = get().sessions.find((s) => s.id === forkIntent.ofSessionId);
       let session: Awaited<ReturnType<RuntimeAdapter["startSession"]>>;
+      const currentTurnConfig = get().turnContextConfig;
+      const turnManifest = resolveEffectiveTurnManifest(currentTurnConfig, unit?.contextManifest, false);
+      const forkManifestOverride: ContextManifest | undefined =
+        currentTurnConfig.mode === "off" || turnManifest === null
+          ? {
+              firstTurnInject: false,
+              agentsMd: "off",
+              soul: false,
+              user: false,
+              memorySemantic: false,
+              memoryDaily: false,
+              memoryStanding: false,
+              skills: false,
+            }
+          : { ...turnManifest, firstTurnInject: false };
+
       try {
         session = await adapter.startSession({
           unit,
@@ -1497,6 +1513,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
           // 显式覆盖时才传 memoryOptions，不再有全局 scopes 真相源
           memoryOptions: opts?.memoryOptions,
           attachments,
+          contextManifestOverride: forkManifestOverride,
         });
       } catch (err: unknown) {
         fail(err);
@@ -1676,7 +1693,16 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     const turnManifest = resolveEffectiveTurnManifest(currentTurnConfig, unit?.contextManifest, true);
     let contextManifestOverride: ContextManifest | undefined = undefined;
     if (currentTurnConfig.mode === "off" || turnManifest === null) {
-      contextManifestOverride = { ...LEGACY_CONTEXT_MANIFEST, firstTurnInject: false };
+      contextManifestOverride = {
+        firstTurnInject: false,
+        agentsMd: "off",
+        soul: false,
+        user: false,
+        memorySemantic: false,
+        memoryDaily: false,
+        memoryStanding: false,
+        skills: false,
+      };
     } else if (currentTurnConfig.mode === "custom") {
       contextManifestOverride = { ...turnManifest, firstTurnInject: true };
     }

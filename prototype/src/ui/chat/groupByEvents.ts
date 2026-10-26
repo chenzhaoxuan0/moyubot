@@ -162,8 +162,7 @@ export function groupTimelineEvents(
           existing.data.completedAt = at;
           if (existing.data.turnStartedAt && at >= existing.data.turnStartedAt) {
             const diff = at - existing.data.turnStartedAt;
-            // 超过 30 分钟视为跨轮/时间戳异常，不予展示离谱的几百分钟
-            if (diff > 0 && diff < 1800_000) {
+            if (diff > 0) {
               existing.data.durationMs = diff;
             }
           }
@@ -171,7 +170,7 @@ export function groupTimelineEvents(
           let durationMs: number | undefined = undefined;
           if (currentTurnStartedAt && at >= currentTurnStartedAt) {
             const diff = at - currentTurnStartedAt;
-            if (diff > 0 && diff < 1800_000) {
+            if (diff > 0) {
               durationMs = diff;
             }
           }
@@ -295,6 +294,22 @@ export function groupTimelineEvents(
           result.push({ id, kind: "context.injection", at, data: anyEvt });
         }
         break;
+      }
+    }
+  }
+
+  // 会话已终结时收口仍挂着 streaming 的历史助手消息块，
+  // 彻底阻断历史会话回放时因 streaming=true 导致按 Date.now() 跑出几万秒/几百分钟的失真 Bug
+  const endedSessionIds = new Set<string>();
+  for (const entry of events) {
+    if (entry.event.type === "session.ended" && "sessionId" in entry.event) {
+      endedSessionIds.add(String(entry.event.sessionId));
+    }
+  }
+  if (endedSessionIds.size > 0) {
+    for (const r of result) {
+      if (r.kind === "assistant.message" && r.data.streaming === true && endedSessionIds.has(r.data.sessionId)) {
+        r.data.streaming = false;
       }
     }
   }

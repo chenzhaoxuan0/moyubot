@@ -1134,14 +1134,23 @@ export class RuntimeHost {
         // 注入器只认结果，不认识三态。缺 manifest = 测试/mock 路径，退回 legacy。
         const manifest =
           input.contextManifest === undefined ? undefined : normalizeContextManifest(input.contextManifest);
-        const shouldInject = manifest === undefined || manifest.firstTurnInject !== false;
+        const isExplicitOff =
+          manifest !== undefined &&
+          manifest.agentsMd === "off" &&
+          !manifest.soul &&
+          !manifest.user &&
+          !manifest.memorySemantic &&
+          !manifest.memoryDaily &&
+          !manifest.memoryStanding &&
+          !manifest.skills;
+        const shouldInject = manifest === undefined || (manifest.firstTurnInject !== false && !isExplicitOff);
         if (!shouldInject) {
           injected = null;
         } else {
           const nativeAgents =
             adapter.nativeContextFiles?.some((f) => f.toUpperCase() === "AGENTS.MD") ?? false;
           const plan = manifest === undefined ? undefined : {
-            agentsMd: resolveAgentsMdInjection(manifest.agentsMd ?? "auto", nativeAgents),
+            agentsMd: manifest.agentsMd === "off" ? false : resolveAgentsMdInjection(manifest.agentsMd ?? "auto", nativeAgents),
             soul: manifest.soul === true,
             user: manifest.user === true,
             memorySemantic: manifest.memorySemantic === true,
@@ -1740,40 +1749,52 @@ export class RuntimeHost {
       if (this.injector !== undefined && !isNativeCommand && contextInject?.manifest !== undefined) {
         try {
           const manifest = normalizeContextManifest(contextInject.manifest);
-          const nativeAgents =
-            h.adapter.nativeContextFiles?.some((f) => f.toUpperCase() === "AGENTS.MD") ?? false;
-          const plan = {
-            agentsMd: resolveAgentsMdInjection(manifest.agentsMd ?? "auto", nativeAgents),
-            soul: manifest.soul === true,
-            user: manifest.user === true,
-            memorySemantic: manifest.memorySemantic === true,
-            memoryDaily: manifest.memoryDaily === true,
-            memoryStanding: manifest.memoryStanding === true,
-            skills: manifest.skills === true,
-          };
-          const injected = await this.injector.build(h.rootPath, text, { plan });
-          if (injected !== null) {
-            promptToSend = injected.prompt;
-            try {
-              this.store.insertDispatch({
-                sessionId: h.id,
-                runtimeId: h.runtimeId,
-                rootPath: h.rootPath,
-                userText: redactText(text),
-                injectedBlock: injected.block,
-                injectedChars: injected.injectedChars,
-                parts: injected.parts,
-                createdAt: Date.now(),
-              });
-              for (const part of injected.parts) {
-                try {
-                  this.store.markMemoryUsed(part.sourcePath, Date.now(), part.chars);
-                } catch {
-                  // 忽略打点错误
+          const isExplicitOff =
+            manifest.firstTurnInject === false &&
+            manifest.agentsMd === "off" &&
+            !manifest.soul &&
+            !manifest.user &&
+            !manifest.memorySemantic &&
+            !manifest.memoryDaily &&
+            !manifest.memoryStanding &&
+            !manifest.skills;
+
+          if (!isExplicitOff) {
+            const nativeAgents =
+              h.adapter.nativeContextFiles?.some((f) => f.toUpperCase() === "AGENTS.MD") ?? false;
+            const plan = {
+              agentsMd: manifest.agentsMd === "off" ? false : resolveAgentsMdInjection(manifest.agentsMd ?? "auto", nativeAgents),
+              soul: manifest.soul === true,
+              user: manifest.user === true,
+              memorySemantic: manifest.memorySemantic === true,
+              memoryDaily: manifest.memoryDaily === true,
+              memoryStanding: manifest.memoryStanding === true,
+              skills: manifest.skills === true,
+            };
+            const injected = await this.injector.build(h.rootPath, text, { plan });
+            if (injected !== null) {
+              promptToSend = injected.prompt;
+              try {
+                this.store.insertDispatch({
+                  sessionId: h.id,
+                  runtimeId: h.runtimeId,
+                  rootPath: h.rootPath,
+                  userText: redactText(text),
+                  injectedBlock: injected.block,
+                  injectedChars: injected.injectedChars,
+                  parts: injected.parts,
+                  createdAt: Date.now(),
+                });
+                for (const part of injected.parts) {
+                  try {
+                    this.store.markMemoryUsed(part.sourcePath, Date.now(), part.chars);
+                  } catch {
+                    // 忽略打点错误
+                  }
                 }
+              } catch (err: unknown) {
+                log.warn("dispatch log write failed on turn send", { sessionId: h.id, error: err instanceof Error ? err.message : String(err) });
               }
-            } catch (err: unknown) {
-              log.warn("dispatch log write failed on turn send", { sessionId: h.id, error: err instanceof Error ? err.message : String(err) });
             }
           }
         } catch (err: unknown) {
