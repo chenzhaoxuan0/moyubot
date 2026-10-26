@@ -1,5 +1,122 @@
-const { app, BrowserWindow, dialog, shell, ipcMain, Menu, nativeImage, nativeTheme, Tray } = require("electron");
+const { app, BrowserWindow, dialog, net, protocol, shell, ipcMain, Menu, nativeImage, nativeTheme, Tray } = require("electron");
 const path = require("path");
+const { fork } = require("node:child_process");
+const { pathToFileURL } = require("node:url");
+const fs = require("node:fs");
+
+/**
+ * 生产模式（electron-builder 安装形态）：
+ * - 前端走自定义 app:// 协议加载 asar 内的 prototype/dist（无 dev server；
+ *   不用 file:// —— file 页面 origin 为 null，daemon 的 CORS 白名单进不去，
+ *   /bootstrap 取 token 会被 401 拦死）；
+ * - daemon 由本进程 fork（ELECTRON_RUN_AS_NODE 把自己当 node 用，用户机器零依赖），
+ *   daemon-deploy（bundle + 原生模块实体）由 builder 放进 resources/daemon/。
+ *
+ * dev 模式（pnpm dev:desktop）行为不变：前端 5280 dev server，daemon 归 concurrently 管。
+ */
+const isPackaged = app.isPackaged;
+/** app://moyubot —— 前端静态资源的固定源；daemon 侧靠 AGENT_WORKBENCH_EXTRA_ALLOWED_ORIGINS 放行它 */
+const APP_ORIGIN = "app://moyubot";
+
+if (isPackaged) {
+  protocol.registerSchemesAsPrivileged([
+    {
+      scheme: "app",
+      privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
+    },
+  ]);
+}
+
+/** daemon 子进程（生产模式）。dev 模式下恒为 null —— 生命周期归 concurrently。 */
+let daemonChild = null;
+
+function startPackagedDaemon() {
+  const daemonEntry = path.join(process.resourcesPath, "daemon", "daemon-deploy", "daemon.js");
+  if (!fs.existsSync(daemonEntry)) {
+    console.error(`[electron] daemon bundle 缺失: ${daemonEntry}`);
+    return;
+  }
+  // fork 默认用 process.execPath —— 生产模式即本 Electron 二进制；
+  // ELECTRON_RUN_AS_NODE 让它以 node 语义跑 .js（ESM 由 daemon-deploy/package.json 声明）
+  daemonChild = fork(daemonEntry, [], {
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      // 桌面壳协议源进 daemon 的受信源白名单（httpd isLocalOrigin）：
+      // bootstrap 取 token / WS 鉴权 / open-folder 豁免全靠它，端口固定 5281（daemon 默认）
+      AGENT_WORKBENCH_EXTRA_ALLOWED_ORIGINS: APP_ORIGIN,
+      AGENT_WORKBENCH_PORT: "5281",
+    },
+    stdio: ["ignore", "pipe", "pipe", "ipc"], // fork 的硬要求：ipc 通道必须显式在列
+  });
+  const tag = (buf) => `[daemon] ${buf.toString().trimEnd()}`;
+  daemonChild.stdout?.on("data", (d) => console.log(tag(d)));
+  daemonChild.stderr?.on("data", (d) => console.error(tag(d)));
+  daemonChild.once("exit", (code) => {
+    console.warn(`[electron] daemon 退出 code=${code}`);
+    daemonChild = null;
+  });
+}
+
+function stopPackagedDaemon() {
+  if (daemonChild === null || daemonChild.exitCode !== null) return;
+  const pid = daemonChild.pid;
+  daemonChild = null;
+  try {
+    // Windows 上 kill() 是 TerminateProcess（daemon 的优雅退出收不了尾）。daemon 的
+    // 落盘全部走「写临时文件 + rename」原子模式，硬杀可承受；树杀防 node-pty 子进程残留。
+    if (process.platform === "win32") {
+      require("node:child_process").execSync(`taskkill /PID ${pid} /T /F`, { stdio: "ignore" });
+    } else {
+      process.kill(pid, "SIGTERM");
+    }
+  } catch {
+    // 已在退出中
+  }
+}
+
+const MIME = {
+  ".html": "text/html",
+  ".js": "text/javascript",
+  ".mjs": "text/javascript",
+  ".css": "text/css",
+  ".json": "application/json",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".wasm": "application/wasm",
+};
+
+/** app://moyubot/<path> → asar 内 prototype/dist/<path>。路径归一化防穿越。 */
+function registerAppProtocol() {
+  const distRoot = path.join(app.getAppPath(), "prototype", "dist");
+  protocol.handle("app", async (request) => {
+    let rel = decodeURIComponent(new URL(request.url).pathname).replace(/\\/g, "/");
+    rel = rel.replace(/^\/+/, "");
+    if (rel === "" || rel === "index.html") rel = "index.html";
+    const abs = path.normalize(path.join(distRoot, rel));
+    if (!abs.startsWith(distRoot)) {
+      return new Response("forbidden", { status: 403 });
+    }
+    const ext = path.extname(abs).toLowerCase();
+    const mime = MIME[ext] ?? "application/octet-stream";
+    // 不走 net.fetch(file://)：Chromium 网络栈不认 asar 虚拟路径（ERR_FILE_NOT_FOUND）；
+    // fs 在 Electron 里对 asar 透明，读出来手工组 Response
+    try {
+      const data = await fs.promises.readFile(abs);
+      return new Response(data, { headers: { "content-type": mime } });
+    } catch {
+      return new Response("not found", { status: 404 });
+    }
+  });
+}
 
 /**
  * 品牌图标 —— 亮主题用白底版，暗主题用黑底版（设计导出的 PNG 原图逐级减半缩放，
@@ -354,24 +471,36 @@ function createWindow() {
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5280";
+  const appUrl = isPackaged ? `${APP_ORIGIN}/index.html` : devUrl;
 
   // 监听加载失败事件（例如服务器尚未启动时），每 800ms 自动重试
   mainWindow.webContents.on("did-fail-load", (event, errorCode, errorDescription) => {
     console.log(`[electron] 加载未完成 (${errorCode}: ${errorDescription})，正在重试...`);
     setTimeout(() => {
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.loadURL(devUrl).catch(() => {});
+        mainWindow.loadURL(appUrl).catch(() => {});
       }
     }, 800);
   });
 
-  console.log(`[electron] 正在加载页面: ${devUrl}`);
-  mainWindow.loadURL(devUrl).catch((err) => {
+  console.log(`[electron] 正在加载页面: ${appUrl}`);
+  mainWindow.loadURL(appUrl).catch((err) => {
     console.warn("[electron] 首次加载触发重试机制:", err.message);
   });
 }
 
+// 单实例锁（生产形态）：第二个实例只把已有窗口带回来，不再抢 5281 端口
+if (isPackaged && !app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on("second-instance", () => showMainWindow());
+}
+
 app.whenReady().then(() => {
+  if (isPackaged) {
+    registerAppProtocol();
+    startPackagedDaemon();
+  }
   createWindow();
   createTray();
 
@@ -386,6 +515,7 @@ app.whenReady().then(() => {
 // 让窗口 close 处理器放行 —— 否则藏托盘的 preventDefault 会拦住退出
 app.on("before-quit", () => {
   quitting = true;
+  stopPackagedDaemon();
 });
 
 app.on("window-all-closed", () => {

@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "build:daemon": "node scripts/build-daemon.mjs",
     "e2e:automation-ui": "tsx scripts/e2e-automation-ui.ts",
     "smoke": "tsx scripts/smoke-health.ts",
     "smoke:chrome": "tsx scripts/smoke-chrome.ts",
@@ -83,6 +84,7 @@
   "devDependencies": {
     "@types/node": "^26.6.3",
     "@types/ws": "^8.18.1",
+    "esbuild": "^0.25.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }

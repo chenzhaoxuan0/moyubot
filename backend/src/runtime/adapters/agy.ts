@@ -17,6 +17,7 @@
 
 import { randomUUID } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createInterface } from "node:readline";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,6 +65,24 @@ let cachedSdkPython: PythonCommand | undefined;
 
 export function cachedPythonCommand(): PythonCommand | undefined {
   return cachedSdkPython;
+}
+
+/**
+ * sidecar .py 的路径：源码形态在 adapters/ 同目录（tsx dev）；
+ * bundle 形态由 build-daemon 按 src 相对结构摆放（daemon-deploy/runtime/adapters/）。
+ * 这里的 import.meta.url 经 esbuild 后指向 bundle 位置，两种形态都探测。
+ */
+function resolveSidecarPath(here: string): string {
+  const candidates = [
+    path.join(here, "agy-antigravity-sidecar.py"),
+    path.join(here, "runtime", "adapters", "agy-antigravity-sidecar.py"),
+  ];
+  for (const c of candidates) {
+    try {
+      if (existsSync(c)) return c;
+    } catch { /* 无读取权限等异常按未命中处理 */ }
+  }
+  return candidates[0] ?? path.join(here, "agy-antigravity-sidecar.py");
 }
 
 interface AgyStepUpdate {
@@ -513,7 +532,7 @@ export class AgyAdapter implements ExecutorAdapter {
     const py = cachedSdkPython;
     if (py === undefined) throw new Error('antigravity sidecar 解释器未就绪（probe 未通过就起了 SDK 传输？）');
     const here = path.dirname(fileURLToPath(import.meta.url));
-    const child = spawn(py.file, [...py.baseArgs, '-u', path.join(here, 'agy-antigravity-sidecar.py')], {
+    const child = spawn(py.file, [...py.baseArgs, '-u', resolveSidecarPath(here)], {
       cwd: state.rootPath,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,

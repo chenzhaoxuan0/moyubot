@@ -55,7 +55,17 @@ pnpm dev:daemon   # 只起 daemon
 pnpm build        # tsc -b && vite build
 pnpm typecheck    # 前后端一起查
 pnpm smoke        # daemon 冒烟
+pnpm dist:win     # 打桌面安装包（dist:mac / dist:linux 同理；产物在 dist-electron/）
 ```
+
+### 桌面安装包
+
+`pnpm dist:<平台>` 产出免开发环境的桌面应用：前端构建产物打进 app，daemon 由
+Electron 以 node 模式 fork 拉起并随退出回收（用户机器无需装 Node）。安装包**不含
+任何 agent CLI**——claude / codex / pi 等装在 PATH 里即被自动发现与管理。发布走
+git tag（`v*`）触发 [release workflow](.github/workflows/release.yml)，三平台
+安装包自动挂上 GitHub Release；无代码签名证书，mac 首启需右键打开、Windows 可能
+弹 SmartScreen。
 
 **daemon 必须起着，否则应用是空的**：侧栏单元来自各 bot 工作目录下的
 `.agent-workbench/bot.json`，没建过 bot 就没有 bot.json，侧栏是空的——

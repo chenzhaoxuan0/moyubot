@@ -1,0 +1,59 @@
+# electron-builder 配置 —— 三平台桌面分发形态。
+#
+# 口径（与 CI 的 cross-platform.yml 同源）：本项目是「一个软件管理多个 CLI」的
+# 工作台，agent CLI（claude / codex / pi / …）不进任何安装包 —— 用户机器上
+# PATH 里装了什么，工作台就管理什么。
+#
+# 体积构成：Electron 运行时（~110MB 压缩后）+ 前端 dist（~13MB）+ daemon-deploy
+# （~66MB：bundle 1.4MB + node-pty/@nut-tree-fork 原生模块实体）。不打包
+# claude-agent-sdk 平台二进制（~250MB）与 pi-coding-agent。
+appId: com.chenzhaoxuan.moyubot
+productName: MoyuBot
+copyright: Copyright © 2026 chenzhaoxuan0
+
+directories:
+  output: dist-electron
+
+# asar 内只放主进程与前端静态资源；root 无生产 dependencies，node_modules 不进包
+files:
+  - electron/**/*
+  - prototype/dist/**/*
+  - "!electron/wait-and-launch.cjs"   # dev 专用（等 dev server 就绪再启），生产形态不需要
+
+asar: true
+
+# daemon 部署目录整体放 asar 外（原生模块 + fork 入口必须是真实文件路径）。
+# electron-builder 对目录名 node_modules 有依赖收集特判，靠 filter 全量声明绕开，
+# 并单独再映射一次 node_modules 兜底（缺它 daemon 起不来：node-pty require 不到）
+extraResources:
+  - from: backend/dist/daemon-deploy
+    to: daemon/daemon-deploy
+    filter:
+      - "**/*"
+  - from: backend/dist/daemon-deploy/node_modules
+    to: daemon/daemon-deploy/node_modules
+
+icon: electron/icon.png
+
+win:
+  target:
+    - nsis
+    - portable
+
+nsis:
+  oneClick: true
+  perMachine: false
+  shortcutName: MoyuBot
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.developer-tools
+  identity: null   # 无 Apple Developer 证书：不签名不公证，用户首启需右键打开
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development

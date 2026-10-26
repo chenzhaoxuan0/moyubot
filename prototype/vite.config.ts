@@ -21,6 +21,9 @@ export default defineConfig(({ mode }) => {
   const daemonHttp = `http://127.0.0.1:${daemonPort}`;
 
   return {
+    // 相对资源路径：桌面生产态经 app:// 协议加载 dist（无 dev server 根路径）；
+    // dev 模式下 vite 对 './' 同样正常解析，行为不变
+    base: "./",
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: { "@": src },

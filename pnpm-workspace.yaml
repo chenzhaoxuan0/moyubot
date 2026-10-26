@@ -1,0 +1,13 @@
+# pnpm 11 起 settings 统一住这里（package.json 的 pnpm 字段已废弃）。
+# 刻意不写 packages 列表：本仓库是 root/prototype/backend 三份独立 lockfile 的
+# 松耦合结构，不是 workspace —— 只有 settings，没有 workspace 语义。
+onlyBuiltDependencies:
+  - electron
+  - electron-winstaller
+  - esbuild
+allowBuilds:
+  electron-winstaller: true
+overrides:
+  # app-builder-lib@26 声明 ^3.0.0 却用了 3.1 才有的 ElectronDownloadCacheMode，
+  # 锁 3.0.0 时打包必炸 undefined.ReadWrite —— 全树强制 3.1+
+  "@electron/get": "^3.1.0"

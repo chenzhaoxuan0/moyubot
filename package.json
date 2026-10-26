@@ -1,6 +1,8 @@
 {
   "name": "agent-workbench",
   "private": true,
+  "version": "0.1.0",
+  "author": "chenzhaoxuan0",
   "type": "module",
   "description": "本地个人统一工作台 —— 一条命令起全栈（前端 5280 + daemon 5281）",
   "main": "electron/main.cjs",
@@ -13,11 +15,18 @@
     "dev:web": "pnpm -C prototype dev",
     "dev:daemon": "pnpm -C backend dev",
     "build": "pnpm -C prototype build",
+    "build:daemon": "pnpm -C backend build:daemon",
+    "dist:prepare": "pnpm -C prototype build && pnpm -C backend build:daemon",
+    "dist": "pnpm dist:prepare && electron-builder",
+    "dist:win": "pnpm dist:prepare && electron-builder --win",
+    "dist:mac": "pnpm dist:prepare && electron-builder --mac",
+    "dist:linux": "pnpm dist:prepare && electron-builder --linux",
     "typecheck": "pnpm -C prototype typecheck && pnpm -C backend typecheck",
     "smoke": "pnpm -C backend smoke"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
-    "electron": "^44.6.0"
+    "electron": "^44.6.0",
+    "electron-builder": "^26.18.0"
   }
 }

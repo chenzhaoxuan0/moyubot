@@ -30,7 +30,11 @@ export const backendRoot = path.resolve(
  */
 export const DEFAULT_DAEMON_PORT = 5281;
 
+/** build-daemon 的 esbuild define 注入；tsx 跑源码时未定义（typeof 探测安全） */
+declare const __AWB_VERSION__: string | undefined;
+
 function readVersion(): string {
+  if (typeof __AWB_VERSION__ === "string") return __AWB_VERSION__; // bundle 形态：打包时定格
   try {
     const pkg = JSON.parse(
       readFileSync(path.join(backendRoot, "package.json"), "utf8"),

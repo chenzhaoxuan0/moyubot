@@ -49,8 +49,19 @@ function sendJson(res: ServerResponse, status: number, body: unknown, allowOrigi
   res.end(payload);
 }
 
-/** 本地源判定（含 dev server 5280 等任意本机端口） */
+/**
+ * 显式扩展的受信源（逗号分隔）。桌面壳用：Electron 生产模式以自定义协议
+ * app://moyubot 加载前端，页面 fetch /bootstrap 与 WS 鉴权都需要这个源进白名单。
+ * 默认空 = 行为与纯本机部署完全一致。
+ */
+const extraAllowedOrigins: readonly string[] = (process.env.AGENT_WORKBENCH_EXTRA_ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+/** 本地源判定（含 dev server 5280 等任意本机端口；桌面壳协议源走显式白名单） */
 export function isLocalOrigin(origin: string): boolean {
+  if (extraAllowedOrigins.includes(origin)) return true;
   try {
     const u = new URL(origin);
     return u.hostname === "127.0.0.1" || u.hostname === "localhost" || u.hostname === "[::1]" || u.hostname === "::1";

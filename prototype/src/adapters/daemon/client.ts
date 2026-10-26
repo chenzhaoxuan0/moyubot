@@ -121,8 +121,10 @@ export function defaultDaemonEndpoint(): string {
   if (typeof window !== "undefined") {
     // 无论是本机还是移动端局域网，前端开发服务器已将 /ws, /bootstrap, /api 代理转发至 daemon。
     // 使用同源 origin 既无需开放防火墙二级端口，又能跨网卡保证移动端直连。
+    // 只认 http(s) 同源：桌面生产态的 origin 是 app://moyubot（自定义协议，没有
+    // proxy 可用），file:// 更不必说——都回退直连 127.0.0.1:5281。
     const origin = window.location.origin;
-    if (origin && !origin.startsWith("file:")) {
+    if (origin.startsWith("http://") || origin.startsWith("https://")) {
       return origin;
     }
   }

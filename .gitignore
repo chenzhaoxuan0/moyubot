@@ -44,3 +44,4 @@ backend/scripts/.tmp/
 .zcode/
 GTD.md
 AGENTS.md
+dist-electron/
