@@ -122,10 +122,19 @@ function readPersistedUnitView(): ViewMode {
 export function Sidebar() {
   const units = useWorkbench((s) => s.units);
   const activeUnitId = useWorkbench((s) => s.activeUnitId);
-  // 多选模式的 Esc 出口：有选择集时按 Esc 只清选择，不冒泡去触发别的 Esc 行为
+  // 多选模式的 Esc 出口：有选择集时按 Esc 只清选择，不冒泡去触发别的 Esc 行为。
+  // 目标是可编辑元素时让行——重命名输入框的 Esc 取消优先于清选择（否则第一次
+  // Esc 被这里吃掉，重命名取消要按两次）
   useEffect(() => {
     const onKey = (ev: KeyboardEvent): void => {
       if (ev.key !== "Escape") return;
+      const t = ev.target;
+      if (
+        t instanceof HTMLElement &&
+        (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA")
+      ) {
+        return;
+      }
       if (useSidebarSelection.getState().selected.size > 0) {
         ev.stopPropagation();
         useSidebarSelection.getState().clear();
@@ -686,6 +695,9 @@ function deriveHistoryLight(
   return "none";
 }
 
+/** macOS 判定：Ctrl+点击在 mac 上产生 contextmenu 而不是 click（多选分流要转译） */
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iP(hone|ad|od)/.test(navigator.userAgent);
+
 const HISTORY_DOT_CLS: Record<HistoryLight, string | null> = {
   failed: "bg-loss",
   executing: "bg-blue-500 animate-pulse",
@@ -802,6 +814,16 @@ function UnitRow({
     }
     return { filteredEntries: byPin(filtered), hiddenFailedCount: hidden, hiddenArchivedCount: archived };
   }, [histEntries, hideFailedInSidebar, historyPrefs.pinnedKeys, historyPrefs.archivedKeys]);
+
+  /**
+   * 范围选（Shift）的有序口径 = **实际渲染的可见行**：fold 折叠掉 revision 家族
+   * 成员、分页截断到 visibleCount —— 用未折叠的 filteredEntries 会把看不见的
+   * 行无声纳入批量归档/置顶（review M3）。
+   */
+  const visibleOrderedEntries = useMemo(
+    () => collapseForkVersions(filteredEntries ?? []).slice(0, visibleCount).map((s) => s.entry),
+    [filteredEntries, visibleCount],
+  );
 
   useEffect(() => {
     if (!historyOpen) setVisibleCount(6);
@@ -923,7 +945,11 @@ function UnitRow({
     // 绝对定位的兄弟节点，和时间戳抢同一个位置、hover 时交叉淡入淡出。
     <div className="group/row relative">
       <button
-        onClick={onToggleHistory}
+        onClick={() => {
+          // 切单元视角 = 离开当前列表的管理上下文，残留的选择集一并清掉
+          if (useSidebarSelection.getState().selected.size > 0) useSidebarSelection.getState().clear();
+          onToggleHistory();
+        }}
         onContextMenu={(e) =>
           setQuickMenu(
             quickMenuFromEvent(e, [
@@ -1154,7 +1180,7 @@ function UnitRow({
               }
               if (ev.shiftKey) {
                 ev.preventDefault();
-                sel.selectRange(filteredEntries ?? [], e.key);
+                sel.selectRange(visibleOrderedEntries, e.key);
                 return;
               }
               if (sel.selected.size > 0) sel.clear();
@@ -1193,6 +1219,13 @@ function UnitRow({
                   openHistoryTab(e.key);
                 }}
                 onContextMenu={(ev) => {
+                  // macOS 的 Ctrl+点击发 contextmenu 而不是 click：转译成选择集
+                  // 增删（与 Win/Linux 的 Ctrl+click 同一语义），别弹菜单
+                  if (IS_MAC && ev.ctrlKey && !ev.metaKey) {
+                    ev.preventDefault();
+                    useSidebarSelection.getState().toggle(e);
+                    return;
+                  }
                   // 有选择集且右键点的是成员行 → 批量菜单（T3code 多选管理同款）；
                   // 否则维持单行菜单。批量动作一次落盘、执行完清空选择
                   const sel = useSidebarSelection.getState();

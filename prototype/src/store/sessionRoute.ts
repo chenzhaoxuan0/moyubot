@@ -35,10 +35,14 @@ function encodeHash(t: RouteTarget | null): string {
 function parseHash(hash: string): RouteTarget | null {
   const m = /^#\/u\/([^/]+)(?:\/s\/(.+))?$/.exec(hash);
   if (m === null) return null;
-  return {
-    unitId: decodeURIComponent(m[1]!),
-    sessionId: m[2] !== undefined ? decodeURIComponent(m[2]) : null,
-  };
+  try {
+    return {
+      unitId: decodeURIComponent(m[1]!),
+      sessionId: m[2] !== undefined ? decodeURIComponent(m[2]) : null,
+    };
+  } catch {
+    return null; // 手改出非法 % 序列：当成无目标处理，不抛 URIError
+  }
 }
 
 function currentTarget(): RouteTarget | null {
@@ -75,7 +79,14 @@ async function applyTarget(target: RouteTarget): Promise<void> {
     wb.selectUnit(asUnitId(target.unitId));
     wb = useWorkbench.getState();
   }
-  if (target.sessionId === null) return;
+  if (target.sessionId === null) {
+    // 后退到单元级条目 = 回到「该 bot 无打开会话」的视角：清掉当前会话视图
+    //（selectUnit 同时清时间线/分叉意图，与单元切换语义一致）
+    if (useWorkbench.getState().activeSessionId !== null) {
+      wb.selectUnit(asUnitId(target.unitId));
+    }
+    return;
+  }
 
   const { fetchSessions, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
   let runtimeId: string | undefined;
@@ -131,21 +142,39 @@ export function initSessionRoute(): void {
     if (!syncingFromHistory) schedulePush();
   });
 
-  // ② 后退/前进：hash → store
+  // ② 后退/前进：hash → store。串行链执行（快速连按后退不产生交错的
+  // openSession）；回放后**不做镜像回推**——未收敛（单元未加载 / 台账查无此
+  // 会话）时把旧 store 状态 pushState 回去会覆盖前向历史、后退看起来卡死，
+  // 正确做法是保留 hash 与 store 的暂时不一致，等下一次用户动作自然对齐。
+  let restoreChain: Promise<void> = Promise.resolve();
   window.addEventListener("popstate", () => {
     const target = parseHash(window.location.hash);
     if (target === null || isCurrent(target)) return;
-    syncingFromHistory = true;
-    void applyTarget(target).finally(() => {
-      syncingFromHistory = false;
-      schedulePush();
+    restoreChain = restoreChain.then(async () => {
+      syncingFromHistory = true;
+      try {
+        await applyTarget(target);
+      } catch {
+        /* 台账/网络失败：保留现状，不产生未处理拒绝 */
+      } finally {
+        syncingFromHistory = false;
+      }
     });
   });
 
-  // ③ 启动恢复：等目标单元加载（最长 15s，300ms 一探），再回放一次
+  // ③ 启动恢复：等目标单元加载（最长 15s，300ms 一探），再回放一次。
+  //    等待期间用户有任何输入（点击/按键）即放弃恢复——bootSettled 前镜像推送
+  //    被抑制，用户抢先点开的会话不会写进 hash，此刻再按旧 hash 回放等于
+  //    把用户刚做的操作拽回去（窗口最长 15s，这是 review 抓出的抢操作路径）
   void (async () => {
     const target = parseHash(window.location.hash);
     if (target !== null) {
+      let userActed = false;
+      const markActed = (): void => {
+        userActed = true;
+      };
+      window.addEventListener("pointerdown", markActed, true);
+      window.addEventListener("keydown", markActed, true);
       const deadline = Date.now() + 15_000;
       while (
         !useWorkbench.getState().units.some((u) => String(u.id) === target.unitId) &&
@@ -153,10 +182,14 @@ export function initSessionRoute(): void {
       ) {
         await new Promise((r) => setTimeout(r, 300));
       }
-      if (!isCurrent(target)) {
+      window.removeEventListener("pointerdown", markActed, true);
+      window.removeEventListener("keydown", markActed, true);
+      if (!userActed && !isCurrent(target)) {
         syncingFromHistory = true;
         try {
           await applyTarget(target);
+        } catch {
+          /* 同上：失败保留现状 */
         } finally {
           syncingFromHistory = false;
         }
