@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import * as sidePane from "../core/sidePaneTabs.ts";
 import type { UnitId } from "../core/units.ts";
-import { useShell, SIDEBAR_DEFAULT } from "./useShell.ts";
+import { useShell } from "./useShell.ts";
 
 /**
  * 右侧标签面板的 shell 状态 —— tabs/activeTabId 的领域规则全部在
@@ -43,21 +43,24 @@ function withoutUnread(unread: Readonly<Record<string, true>>, tabId: string): R
 }
 
 /**
+ * v3（2026-10-26）：默认宽从 264（左栏等宽）减半到 132 —— 用户反馈仍偏宽。
+ * 键位升级即一次性重置：v2 的存量值都早于这次决定，直接作废（用户下次拖拽
+ * 重新落盘）。读档时顺带清掉 v1/v2 残键。
  * v2 起盘上的宽度只来自用户拖拽落定（程序性 resize 不落盘，见 SidePanePanel 的
- * onResize 与 commitPaneWidth）—— 读到什么信什么，不需要再猜哪份是污染。
+ * onResize 与 commitPaneWidth）—— 读到什么信什么。
  */
-const WIDTH_KEY = "agent-workbench:sidepane-width-px.v2";
-/** v1 键是 onResize 无差别写回时代的产物（晚挂载错宽、布局自动分配宽都进过盘），
- *  读档时一次性迁移清理 */
-const WIDTH_KEY_V1 = "agent-workbench:sidepane-width-px";
+const WIDTH_KEY = "agent-workbench:sidepane-width-px.v3";
+const WIDTH_KEY_STALE = [
+  "agent-workbench:sidepane-width-px.v2",
+  "agent-workbench:sidepane-width-px",
+] as const;
 /**
- * 默认宽 = 左栏常规宽（2026-10-26 用户拍板：右栏默认打开与左栏等宽，此前 300
- * 偏宽）。最窄即默认宽：tab 条本身是 overflow-x-auto 的横向滚动条，窄了只是
- * 标签条内滚动（TitleBarClearance 仍让位系统窗口钮），300 时代「最后一个完整
- * 功能标签」的静态宽度顾虑不再成立。
+ * 默认宽 = 132（2026-10-26 用户拍板：264 仍偏宽，减半）。极窄下的已知取舍：
+ * 桌面端页头右侧要给系统窗口钮让出 ~136px（--wco-w），132 宽时页头整行都会
+ * 压在窗口钮下面 —— 面板内容不受影响，拖左侧分隔条即可加宽。最窄即默认宽。
  */
-const SIDE_PANE_DEFAULT = SIDEBAR_DEFAULT;
-const SIDE_PANE_MIN = SIDEBAR_DEFAULT;
+const SIDE_PANE_DEFAULT = 132;
+const SIDE_PANE_MIN = 132;
 /** 「最近关闭」上限（ZCode recentClosedSidePaneTabs 同款）：够后悔，不无限堆 */
 const RECENTLY_CLOSED_MAX = 8;
 
@@ -119,29 +122,12 @@ function settleClose(s: SidePaneStore, next: sidePane.SidePaneState): Partial<Si
 function readWidth(): number {
   if (typeof window === "undefined") return SIDE_PANE_DEFAULT;
   try {
+    // v3 起干净起步：v1/v2 残键一律清掉（它们的值都早于这次默认宽减半的决定）
+    for (const k of WIDTH_KEY_STALE) window.localStorage.removeItem(k);
     const raw = window.localStorage.getItem(WIDTH_KEY);
-    if (raw !== null) {
-      const n = Number(raw);
-      // 300 是旧默认（也是旧最小值）：盘上恰好 300 几乎必是「从未拖过」的默认
-      // 残留 —— 视为过期，回落新默认（与 useShell 对旧默认 200/351 的处理同款）。
-      // 真拖到 300 的用户会被这一次回落，拖一下就回来了，可接受。
-      if (Number.isFinite(n) && n > 0 && n !== 300) return Math.max(SIDE_PANE_MIN, Math.round(n));
-      return SIDE_PANE_DEFAULT;
-    }
-    // v1 → v2 一次性迁移：v1 的值混有「晚挂载错宽 / 50% 自动分配宽被 onResize
-    // 写回」的污染，与用户真实拖宽无法区分（面板 maxSize 是 50%，宽窗口下
-    // 真拖到 600px+ 完全合法）—— 只能按可疑处理，>480 一律回新默认。此后
-    // 盘上的值只可能来自拖拽手势，不再需要怀疑
-    const legacy = window.localStorage.getItem(WIDTH_KEY_V1);
-    if (legacy !== null) {
-      window.localStorage.removeItem(WIDTH_KEY_V1);
-      const n = Number(legacy);
-      if (Number.isFinite(n) && n >= SIDE_PANE_MIN && n <= 480) {
-        persistWidth(Math.round(n));
-        return Math.round(n);
-      }
-    }
-    return SIDE_PANE_DEFAULT;
+    if (raw === null) return SIDE_PANE_DEFAULT;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? Math.max(SIDE_PANE_MIN, Math.round(n)) : SIDE_PANE_DEFAULT;
   } catch {
     return SIDE_PANE_DEFAULT;
   }
