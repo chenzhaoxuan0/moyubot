@@ -150,6 +150,8 @@ export interface HistoryPrefsStore {
   togglePinned: (key: string) => void;
   /** 批量置顶（导入会话用） */
   pinKeys: (keys: string[]) => void;
+  /** 批量取消置顶（左栏多选管理） */
+  unpinKeys: (keys: readonly string[]) => void;
   /** 用户手动覆盖会话灯状态：传 "none" 彻底消灯，传 null 恢复系统自动判定 */
   setLightOverride: (key: string, light: "none" | "unread" | "alive" | "executing" | "failed" | null) => void;
   /** 彻底清除某条会话的灯（消灯且标记已读） */
@@ -160,6 +162,12 @@ export interface HistoryPrefsStore {
   unarchiveKey: (key: string) => void;
   /** 切换归档态 */
   toggleArchived: (entry: UnitHistoryEntry) => void;
+  /** 批量归档（左栏多选管理）：一次 set + 一次落盘 */
+  archiveEntriesBatch: (entries: readonly UnitHistoryEntry[]) => void;
+  /** 批量取消归档（左栏多选管理） */
+  unarchiveKeysBatch: (keys: readonly string[]) => void;
+  /** 批量消灯并标已读（左栏多选管理）：viewedKeys 并入 + lightOverrides 置 none，一次落盘 */
+  clearLightsBatch: (pairs: readonly { key: string; sessionId: string | null }[]) => void;
   /** 检查任务是否处于归档状态 */
   isArchived: (key: string, sessionId?: string | null) => boolean;
   /** 全部取消归档（一键还原抽屉内的所有任务） */
@@ -249,6 +257,15 @@ export const useHistoryPrefs = create<HistoryPrefsStore>((set, get) => ({
       persist(next);
       return { prefs: next };
     }),
+  unpinKeys: (keys) =>
+    set((state) => {
+      const drop = new Set(keys);
+      const nextPinned = state.prefs.pinnedKeys.filter((k) => !drop.has(k));
+      if (nextPinned.length === state.prefs.pinnedKeys.length) return {};
+      const next = { ...state.prefs, pinnedKeys: nextPinned };
+      persist(next);
+      return { prefs: next };
+    }),
   archiveEntry: (entry) => {
     set((state) => {
       if (!entry.key) return {};
@@ -285,6 +302,82 @@ export const useHistoryPrefs = create<HistoryPrefsStore>((set, get) => ({
     } else {
       get().archiveEntry(entry);
     }
+  },
+  archiveEntriesBatch: (entries) => {
+    set((state) => {
+      const nextKeys = [...state.prefs.archivedKeys];
+      const nextEntries = { ...state.prefs.archivedEntries };
+      const unitIds = new Set<string>();
+      let added = false;
+      for (const e of entries) {
+        if (!e.key) continue;
+        if (!nextKeys.includes(e.key)) {
+          nextKeys.push(e.key);
+          added = true;
+        }
+        if (e.sessionId && !nextKeys.includes(`session-${e.sessionId}`)) {
+          nextKeys.push(`session-${e.sessionId}`);
+          added = true;
+        }
+        nextEntries[e.key] = e;
+        if (e.sessionId) nextEntries[`session-${e.sessionId}`] = e;
+        if (e.unitId) unitIds.add(e.unitId);
+      }
+      if (!added) return {};
+      const next = {
+        ...state.prefs,
+        archivedKeys: nextKeys.slice(-ARCHIVED_CAP),
+        archivedEntries: nextEntries,
+      };
+      persist(next);
+      for (const id of unitIds) notifyHistoryRefresh(id);
+      return { prefs: next };
+    });
+  },
+  unarchiveKeysBatch: (keys) => {
+    set((state) => {
+      const drop = new Set<string>();
+      for (const k of keys) {
+        drop.add(k);
+        if (k.startsWith("session-")) drop.add(k.replace(/^session-/, ""));
+        else drop.add(`session-${k}`);
+      }
+      const nextKeys = state.prefs.archivedKeys.filter((k) => !drop.has(k));
+      const nextEntries = { ...state.prefs.archivedEntries };
+      for (const k of drop) delete nextEntries[k];
+      if (nextKeys.length === state.prefs.archivedKeys.length) return {};
+      const next = { ...state.prefs, archivedKeys: nextKeys, archivedEntries: nextEntries };
+      persist(next);
+      notifyHistoryRefresh();
+      return { prefs: next };
+    });
+  },
+  clearLightsBatch: (pairs) => {
+    set((state) => {
+      const viewed = new Set(state.prefs.viewedKeys);
+      const overrides = { ...state.prefs.lightOverrides };
+      let changed = false;
+      for (const p of pairs) {
+        for (const k of p.sessionId !== null ? [p.key, `session-${p.sessionId}`] : [p.key]) {
+          if (k !== "" && !viewed.has(k)) {
+            viewed.add(k);
+            changed = true;
+          }
+          if (overrides[k] !== "none") {
+            overrides[k] = "none";
+            changed = true;
+          }
+        }
+      }
+      if (!changed) return {};
+      const next = {
+        ...state.prefs,
+        viewedKeys: [...viewed].slice(-VIEWED_CAP),
+        lightOverrides: overrides,
+      };
+      persist(next);
+      return { prefs: next };
+    });
   },
   isArchived: (key, sessionId) => {
     const p = get().prefs;

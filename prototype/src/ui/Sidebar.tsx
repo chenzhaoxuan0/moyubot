@@ -62,6 +62,7 @@ import { resumeArgsFor } from "./HistoryPane.tsx";
 import { collapseForkVersions } from "./forkHistory.ts";
 import { executorIconSrc } from "./executorIcon.ts";
 import { useHistoryPrefs } from "../store/useHistoryPrefs.ts";
+import { useSidebarSelection } from "../store/useSidebarSelection.ts";
 import { useTerminalStore, collectLeafIds } from "../store/useTerminalStore.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { QuickContextMenu, quickMenuFromEvent, type QuickMenuState } from "./QuickContextMenu.tsx";
@@ -121,6 +122,18 @@ function readPersistedUnitView(): ViewMode {
 export function Sidebar() {
   const units = useWorkbench((s) => s.units);
   const activeUnitId = useWorkbench((s) => s.activeUnitId);
+  // 多选模式的 Esc 出口：有选择集时按 Esc 只清选择，不冒泡去触发别的 Esc 行为
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent): void => {
+      if (ev.key !== "Escape") return;
+      if (useSidebarSelection.getState().selected.size > 0) {
+        ev.stopPropagation();
+        useSidebarSelection.getState().clear();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, []);
   /** [bot|项目] 视图过滤（过滤器式，见 UNIT_VIEWS 注释）：本地 state 即可，无需 store 层改动 */
   const [unitView, setUnitView] = useState<ViewMode>(readPersistedUnitView);
   const switchUnitView = (v: ViewMode): void => {
@@ -725,6 +738,8 @@ function UnitRow({
   const isEntryUnread = useHistoryPrefs((s) => s.isUnread);
   const setEntryOpenMode = useHistoryPrefs((s) => s.setEntryOpenMode);
   const togglePinned = useHistoryPrefs((s) => s.togglePinned);
+  // 多选（T3code 式管理选择）：订阅选择集让选中态随写随刷；点击分流在 handleRowClick
+  const selection = useSidebarSelection((s) => s.selected);
   /**
    * 打开右栏 bot 设置面板（2026-10-23 归拢后）：齿轮 / 右键菜单走 onOpenSettings
    * （父级传入，先切 bot 再开面板——右栏 tab 按 owner 过滤可见，不切的话点别人的
@@ -1128,6 +1143,23 @@ function UnitRow({
             const isEntryArchived =
               historyPrefs.archivedKeys.includes(e.key) ||
               (e.sessionId !== null && historyPrefs.archivedKeys.includes(`session-${e.sessionId}`));
+            // 多选分流：Ctrl/Cmd = 增删选择集；Shift = 锚点起范围选；普通点击 =
+            // 先清掉残留选择再按原逻辑打开（选择 ≠ 打开，两层语义靠修饰键区分）
+            const handleRowClick = (ev: React.MouseEvent): void => {
+              const sel = useSidebarSelection.getState();
+              if (ev.metaKey || ev.ctrlKey) {
+                ev.preventDefault();
+                sel.toggle(e);
+                return;
+              }
+              if (ev.shiftKey) {
+                ev.preventDefault();
+                sel.selectRange(filteredEntries ?? [], e.key);
+                return;
+              }
+              if (sel.selected.size > 0) sel.clear();
+              openDefault();
+            };
             return (
               <HistoryListRow
                 key={e.key}
@@ -1137,6 +1169,7 @@ function UnitRow({
                 active={rowActive}
                 mode={{ effective, canChat, canTui }}
                 pinned={historyPrefs.pinnedKeys.includes(e.key)}
+                selected={selection.has(e.key)}
                 onTogglePin={() => togglePinned(e.key)}
                 archived={isEntryArchived}
                 onToggleArchive={() => useHistoryPrefs.getState().toggleArchived(e)}
@@ -1150,7 +1183,7 @@ function UnitRow({
                     window.dispatchEvent(new CustomEvent("awb:history-refresh", { detail: { unitId: String(unit.id) } }));
                   });
                 }}
-                onOpenDefault={openDefault}
+                onOpenDefault={handleRowClick}
                 onToggleMode={() => {
                   const other: "chat" | "tui" = effective === "chat" ? "tui" : "chat";
                   const feasible = other === "chat" ? canChat : canTui;
@@ -1159,7 +1192,66 @@ function UnitRow({
                 onOpenDetail={() => {
                   openHistoryTab(e.key);
                 }}
-                onContextMenu={(ev) =>
+                onContextMenu={(ev) => {
+                  // 有选择集且右键点的是成员行 → 批量菜单（T3code 多选管理同款）；
+                  // 否则维持单行菜单。批量动作一次落盘、执行完清空选择
+                  const sel = useSidebarSelection.getState();
+                  if (sel.selected.size > 0 && sel.selected.has(e.key)) {
+                    const n = sel.selected.size;
+                    const entries = [...sel.selected.values()];
+                    const keys = [...sel.selected.keys()];
+                    setQuickMenu(
+                      quickMenuFromEvent(ev, [
+                        {
+                          label: `归档 ${n} 条任务`,
+                          icon: Archive,
+                          onSelect: () => {
+                            useHistoryPrefs.getState().archiveEntriesBatch(entries);
+                            sel.clear();
+                          },
+                        },
+                        {
+                          label: `取消归档 ${n} 条`,
+                          icon: ArchiveRestore,
+                          onSelect: () => {
+                            useHistoryPrefs.getState().unarchiveKeysBatch(keys);
+                            sel.clear();
+                          },
+                        },
+                        { separator: true },
+                        {
+                          label: `置顶 ${n} 条`,
+                          icon: Pin,
+                          onSelect: () => {
+                            useHistoryPrefs.getState().pinKeys(keys);
+                            sel.clear();
+                          },
+                        },
+                        {
+                          label: `取消置顶 ${n} 条`,
+                          icon: Pin,
+                          onSelect: () => {
+                            useHistoryPrefs.getState().unpinKeys(keys);
+                            sel.clear();
+                          },
+                        },
+                        { separator: true },
+                        {
+                          label: "全部标为已读（消灯）",
+                          icon: EyeOff,
+                          onSelect: () => {
+                            useHistoryPrefs
+                              .getState()
+                              .clearLightsBatch(entries.map((x) => ({ key: x.key, sessionId: x.sessionId })));
+                            sel.clear();
+                          },
+                        },
+                        { separator: true },
+                        { label: "清除选择", icon: X, onSelect: () => sel.clear() },
+                      ]),
+                    );
+                    return;
+                  }
                   setQuickMenu(
                     quickMenuFromEvent(ev, [
                       {
@@ -1292,9 +1384,9 @@ function UnitRow({
                           openHistoryTab(e.key);
                         },
                       },
-                    ]),
-                  )
-                }
+                      ]),
+                    );
+                  }}
               />
             );
           })}
@@ -1478,6 +1570,7 @@ function HistoryListRow({
   active,
   mode,
   pinned,
+  selected = false,
   onTogglePin,
   archived,
   onToggleArchive,
@@ -1499,6 +1592,8 @@ function HistoryListRow({
   mode: { effective: "chat" | "tui"; canChat: boolean; canTui: boolean };
   /** 是否已置顶（置顶行排在子列表最前） */
   pinned: boolean;
+  /** 批量管理选择态（Ctrl/Shift 点击进入选择集；与 active 的「当前标签」区分） */
+  selected?: boolean;
   onTogglePin: () => void;
   /** 是否已归档 */
   archived?: boolean;
@@ -1507,7 +1602,8 @@ function HistoryListRow({
   renaming: boolean;
   /** 保存（含空串 = 恢复原名）或取消（null） */
   onRenameCommit: (title: string | null) => void;
-  onOpenDefault: () => void;
+  /** 行点击（含修饰键信息：Ctrl/Shift 在这里分流为多选，不打开会话） */
+  onOpenDefault: (e: React.MouseEvent) => void;
   onToggleMode: () => void;
   onOpenDetail: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -1572,6 +1668,8 @@ function HistoryListRow({
       className={cn(
         "group/hrow flex min-h-[30px] w-full cursor-pointer items-center gap-1 rounded-btn px-2 py-1.5 text-left transition",
         active ? "bg-teal-tint" : "hover:bg-line-soft",
+        selected && !active && "bg-teal-tint/60",
+        selected && "ring-1 ring-inset ring-teal/50",
       )}
     >
       {/* 1. 状态灯槽：位于每个会话的最前面（最左边），先于执行器图标。

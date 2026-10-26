@@ -22,6 +22,7 @@ import { WorkspaceHeader } from "./ui/WorkspaceHeader.tsx";
 import { WindowControls } from "./ui/WindowControls.tsx";
 import { bindShellShortcuts, useShell, SIDEBAR_MIN } from "./store/useShell.ts";
 import { bindSidePaneShortcuts } from "./store/sidePaneShortcuts.ts";
+import { initSessionRoute } from "./store/sessionRoute.ts";
 import { installNotifications } from "./store/useNotifications.ts";
 import { SidePaneColumn } from "./ui/SidePanePanel.tsx";
 import { useSidePane } from "./store/useSidePane.ts";
@@ -64,6 +65,9 @@ export function WorkspaceShell() {
       un2();
     };
   }, []);
+  // 会话路由层（路由即会话身份，2026-10-27）：hash 镜像 (unit, session) 身份，
+  // 后退/前进/刷新/深链免费获得。见 store/sessionRoute.ts 的头注释
+  useEffect(() => initSessionRoute(), []);
   // 通知中心的数据面：订阅 daemon 原始广播（后台会话终态/审批/系统通知/待办/
   // git 变更）。移动端不渲染右侧栏，但通知照常聚合 —— 桌面回到面板前就有账。
   useEffect(() => installNotifications(), []);
