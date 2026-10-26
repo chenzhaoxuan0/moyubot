@@ -72,7 +72,7 @@ export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | n
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]?.trim() ?? "";
-    const listMatch = line.match(/^[-*]?\s*([A-Za-z0-9])[·\.:、\)]\s*(.+)$/);
+    const listMatch = line.match(/^[(\[【]?\s*([A-Za-z0-9])[)\]】·\.:、\-]\s*(.+)$/);
     if (listMatch) {
       if (optionStartIndex === -1) optionStartIndex = i;
       const key = listMatch[1]?.toUpperCase() ?? "";
@@ -113,12 +113,15 @@ export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | n
  */
 export function QuestionnaireCard(): ReactElement | null {
   const timeline = useWorkbench((s) => s.timeline);
-  const busy = useWorkbench((s) => s.busy);
+  const activeSessionId = useWorkbench((s) => s.activeSessionId);
+  const sessionStatus = useWorkbench(
+    (s) => s.sessions.find((x) => x.id === s.activeSessionId)?.status,
+  );
   const run = useWorkbench((s) => s.run);
 
   // 查找最后一条 assistant 消息（聚合完整文本）或问卷工具调用
   const detectedQuestionnaire = useMemo<ParsedQuestionnaire | null>(() => {
-    if (busy || timeline.length === 0) return null;
+    if (timeline.length === 0) return null;
 
     // 检查是否最后一条 assistant 之后已经有新的 user 消息了
     let assistantMessageId: string | null = null;
@@ -197,7 +200,7 @@ export function QuestionnaireCard(): ReactElement | null {
 
     if (!fullText) return null;
     return parseQuestionnaireOptions(fullText);
-  }, [timeline, busy]);
+  }, [timeline]);
 
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);

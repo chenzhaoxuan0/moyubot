@@ -195,6 +195,8 @@ interface WorkbenchState {
     text: string,
     options?: { level?: "info" | "success" | "warn"; meta?: Readonly<Record<string, string>> },
   ) => void;
+  bottomToast: { id: number; title: string; text: string; level: "info" | "success" | "warn"; at: number } | null;
+  dismissBottomToast: () => void;
   /** 执行器实例偏好（T3 Providers 页逻辑：启用开关 / 覆盖 / 环境变量） */
   runtimePrefs: Readonly<Record<string, RuntimePref>>;
   setRuntimePref: (id: string, patch: Partial<Omit<RuntimePref, "enabled">> & { enabled?: boolean }) => void;
@@ -601,24 +603,22 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     writeTurnConfig(set, get, DEFAULT_TURN_CONFIG);
   },
 
+  bottomToast: null,
+  dismissBottomToast: () => {
+    set({ bottomToast: null });
+  },
+
   pushNotice: (title, text, options) => {
-    set((s) => ({
-      timeline: [
-        ...s.timeline,
-        {
-          id: ++seq,
-          event: {
-            type: "system.notice",
-            sessionId: s.activeSessionId ?? asSessionId("sys"),
-            title,
-            text,
-            level: options?.level ?? "info",
-            meta: options?.meta,
-          },
-          at: Date.now(),
-        },
-      ],
-    }));
+    const id = ++seq;
+    set({
+      bottomToast: {
+        id,
+        title,
+        text,
+        level: options?.level ?? "info",
+        at: Date.now(),
+      },
+    });
   },
 
   setLoopParam: (runtimeId, patch) => {
@@ -1008,12 +1008,6 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   },
 
   openSession: async (input) => {
-    // 门禁只剩「等回答」半边（见 runtimeSwitchBlocked）：运行中的对话可以随时
-    // 被打开的会话顶掉 —— 它继续在 daemon 里跑，底栏条目跟踪着，随时切回
-    if (runtimeSwitchBlocked(get())) {
-      get().pushNotice("当前对话在等你回答", "它处于待裁决 / 待输入状态 —— 先在对话里处理完，再打开别的会话。", { level: "warn" });
-      return;
-    }
     const unit = get().units.find((u) => u.id === input.unitId);
     if (unit === undefined) {
       get().pushNotice("找不到所属 bot", `会话 ${input.sessionId} 所属的单元不在列表里。`, { level: "warn" });
@@ -1653,6 +1647,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
             activeSessionId: normalized.id,
           }));
           markSessionViewed(normalized.id);
+          pushUserBubble(normalized.id);
           const currentTurnConfig = get().turnContextConfig;
           const turnManifest = resolveEffectiveTurnManifest(currentTurnConfig, unit?.contextManifest, false);
           const contextInject = turnManifest !== null ? { manifest: turnManifest } : undefined;
@@ -1924,6 +1919,11 @@ function consumeEvents(adapter: RuntimeAdapter): void {
           // 同上：后台会话终结不该把活跃对话的 busy 误清
           ...(s.activeSessionId === event.sessionId ? { busy: false } : {}),
         }));
+      }
+      if (event.type === "permission.requested") {
+        if (useWorkbench.getState().permissionMode === "bypass") {
+          void useWorkbench.getState().resolvePermission(event.requestId, "allow");
+        }
       }
       if (event.type === "permission.resolved") {
         useWorkbench.setState((s) => ({

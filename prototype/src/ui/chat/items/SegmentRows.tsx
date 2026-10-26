@@ -166,23 +166,45 @@ export function PermissionRow({
   risk: "low" | "medium" | "high";
 }) {
   const decision = useWorkbench((s) => s.permissionDecisions[requestId]);
+  const resolve = useWorkbench((s) => s.resolvePermission);
 
   return (
-    <div className="mb-2 flex items-center gap-2 rounded-btn bg-line-soft px-3 py-2 text-body-sm">
-      {decision ? (
-        decision === "deny" ? (
-          <X size={12} className="shrink-0 text-loss" />
+    <div className="mb-2 flex items-center justify-between gap-2 rounded-btn bg-line-soft px-3 py-2 text-body-sm">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        {decision ? (
+          decision === "deny" ? (
+            <X size={12} className="shrink-0 text-loss" />
+          ) : (
+            <Check size={12} className="shrink-0 text-gain" />
+          )
         ) : (
-          <Check size={12} className="shrink-0 text-gain" />
-        )
+          <ShieldCheck size={12} className="shrink-0 animate-pulse text-teal" />
+        )}
+        <span className="min-w-0 flex-1 truncate text-graphite">{detail}</span>
+        {risk === "high" && <span className="shrink-0 text-caption text-loss">高风险</span>}
+      </div>
+      {decision ? (
+        <span className="shrink-0 text-caption text-ash">
+          {DECISION_LABEL[decision] ?? decision}
+        </span>
       ) : (
-        <ShieldCheck size={12} className="shrink-0 animate-pulse text-teal" />
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => resolve(requestId, "allow")}
+            className="cursor-pointer rounded px-2 py-0.5 text-xs font-medium bg-teal text-white hover:bg-teal/90 transition shadow-xs"
+          >
+            允许
+          </button>
+          <button
+            type="button"
+            onClick={() => resolve(requestId, "deny")}
+            className="cursor-pointer rounded px-2 py-0.5 text-xs font-medium bg-line-soft hover:bg-line text-graphite transition"
+          >
+            拒绝
+          </button>
+        </div>
       )}
-      <span className="min-w-0 flex-1 truncate text-graphite">{detail}</span>
-      {risk === "high" && <span className="shrink-0 text-caption text-loss">高风险</span>}
-      <span className={cn("shrink-0 text-caption", decision ? "text-ash" : "text-teal")}>
-        {decision ? (DECISION_LABEL[decision] ?? decision) : "待裁决"}
-      </span>
     </div>
   );
 }

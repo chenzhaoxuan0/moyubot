@@ -60,8 +60,8 @@ export function AssistantMessageBlock({
   }, [streaming, turnStartedAt]);
 
   const displayDuration = streaming
-    ? (liveSec > 0 ? `已执行 ${liveSec}秒` : "执行中…")
-    : durationMs !== undefined && durationMs > 0
+    ? (liveSec > 0 && liveSec < 1800 ? `已执行 ${liveSec}秒` : "执行中…")
+    : durationMs !== undefined && durationMs > 0 && durationMs < 1800_000
       ? `耗时 ${formatDuration(durationMs)}`
       : null;
 

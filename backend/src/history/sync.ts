@@ -104,17 +104,9 @@ export async function syncNativeSession(
         role: "user",
         text: entry.text,
       };
-      const evDone: RuntimeEvent = {
-        type: "message.completed",
-        sessionId: sid,
-        messageId,
-        text: entry.text,
-      };
       await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evDelta });
-      await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evDone });
       if (wss) {
-        broadcastEvent(wss, evDelta, lastSeq - 1);
-        broadcastEvent(wss, evDone, lastSeq);
+        broadcastEvent(wss, evDelta, lastSeq);
       }
     } else if (entry.kind === "assistant") {
       store.insertMessage(sessionId, at, "assistant", entry.text);

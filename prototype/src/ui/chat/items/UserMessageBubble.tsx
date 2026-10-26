@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowUp, CalendarClock, PencilLine, X } from "lucide-react";
+import { ArrowUp, CalendarClock, Check, Copy, PencilLine, X } from "lucide-react";
 import type { ChatAttachment } from "../../../core/attachments.ts";
 import { AttachmentsBar } from "../../AttachmentsBar.tsx";
 import { useWorkbench } from "../../../store/useWorkbench.ts";
@@ -117,6 +117,14 @@ export function UserMessageBubble({
     );
   }
 
+  const [copied, setCopied] = useState(false);
+  const copyText = () => {
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
   const editEntry = isLatestUserTurn ? (
     <button
       onClick={openEdit}
@@ -129,10 +137,24 @@ export function UserMessageBubble({
     </button>
   ) : null;
 
+  const actionEntries = (
+    <div className="flex shrink-0 items-center gap-0.5 opacity-60 transition group-hover/user:opacity-100">
+      <button
+        onClick={copyText}
+        aria-label="复制此消息"
+        title={copied ? "已复制到剪贴板" : "复制此消息"}
+        className="flex cursor-pointer items-center rounded-btn p-1 text-ash hover:bg-line-soft hover:text-ink transition"
+      >
+        {copied ? <Check size={12} className="text-teal" /> : <Copy size={12} />}
+      </button>
+      {editEntry}
+    </div>
+  );
+
   if (parsed.isCommand) {
     return (
       <div data-turn-id={messageId} className="group/user flex items-end justify-end gap-1.5">
-        {editEntry}
+        {actionEntries}
         <div className="flex min-w-0 flex-col items-end gap-1.5">
           {attachments && attachments.length > 0 && (
             <AttachmentsBar attachments={[...attachments]} readOnly />
@@ -160,7 +182,7 @@ export function UserMessageBubble({
 
   return (
     <div data-turn-id={messageId} className="group/user flex items-end justify-end gap-1.5">
-      {editEntry}
+      {actionEntries}
       <div className="flex min-w-0 flex-col items-end gap-1.5">
         {/* 定时代发徽标（docs/23）：气泡上方一枚小 pill —— 这条不是用户亲手
             发的，是定时任务到点投进来的；字段随事件进账本，回放同样可见 */}

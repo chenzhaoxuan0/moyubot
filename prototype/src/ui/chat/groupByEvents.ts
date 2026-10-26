@@ -146,16 +146,35 @@ export function groupTimelineEvents(
         break;
       }
 
+      case "turn.started": {
+        currentTurnStartedAt = at;
+        break;
+      }
+
       case "message.completed": {
+        if ((event as any).role === "user") {
+          break;
+        }
         const existing = findAssistantBlock(result, event.messageId, String(event.sessionId));
         if (existing !== undefined && existing.data.streaming === true) {
           existing.data.text = event.text;
           existing.data.streaming = false;
           existing.data.completedAt = at;
-          if (existing.data.turnStartedAt) {
-            existing.data.durationMs = Math.max(0, at - existing.data.turnStartedAt);
+          if (existing.data.turnStartedAt && at >= existing.data.turnStartedAt) {
+            const diff = at - existing.data.turnStartedAt;
+            // 超过 30 分钟视为跨轮/时间戳异常，不予展示离谱的几百分钟
+            if (diff > 0 && diff < 1800_000) {
+              existing.data.durationMs = diff;
+            }
           }
         } else {
+          let durationMs: number | undefined = undefined;
+          if (currentTurnStartedAt && at >= currentTurnStartedAt) {
+            const diff = at - currentTurnStartedAt;
+            if (diff > 0 && diff < 1800_000) {
+              durationMs = diff;
+            }
+          }
           result.push({
             id,
             kind: "assistant.message",
@@ -167,10 +186,12 @@ export function groupTimelineEvents(
               streaming: false,
               turnStartedAt: currentTurnStartedAt,
               completedAt: at,
-              durationMs: currentTurnStartedAt ? Math.max(0, at - currentTurnStartedAt) : undefined,
+              durationMs,
             },
           });
         }
+        // 这一轮已结束，重置开始时间，防止下一轮或历史消息误用几小时前的时间戳
+        currentTurnStartedAt = undefined;
         break;
       }
 

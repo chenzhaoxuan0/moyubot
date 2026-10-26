@@ -1,8 +1,10 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
 import { BackgroundGuardianBadge, SessionLightLegendBadge, WorkPhaseBadge } from "./StatusIndicators.tsx";
 import { Taskbar } from "./taskbar/Taskbar.tsx";
 import { STATUSBAR_MIN, useShell } from "../store/useShell.ts";
 import { useSidePane } from "../store/useSidePane.ts";
+import { useWorkbench } from "../store/useWorkbench.ts";
 import { sidePaneOccupies } from "../core/sidePaneTabs.ts";
 import { cn } from "./cn.ts";
 
@@ -108,8 +110,76 @@ export function GlobalStatusBar() {
       >
         <Taskbar />
       </div>
-      {/* 右侧面板正下方：留空对齐（竖直方向上与面板列同宽） */}
-      <div aria-hidden className="shrink-0" style={{ width: rightZone }} />
+      {/* 右侧面板正下方：展示底栏通知或留空对齐 */}
+      <div className="flex shrink-0 items-center justify-end px-2.5" style={{ minWidth: rightZone > 0 ? rightZone : "fit-content" }}>
+        <BottomToastBar />
+      </div>
     </footer>
+  );
+}
+
+function BottomToastBar() {
+  const toast = useWorkbench((s) => s.bottomToast);
+  const dismiss = useWorkbench((s) => s.dismissBottomToast);
+  const [detailOpen, setDetailOpen] = useState(false);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => {
+      dismiss();
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [toast?.id, dismiss]);
+
+  if (!toast) return null;
+
+  const isWarn = toast.level === "warn";
+  const isSuccess = toast.level === "success";
+
+  return (
+    <div className="relative flex items-center">
+      {detailOpen && (
+        <div className="absolute bottom-full right-0 mb-2 w-72 rounded-card border border-line bg-card p-3 shadow-lg z-50 text-left">
+          <div className="flex items-center justify-between pb-1.5 border-b border-line/60">
+            <span className="text-body-sm font-semibold text-ink">{toast.title}</span>
+            <button onClick={() => setDetailOpen(false)} className="rounded p-0.5 text-ash hover:text-ink cursor-pointer">
+              <X size={12} />
+            </button>
+          </div>
+          <p className="mt-1.5 text-caption text-graphite leading-relaxed whitespace-pre-wrap">{toast.text}</p>
+        </div>
+      )}
+      <div
+        onClick={() => setDetailOpen(!detailOpen)}
+        title="点击查看通知详情"
+        className={cn(
+          "flex max-w-[280px] cursor-pointer items-center gap-1.5 rounded px-2 py-0.5 text-[11px] transition shadow-2xs border",
+          isWarn
+            ? "border-amber-500/40 bg-amber-500/15 text-amber-500 hover:bg-amber-500/25"
+            : isSuccess
+              ? "border-teal/40 bg-teal-tint text-teal hover:bg-teal/20"
+              : "border-line bg-line-soft text-graphite hover:text-ink hover:bg-line",
+        )}
+      >
+        {isWarn ? (
+          <AlertTriangle size={11} className="shrink-0" />
+        ) : isSuccess ? (
+          <CheckCircle2 size={11} className="shrink-0" />
+        ) : (
+          <Info size={11} className="shrink-0" />
+        )}
+        <span className="font-medium shrink-0">{toast.title}</span>
+        <span className="truncate text-ash/90">{toast.text}</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            dismiss();
+          }}
+          className="ml-1 rounded p-0.5 text-ash/80 hover:text-ink shrink-0 cursor-pointer"
+        >
+          <X size={10} />
+        </button>
+      </div>
+    </div>
   );
 }
