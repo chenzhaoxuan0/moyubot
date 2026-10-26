@@ -23,6 +23,7 @@ import {
   Plus,
   Radio,
   RotateCcw,
+  RotateCw,
   Search,
   Settings,
   SquareTerminal,
@@ -763,6 +764,23 @@ function UnitRow({
   const [visibleCount, setVisibleCount] = useState(6);
   /** 行内重命名中的 entry key（右键「重命名」进入，Enter/失焦保存、Esc 取消） */
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
+  /** 手动从源文件刷新历史状态 */
+  const [isRefreshingHist, setIsRefreshingHist] = useState(false);
+
+  const handleManualRefresh = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isRefreshingHist) return;
+    setIsRefreshingHist(true);
+    setHistErr(null);
+    try {
+      const client = DaemonClient.get(defaultDaemonEndpoint());
+      await client.rpc("history.refreshNative", {});
+    } catch (err) {
+      console.warn("[Sidebar] refreshNative failed:", err);
+    }
+    window.dispatchEvent(new CustomEvent("awb:history-refresh", { detail: { unitId: unit.id } }));
+    setTimeout(() => setIsRefreshingHist(false), 600);
+  };
 
   const { filteredEntries, hiddenFailedCount, hiddenArchivedCount } = useMemo(() => {
     // 置顶行排最前（稳定排序：组内保持原时间序）—— 「垂直标签页」的 pin 语义
@@ -1022,6 +1040,18 @@ function UnitRow({
           （对话页建的 → 聊天页，TUI 建的 → TUI 重现）—— 左侧栏即垂直标签页 */}
       {historyOpen && (
         <div data-no-drag draggable={false} onMouseDown={(e) => e.stopPropagation()} className="space-y-px py-0.5 px-0.5">
+          <div className="flex items-center justify-between px-2 py-0.5 text-[11px] text-ash">
+            <span className="font-medium text-[10px] uppercase tracking-wider text-ash/80">执行历史</span>
+            <button
+              type="button"
+              onClick={handleManualRefresh}
+              title="从源文件同步最新历史记录（包含外部 CLI 发起的新会话与变动）"
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-graphite transition hover:bg-line-soft hover:text-ink cursor-pointer"
+            >
+              <RotateCw size={10} className={cn("shrink-0", isRefreshingHist && "animate-spin text-teal")} />
+              <span>刷新</span>
+            </button>
+          </div>
           {histErr !== null && <p className="px-1.5 py-1 text-[10px] text-loss">读取失败：{histErr}</p>}
           {/* 待触发定时任务行（docs/23）：排在一切历史行之前 —— 子列表先答「将要
               发生什么」，再列「发生过什么」。点击直接打开该任务的编辑弹窗 */}

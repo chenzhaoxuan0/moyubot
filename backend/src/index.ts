@@ -3692,6 +3692,17 @@ registerMethod("session.events.since", async (params) => {
   if (!hot.gap) return hot.items;
   return parseLedger(await traceSink.readSessionNdjson(asSessionId(p.sessionId), afterSeq));
 });
+registerMethod("session.syncNative", async (params) => {
+  const p = (params ?? {}) as { sessionId?: string };
+  if (typeof p.sessionId !== "string" || p.sessionId === "") {
+    throw Object.assign(new Error("sessionId 必填"), { code: "bad_params" });
+  }
+  return syncNativeSession(p.sessionId, store, traceSink, wss);
+});
+registerMethod("history.refreshNative", () => {
+  nativeListCache.clear();
+  return { refreshed: true };
+});
 // 孤儿治理面（WP-10）：列出可回收的死会话 / 回收指定会话（轨迹文件永不删）。
 registerMethod("session.gc", (params) => {
   const p = (params ?? {}) as { maxAgeDays?: number };

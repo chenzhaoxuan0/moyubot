@@ -25,13 +25,13 @@ export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | n
   if (!text || typeof text !== "string") return null;
 
   // 1. 尝试行内管道分隔（如截图中的：A · 重发心跳提议横幅 | B · 清理 mock_tool 放行规则 | C · ...）
-  const pipeRegex = /([A-Za-z0-9])\s*[·\.:、]\s*([^|\n]+)/g;
+  const pipeRegex = /([A-Za-z0-9])\s*[·\.:、\-]\s*([^|\n]+)/g;
   const lines = text.trim().split(/\r?\n/);
-  
+
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]?.trim();
     if (!line) continue;
-    if (line.includes("|") && /[A-D]\s*[·\.:、]/.test(line)) {
+    if (line.includes("|") && /[A-D0-9]\s*[·\.:、\-]/.test(line)) {
       const matches = Array.from(line.matchAll(pipeRegex));
       if (matches.length >= 2) {
         const options: QuestionnaireOption[] = matches.map((m) => {
@@ -45,9 +45,17 @@ export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | n
         });
         // 向上寻找提问句（如：请选择... / 确定...）
         let question = "请点选你想要的那一项。";
-        for (let j = i - 1; j >= Math.max(0, i - 3); j--) {
+        for (let j = i - 1; j >= Math.max(0, i - 4); j--) {
           const prev = lines[j]?.trim();
-          if (prev && (prev.includes("选") || prev.includes("问") || prev.includes("？") || prev.includes("?") || prev.includes("：") || prev.includes(":"))) {
+          if (
+            prev &&
+            (prev.includes("选") ||
+              prev.includes("问") ||
+              prev.includes("？") ||
+              prev.includes("?") ||
+              prev.includes("：") ||
+              prev.includes(":"))
+          ) {
             question = prev.replace(/^#+\s*/, "").replace(/[：:]$/, "。");
             break;
           }
@@ -75,9 +83,11 @@ export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | n
         fullText: `${key} · ${content}`,
       });
     } else if (multilineOptions.length >= 2 && line === "") {
-      // 连续选项结束
       break;
-    } else if (multilineOptions.length === 0 && (line.includes("选") || line.includes("？") || line.includes("?"))) {
+    } else if (
+      multilineOptions.length === 0 &&
+      (line.includes("选") || line.includes("？") || line.includes("?"))
+    ) {
       foundQuestion = line.replace(/^#+\s*/, "").replace(/[：:]$/, "。");
     }
   }
@@ -94,69 +104,119 @@ export function parseQuestionnaireOptions(text: string): ParsedQuestionnaire | n
 }
 
 /**
- * 问卷决策选项卡片 —— 对齐用户截图交互标准：
+ * 问卷决策选项卡片 —— 对齐 ZCode V4InteractionDialogs 与用户交互标准：
  * - 纯净选项卡片（A / B / C / D 徽标单选）
+ * - 完整支持：结构化工具调用（ask_question / AskUserQuestion）与对话文本智能识别
  * - 「在这里输入…」补充输入框
  * - 唯一底栏动作：「提交」（无跳过，不替用户做决定）
- * - 支持 A/B/C/D 快捷选单与 Enter 快捷提交
+ * - 支持 A/B/C/D 快捷选单、上下方向键导航与 Enter 快捷提交
  */
 export function QuestionnaireCard(): ReactElement | null {
   const timeline = useWorkbench((s) => s.timeline);
   const busy = useWorkbench((s) => s.busy);
   const run = useWorkbench((s) => s.run);
 
-  // 查找最后一条 assistant 消息
-  const lastAssistantMsg = useMemo(() => {
+  // 查找最后一条 assistant 消息（聚合完整文本）或问卷工具调用
+  const detectedQuestionnaire = useMemo<ParsedQuestionnaire | null>(() => {
+    if (busy || timeline.length === 0) return null;
+
+    // 检查是否最后一条 assistant 之后已经有新的 user 消息了
+    let assistantMessageId: string | null = null;
+    let assistantCompletedText: string | null = null;
+    let foundSubsequentUser = false;
+    let toolAskQuestion: ParsedQuestionnaire | null = null;
+
     for (let i = timeline.length - 1; i >= 0; i--) {
       const item = timeline[i];
-      if (item && item.event.type === "message.delta" && item.event.role === "assistant") {
-        return item.event.text;
-      }
-    }
-    return null;
-  }, [timeline]);
+      if (!item) continue;
+      const ev = item.event;
 
-  // 是否在最后一条 assistant 消息之后已经有新的 user 消息发出了
-  const hasSubsequentUserMsg = useMemo(() => {
-    let assistantFound = false;
-    for (let i = timeline.length - 1; i >= 0; i--) {
-      const item = timeline[i];
-      if (item && item.event.type === "message.delta") {
-        if (item.event.role === "user" && !assistantFound) {
-          return true; // 后面已经有 user 发送了
-        }
-        if (item.event.role === "assistant") {
-          assistantFound = true;
+      if (ev.type === "message.delta" && ev.role === "user") {
+        if (!assistantMessageId && !toolAskQuestion) {
+          foundSubsequentUser = true;
+          break;
         }
       }
-    }
-    return false;
-  }, [timeline]);
 
-  const parsed = useMemo(() => {
-    if (!lastAssistantMsg || hasSubsequentUserMsg || busy) return null;
-    return parseQuestionnaireOptions(lastAssistantMsg);
-  }, [lastAssistantMsg, hasSubsequentUserMsg, busy]);
+      // 1. 支持结构化工具调用（对齐 ZCode Elicitation / AskUserQuestion / ask_question）
+      if (ev.type === "tool.started" && !assistantMessageId) {
+        const tn = ev.toolName.toLowerCase();
+        if (tn === "ask_question" || tn === "askuserquestion" || tn === "questionnaire" || tn === "ask_user") {
+          const inp = ev.input as Record<string, unknown> | undefined;
+          if (inp) {
+            const rawOpts = (Array.isArray(inp.options) ? inp.options : Array.isArray((inp.questions as any)?.[0]?.options) ? (inp.questions as any)[0].options : []) as unknown[];
+            if (rawOpts.length >= 2) {
+              const options: QuestionnaireOption[] = rawOpts.map((opt, idx) => {
+                const key = String.fromCharCode(65 + idx);
+                const text = typeof opt === "string" ? opt : String((opt as any)?.label ?? (opt as any)?.value ?? (opt as any)?.text ?? "");
+                return {
+                  key,
+                  label: `${key} · ${text}`,
+                  fullText: `${key} · ${text}`,
+                };
+              });
+              const qTitle = String(inp.question ?? inp.header ?? inp.message ?? (inp.questions as any)?.[0]?.question ?? "请点选你想要的那一项。");
+              toolAskQuestion = {
+                question: qTitle,
+                options,
+                rawText: `tool_${ev.callId}`,
+              };
+              break;
+            }
+          }
+        }
+      }
+
+      // 2. 查找 assistant 消息
+      if (ev.type === "message.completed") {
+        assistantMessageId = ev.messageId;
+        assistantCompletedText = ev.text;
+        break;
+      }
+      if (ev.type === "message.delta" && ev.role === "assistant") {
+        assistantMessageId = ev.messageId;
+        break;
+      }
+    }
+
+    if (foundSubsequentUser) return null;
+    if (toolAskQuestion) return toolAskQuestion;
+    if (!assistantMessageId) return null;
+
+    // 拼装完整文本
+    let fullText = assistantCompletedText ?? "";
+    if (!fullText) {
+      const chunks: string[] = [];
+      for (const t of timeline) {
+        if (t.event.type === "message.delta" && t.event.role === "assistant" && t.event.messageId === assistantMessageId) {
+          chunks.push(t.event.text);
+        }
+      }
+      fullText = chunks.join("");
+    }
+
+    if (!fullText) return null;
+    return parseQuestionnaireOptions(fullText);
+  }, [timeline, busy]);
 
   const [dismissedFor, setDismissedFor] = useState<string | null>(null);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [customInput, setCustomInput] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // 当遇到新的选项集时，重置选中与关闭状态
+  // 当遇到新的选项集时，重置选中态
   useEffect(() => {
-    if (parsed && parsed.rawText !== dismissedFor) {
+    if (detectedQuestionnaire && detectedQuestionnaire.rawText !== dismissedFor) {
       setSelectedKey(null);
       setCustomInput("");
     }
-  }, [parsed, dismissedFor]);
+  }, [detectedQuestionnaire, dismissedFor]);
 
-  // 全局快捷键监听（A/B/C/D 选单，Enter 提交）
+  // 全局快捷键监听（对齐 ZCode：支持 A/B/C/D、方向键选择与 Enter 提交）
   useEffect(() => {
-    if (!parsed || dismissedFor === parsed.rawText) return;
+    if (!detectedQuestionnaire || dismissedFor === detectedQuestionnaire.rawText) return;
 
     const onKeyDown = (e: KeyboardEvent) => {
-      // 如果焦点在输入框内，只处理 Enter 提交
       if (document.activeElement === inputRef.current) {
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
@@ -166,16 +226,27 @@ export function QuestionnaireCard(): ReactElement | null {
       }
 
       if (e.key === "Escape") {
-        setDismissedFor(parsed.rawText);
+        setDismissedFor(detectedQuestionnaire.rawText);
         return;
       }
 
       const key = e.key.toUpperCase();
-      const matched = parsed.options.find((o) => o.key === key);
+      const matched = detectedQuestionnaire.options.find((o) => o.key === key);
       if (matched) {
         e.preventDefault();
         setSelectedKey(matched.key);
-      } else if (e.key === "Enter" && selectedKey !== null) {
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const opts = detectedQuestionnaire.options;
+        const currIdx = opts.findIndex((o) => o.key === selectedKey);
+        if (e.key === "ArrowDown") {
+          const nextIdx = currIdx < opts.length - 1 ? currIdx + 1 : 0;
+          setSelectedKey(opts[nextIdx]!.key);
+        } else {
+          const prevIdx = currIdx > 0 ? currIdx - 1 : opts.length - 1;
+          setSelectedKey(opts[prevIdx]!.key);
+        }
+      } else if (e.key === "Enter" && (selectedKey !== null || customInput.trim() !== "")) {
         e.preventDefault();
         handleSubmit();
       }
@@ -183,12 +254,12 @@ export function QuestionnaireCard(): ReactElement | null {
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [parsed, dismissedFor, selectedKey, customInput]);
+  }, [detectedQuestionnaire, dismissedFor, selectedKey, customInput]);
 
-  if (!parsed || dismissedFor === parsed.rawText) return null;
+  if (!detectedQuestionnaire || dismissedFor === detectedQuestionnaire.rawText) return null;
 
   const handleSubmit = () => {
-    const selectedOption = parsed.options.find((o) => o.key === selectedKey);
+    const selectedOption = detectedQuestionnaire.options.find((o) => o.key === selectedKey);
     let finalPayload = "";
 
     if (selectedOption && customInput.trim()) {
@@ -201,7 +272,7 @@ export function QuestionnaireCard(): ReactElement | null {
 
     if (!finalPayload) return;
 
-    setDismissedFor(parsed.rawText);
+    setDismissedFor(detectedQuestionnaire.rawText);
     void run(finalPayload);
   };
 
@@ -209,17 +280,17 @@ export function QuestionnaireCard(): ReactElement | null {
 
   return (
     <aside
-      className="mx-4 my-2 overflow-hidden rounded-2xl border border-line-soft bg-surface/95 backdrop-blur-xl shadow-2xl transition-all duration-200"
-      aria-label="决策选项"
+      className="mx-4 my-2 overflow-hidden rounded-2xl border border-line-soft bg-surface/98 dark:bg-rail/98 backdrop-blur-xl shadow-2xl transition-all duration-200"
+      aria-label="决策选项卡"
     >
       {/* 头部标题与关闭按钮 */}
       <div className="flex items-center justify-between border-b border-line-soft/60 px-5 py-3">
         <h3 className="text-body-md font-semibold text-ink select-none">
-          {parsed.question}
+          {detectedQuestionnaire.question}
         </h3>
         <button
           type="button"
-          onClick={() => setDismissedFor(parsed.rawText)}
+          onClick={() => setDismissedFor(detectedQuestionnaire.rawText)}
           className="rounded-full p-1 text-ash hover:bg-line-soft hover:text-ink transition cursor-pointer"
           title="关闭选单（直接在输入框自由回复）"
         >
@@ -229,7 +300,7 @@ export function QuestionnaireCard(): ReactElement | null {
 
       {/* 选项列表 */}
       <div className="space-y-2 p-4">
-        {parsed.options.map((option) => {
+        {detectedQuestionnaire.options.map((option) => {
           const isSelected = selectedKey === option.key;
           return (
             <button

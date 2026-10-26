@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
-import { Check, ChevronDown, FolderOpen, PanelBottom, Smartphone, X } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, PanelBottom, RotateCw, Smartphone, X } from "lucide-react";
 import { useShell } from "../store/useShell.ts";
 import { useWorkbench, selectActiveUnit } from "../store/useWorkbench.ts";
 import { useTaskbar } from "../store/useTaskbar.ts";
@@ -31,6 +31,7 @@ import { cn } from "./cn.ts";
 export function WorkspaceHeader() {
   const sidebarCollapsed = useShell((s) => s.sidebarCollapsed);
   const activeSessionId = useWorkbench((s) => s.activeSessionId);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   const { preference, setPreference, windowIsMobile } = useIsMobile();
   const unit = useWorkbench(selectActiveUnit);
@@ -122,14 +123,44 @@ export function WorkspaceHeader() {
             <480 隐（阶梯④）：极窄时让位给切换器；底栏入口仍可从运行中的对话
             压缩动画到达，宽度恢复即回 */}
         {activeSessionId !== null && (
-          <button
-            onClick={() => useTaskbar.getState().minimize()}
-            aria-label="折叠对话到底栏"
-            title="折叠当前对话到底栏（最小化，任何状态可用）：运行中的任务转后台继续、空闲对话停靠为「已折叠」，对话列回到空白可开新对话；从底栏条目随时点回"
-            className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-btn text-graphite transition hover:bg-line-soft hover:text-ink @min-[480px]:flex"
-          >
-            <PanelBottom size={13} />
-          </button>
+          <>
+            <button
+              onClick={() => {
+                if (isSyncing) return;
+                setIsSyncing(true);
+                import("../adapters/daemon/client.ts").then(({ DaemonClient, defaultDaemonEndpoint }) => {
+                  const client = DaemonClient.get(defaultDaemonEndpoint());
+                  client
+                    .rpc<{ changed: boolean; newMessages: number }>("session.syncNative", { sessionId: String(activeSessionId) })
+                    .then((res: { changed: boolean; newMessages: number }) => {
+                      if (res.changed && res.newMessages > 0) {
+                        useWorkbench.getState().pushNotice("同步完成", `成功从外部源文件同步了 ${res.newMessages} 条新消息。`, { level: "info" });
+                      } else {
+                        useWorkbench.getState().pushNotice("已是最新", "当前会话与外部源文件已保持一致。", { level: "info" });
+                      }
+                      window.dispatchEvent(new CustomEvent("awb:history-refresh"));
+                    })
+                    .catch((err: unknown) => {
+                      useWorkbench.getState().pushNotice("同步失败", err instanceof Error ? err.message : String(err), { level: "warn" });
+                    })
+                    .finally(() => setIsSyncing(false));
+                });
+              }}
+              aria-label="从源文件同步"
+              title="从外部源文件（如 messages.jsonl）实时同步最新消息"
+              className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-btn text-graphite transition hover:bg-line-soft hover:text-ink @min-[480px]:flex cursor-pointer"
+            >
+              <RotateCw size={13} className={isSyncing ? "animate-spin text-teal" : ""} />
+            </button>
+            <button
+              onClick={() => useTaskbar.getState().minimize()}
+              aria-label="折叠对话到底栏"
+              title="折叠当前对话到底栏（最小化，任何状态可用）：运行中的任务转后台继续、空闲对话停靠为「已折叠」，对话列回到空白可开新对话；从底栏条目随时点回"
+              className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-btn text-graphite transition hover:bg-line-soft hover:text-ink @min-[480px]:flex"
+            >
+              <PanelBottom size={13} />
+            </button>
+          </>
         )}
 
         {/* 会话形态切换（结构化对话 | 终端 TUI）—— 最高优先级，任何宽度都在
