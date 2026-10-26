@@ -72,6 +72,7 @@ import { syncNativeSession, forgetNativeSyncState, NativeSessionWatcher } from "
 import { samePath } from "./history/util.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
 import { QuotaResumeWatcher } from "./automation/quotaResume.ts";
+import { getAutomationCreateLimit, setAutomationCreateLimit } from "./automation/limits.ts";
 import { QuotaProbe } from "./backlog/probe.ts";
 import { cronNextAt, parseCron } from "./automation/cron.ts";
 import {
@@ -1527,11 +1528,15 @@ registerMethod("automation.create", (params) => {
       typeof p.rootPath !== "string" || typeof p.prompt !== "string") {
     throw badAutomation("unitId, runtimeId, rootPath, prompt are required");
   }
-  // 创建上限（对齐 ZCode AUTOMATION_CREATE_LIMIT = 20）：agent 能经 aw CLI 自建
-  // 定时任务，没有上限就是递归滥建的下限 —— 先到 20 条就让人工清理再建
-  if (store.listAutomations().length >= 20) {
+  // 创建上限（默认 20，用户可在自动化页改）：agent 能经 aw CLI 自建定时任务，
+  // 没有上限就是递归滥建的下限 —— 到上限就让人工清理再建，或调高上限。
+  // 只数用户自建任务：quota_resume 自动排的一次性续跑不占额度（它们有独立的
+  // 保留策略 —— QuotaResumeWatcher 每跳清理已完结行，每执行器只留最近 5 条）。
+  // 不拆开的话，频繁撞用量墙的执行器每个窗口都永久占一行，额度很快耗尽
+  const createLimit = getAutomationCreateLimit(store);
+  if (store.listAutomations().filter((a) => a.origin !== "quota_resume").length >= createLimit) {
     throw Object.assign(
-      new Error("定时任务已达上限（20 条）—— 删掉不需要的再建"),
+      new Error(`定时任务已达上限（${createLimit} 条，不含自动排的用量续跑）—— 删掉不需要的再建，或在自动化页调高上限`),
       { code: "automation_limit_reached" },
     );
   }
@@ -1706,6 +1711,15 @@ registerMethod("automation.list", () => {
   // 卡片需要运行记录（最近运行 / 状态徽章），每条带上最近 10 条
   return store.listAutomations().map((a) => ({ ...a, runs: store.listAutomationRuns(a.id, 10) }));
 });
+// 创建上限是用户设置（kv 持久化，默认 20）：自动化页头那个 n / N 就地可改
+registerMethod("automation.limit.get", () => ({ limit: getAutomationCreateLimit(store) }));
+registerMethod("automation.limit.set", (params) => {
+  const p = (params ?? {}) as { limit?: unknown };
+  if (typeof p.limit !== "number" || !Number.isFinite(p.limit)) {
+    throw badAutomation("limit must be a number");
+  }
+  return { limit: setAutomationCreateLimit(store, p.limit) };
+});
 registerMethod("automation.setEnabled", (params) => {
   const p = (params ?? {}) as { id?: number; enabled?: boolean };
   if (typeof p.id !== "number" || typeof p.enabled !== "boolean") {
@@ -1736,6 +1750,51 @@ registerMethod("automation.delete", (params) => {
   if (typeof p.id !== "number") throw badAutomation("id is required");
   scheduler.invalidate(p.id);
   return { deleted: store.deleteAutomation(p.id) };
+});
+// 批量删除 / 批量启停：列表页多选管理用。逐条循环而不是一条多行 SQL ——
+// 每条各走一遍与单条完全相同的收口（scheduler.invalidate / 终态重启用重算），
+// 语义永远不会和单条版本漂移。不存在/已删的行静默跳过，返回实际生效数。
+const parseIdList = (raw: unknown): number[] => {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 100 || !raw.every((v) => typeof v === "number")) {
+    throw badAutomation("ids 必须是 1-100 个数字");
+  }
+  return raw;
+};
+registerMethod("automation.deleteMany", (params) => {
+  const p = (params ?? {}) as { ids?: unknown };
+  const ids = parseIdList(p.ids);
+  let deleted = 0;
+  for (const id of ids) {
+    scheduler.invalidate(id);
+    if (store.deleteAutomation(id)) deleted += 1;
+  }
+  return { deleted };
+});
+registerMethod("automation.setEnabledMany", (params) => {
+  const p = (params ?? {}) as { ids?: unknown; enabled?: unknown };
+  const ids = parseIdList(p.ids);
+  if (typeof p.enabled !== "boolean") throw badAutomation("enabled is required");
+  let changed = 0;
+  for (const id of ids) {
+    const hit = store.getAutomation(id);
+    if (hit === undefined) continue;
+    scheduler.invalidate(id);
+    const changedOne = store.setAutomationEnabled(id, p.enabled);
+    // 与单条 setEnabled 同口径：重新启用一个 next_run_at 为空的终态行，
+    // 从现在重算一次触发点，否则那行永远没人认领
+    if (p.enabled && hit.automation.nextRunAt === null) {
+      const a = hit.automation;
+      let nextRunAt: number | null;
+      try {
+        nextRunAt = a.scheduleRule !== null ? computeScheduleNextRunAt(a.scheduleRule) : cronNextAt(a.cron);
+      } catch {
+        nextRunAt = null;
+      }
+      store.updateAutomation(id, { nextRunAt });
+    }
+    if (changedOne) changed += 1;
+  }
+  return { changed };
 });
 registerMethod("automation.runs", (params) => {
   const p = (params ?? {}) as { id?: number; limit?: number };

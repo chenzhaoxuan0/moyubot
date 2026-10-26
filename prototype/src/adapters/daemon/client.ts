@@ -1537,6 +1537,42 @@ export async function deleteAutomation(
   return client.rpc<{ deleted: boolean }>("automation.delete", { id }, 15000);
 }
 
+/** 批量删除（列表页多选管理）。daemon 逐条走与单删相同的收口，返回实际删除数 */
+export async function deleteAutomations(
+  ids: readonly number[],
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<{ deleted: number }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ deleted: number }>("automation.deleteMany", { ids }, 30000);
+}
+
+/** 批量启用/停用。重新启用终态行的触发点重算口径与单条 setEnabled 一致 */
+export async function setAutomationsEnabled(
+  ids: readonly number[],
+  enabled: boolean,
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<{ changed: number }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ changed: number }>("automation.setEnabledMany", { ids, enabled }, 30000);
+}
+
+/** 读定时任务创建上限（用户设置，默认 20；只数用户自建任务，不含自动排的用量续跑） */
+export async function fetchAutomationCreateLimit(
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<{ limit: number }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ limit: number }>("automation.limit.get", null, 15000);
+}
+
+/** 改创建上限。daemon 侧钳到 [1, 500]，返回实际生效值 */
+export async function updateAutomationCreateLimit(
+  limit: number,
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<{ limit: number }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ limit: number }>("automation.limit.set", { limit }, 15000);
+}
+
 export async function fetchAutomationRuns(
   id: number,
   limit = 50,

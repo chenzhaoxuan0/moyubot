@@ -705,6 +705,9 @@ export class Store {
   }
 
   deleteAutomation(id: number): boolean {
+    // 先清运行记录再删主行：表上没有 FK 级联，不主动清就是孤儿行永久漏库
+    // （批量删除 / 续跑自动清理都会高频走这里，泄漏会被放大）
+    this.db.prepare(`DELETE FROM automation_runs WHERE automation_id = ?`).run(id);
     const result = this.db.prepare(`DELETE FROM automations WHERE id = ?`).run(id);
     return Number(result.changes) > 0;
   }

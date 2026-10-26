@@ -30,6 +30,12 @@ import { log } from "../log.ts";
 const TICK_MS = 60_000;
 /** 排完后的状态保留时长：跑完的卡片还挂在库里，但这里不再重复追踪 */
 const STATE_TTL_MS = 30 * 60_000;
+/**
+ * 已完结续跑行的保留量（每执行器）。跑完的一次性任务不会再发火，留最近几条当
+ * 「发生过什么」的凭据即可 —— 不清理就是每个用量窗口永久占一行，列表越积越长，
+ * 还会把 20 条创建额度吃光（2026-10-26 的教训，额度现已按来源拆开、互不占用）。
+ */
+const FINISHED_RETENTION_PER_RUNTIME = 5;
 
 /** 一个执行器的续跑判定结果 —— 同时也是给前端看的展示态 */
 export interface QuotaResumeState {
@@ -102,6 +108,10 @@ export class QuotaResumeWatcher {
   }
 
   private async tickInner(): Promise<void> {
+    // 清理先于功能开关：已完结的续跑行只要存在就该收（用户关掉续跑功能后，
+    // 历史遗留行也不会永远挂在列表里）
+    this.pruneFinished();
+
     const cfg = this.deps.getConfig();
     const qr = cfg.quotaResume;
     if (!qr.enabled) return;
@@ -166,6 +176,34 @@ export class QuotaResumeWatcher {
     }
 
     this.schedule(q.runtimeId, fireAt, cfg);
+  }
+
+  /**
+   * 已完结的续跑行，每执行器只留最近 FINISHED_RETENTION_PER_RUNTIME 条，更旧的
+   * 连运行记录一起删掉。完结的两种形态：
+   *   1. next_run_at 为空 —— 跑完终态 / misfire 跳过（调度器都已收口）；
+   *   2. 停用且触发点已过 —— 用户停用后调度器不再认领也不 misfire（tick 先判
+   *      enabled），这行永远不会发火；留着就是僵尸行，且下一窗口排新行不受
+   *      影响（findPending 只认 next_run_at > now），删了正好。
+   * 刻意保留：仅停用但触发点还在未来的行 —— 删了它，下一跳 findPending 会当
+   * 「没排过」又排一条新的，等于把用户的停用作废（它不看 enabled 也是同一理由）。
+   */
+  private pruneFinished(): void {
+    const now = Date.now();
+    const byRuntime = new Map<string, number[]>();
+    for (const a of this.deps.store.listAutomations()) {
+      if (a.origin !== "quota_resume") continue;
+      const finished = a.nextRunAt === null || (!a.enabled && a.nextRunAt <= now);
+      if (!finished) continue;
+      const ids = byRuntime.get(a.runtimeId);
+      if (ids === undefined) byRuntime.set(a.runtimeId, [a.id]);
+      else ids.push(a.id); // listAutomations 按 id DESC —— 组内越靠前越新
+    }
+    for (const ids of byRuntime.values()) {
+      for (const id of ids.slice(FINISHED_RETENTION_PER_RUNTIME)) {
+        this.deps.store.deleteAutomation(id);
+      }
+    }
   }
 
   /**

@@ -924,23 +924,23 @@ export function AddBotDialog({
               <p className="min-w-0 flex-1 text-caption text-loss">
                 磁盘上的 {conflict.reason === "agents_md" ? "AGENTS.md" : conflict.reason === "soul_md" ? "SOUL.md" : "bot.json"} 在你编辑期间被改过
                 （多半是在 VS Code 里直接编辑了）。<span className="font-medium">这次没有写入。</span>
-              </p>              <div className="flex shrink-0 items-center gap-2">
+              </p>              <div className="flex shrink-0 flex-nowrap items-center gap-2">
                 <button
                   onClick={() => void reloadFromDisk()}
-                  className="rounded-btn border border-line px-3 py-1.5 text-body-sm text-ink hover:bg-line-soft"
+                  className="shrink-0 whitespace-nowrap rounded-btn border border-line px-3 py-1.5 text-body-sm text-ink hover:bg-line-soft"
                 >
                   重新加载
                 </button>
                 <button
                   onClick={() => void submit(true)}
-                  className="rounded-btn px-3 py-1.5 text-body-sm text-loss hover:bg-loss/10"
+                  className="shrink-0 whitespace-nowrap rounded-btn px-3 py-1.5 text-body-sm text-loss hover:bg-loss/10"
                   title="用这里的版本覆盖磁盘上的改动"
                 >
                   仍然覆盖
                 </button>
                 <button
                   onClick={() => setConflict(null)}
-                  className="rounded-btn bg-ink px-3 py-1.5 text-body-sm text-canvas hover:opacity-90 active:scale-95 transition"
+                  className="shrink-0 whitespace-nowrap rounded-btn bg-ink px-3 py-1.5 text-body-sm text-canvas hover:opacity-90 active:scale-95 transition"
                 >
                   取消
                 </button>
@@ -963,14 +963,16 @@ export function AddBotDialog({
                   : "唯一必填的是文件夹；指向已有文件夹即为认领（原地注册，不动里面的文件），创建后的一切都在这个文件夹里，名字、人设、AGENTS.md、渠道都可以后补"}
               </p>
               )}
-              <div className="ml-auto flex items-center gap-2">
-                <button onClick={onClose} className="rounded-btn px-3 py-1.5 text-body-sm text-graphite hover:bg-line-soft hover:text-ink">
+              {/* 按钮组强制横排（shrink-0 + nowrap）：右栏嵌入形态宽度有限，
+                  此前提示文案会把按钮挤到竖排文字（一个字一行），宁可文案自己折行 */}
+              <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2">
+                <button onClick={onClose} className="shrink-0 whitespace-nowrap rounded-btn px-3 py-1.5 text-body-sm text-graphite hover:bg-line-soft hover:text-ink">
                   取消
                 </button>
                 <button
                   onClick={() => void submit(false)}
                   disabled={saving}
-                  className="flex items-center gap-1 rounded-btn bg-ink px-3 py-1.5 text-body-sm text-canvas hover:opacity-90 active:scale-95 disabled:opacity-50 transition"
+                  className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn bg-ink px-3 py-1.5 text-body-sm text-canvas hover:opacity-90 active:scale-95 disabled:opacity-50 transition"
                 >
                   {isEdit ? <Check size={11} /> : <Plus size={11} />}
                   {saving ? "写入中…" : isEdit ? "保存" : "创建 bot"}

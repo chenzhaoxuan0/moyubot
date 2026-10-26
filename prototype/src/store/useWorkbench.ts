@@ -354,6 +354,10 @@ interface WorkbenchState {
   createAutomationAction: (input: AutomationWriteInput) => Promise<boolean>;
   updateAutomationAction: (id: string, patch: AutomationWriteInput) => Promise<boolean>;
   deleteAutomationAction: (id: string) => Promise<void>;
+  /** 批量删除（列表页多选）。ids 为空直接返回 */
+  deleteAutomationsAction: (ids: readonly string[]) => Promise<void>;
+  /** 批量启用/停用（列表页多选）。ids 为空直接返回 */
+  setAutomationsEnabledAction: (ids: readonly string[], enabled: boolean) => Promise<void>;
   runAutomationNowAction: (id: string) => Promise<void>;
   /** 从 daemon 重新拉取并合并全量 Agent 机器人列表 */
   refreshUnits: () => Promise<void>;
@@ -744,6 +748,58 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
         automationNotice: {
           kind: "error",
           text: `删除失败：${err instanceof Error ? err.message : String(err)}`,
+        },
+      });
+    }
+  },
+
+  deleteAutomationsAction: async (ids) => {
+    if (ids.length === 0) return;
+    const { deleteAutomations, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
+    // RPC 单包上限 100 条（防误发巨包）：全选可能上千条，分块发、结果聚合
+    const endpoint = defaultDaemonEndpoint();
+    let deleted = 0;
+    try {
+      for (let i = 0; i < ids.length; i += 100) {
+        const r = await deleteAutomations(ids.slice(i, i + 100).map(Number), endpoint);
+        deleted += r.deleted;
+      }
+      set({
+        automationNotice:
+          deleted === ids.length
+            ? { kind: "info", text: `已删除 ${deleted} 条定时任务` }
+            : { kind: "error", text: `删除了 ${deleted} 条（选了 ${ids.length} 条，其余已不存在）` },
+      });
+      await get().refreshAutomations();
+    } catch (err: unknown) {
+      set({
+        automationNotice: {
+          kind: "error",
+          text: `批量删除失败：${err instanceof Error ? err.message : String(err)}`,
+        },
+      });
+    }
+  },
+
+  setAutomationsEnabledAction: async (ids, enabled) => {
+    if (ids.length === 0) return;
+    const { setAutomationsEnabled, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
+    const endpoint = defaultDaemonEndpoint();
+    let changed = 0;
+    try {
+      for (let i = 0; i < ids.length; i += 100) {
+        const r = await setAutomationsEnabled(ids.slice(i, i + 100).map(Number), enabled, endpoint);
+        changed += r.changed;
+      }
+      set({
+        automationNotice: { kind: "info", text: `已${enabled ? "启用" : "停用"} ${changed} 条定时任务` },
+      });
+      await get().refreshAutomations();
+    } catch (err: unknown) {
+      set({
+        automationNotice: {
+          kind: "error",
+          text: `批量${enabled ? "启用" : "停用"}失败：${err instanceof Error ? err.message : String(err)}`,
         },
       });
     }

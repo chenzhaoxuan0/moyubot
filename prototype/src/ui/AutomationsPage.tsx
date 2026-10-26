@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlarmClock,
+  Check,
   CircleAlert,
   CircleCheck,
   CircleDot,
@@ -10,7 +12,7 @@ import {
   History,
   Radio,
   Trash2,
-  AlarmClock,
+  X,
 } from "lucide-react";
 import {
   STATUS_FILTERS,
@@ -31,7 +33,7 @@ import { useShell } from "../store/useShell.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { asUnitId } from "../core/units.ts";
 import { useBacklog } from "../store/useBacklog.ts";
-import { fetchResumableSessions, type ResumableSession } from "../adapters/daemon/client.ts";
+import { fetchResumableSessions, fetchAutomationCreateLimit, updateAutomationCreateLimit, type ResumableSession } from "../adapters/daemon/client.ts";
 import type { AutomationDialogPrefill } from "./AutomationDialog.tsx";
 import { cn } from "./cn.ts";
 
@@ -68,6 +70,19 @@ export function AutomationsPage() {
 
   const [filter, setFilter] = useState<StatusFilter>("all");
 
+  // 创建上限（用户设置，daemon kv 持久化，默认 20）：点页头的 n / N 就地改。
+  // null = 还没读到（daemon 没起/请求失败），按默认 20 展示，不阻塞页面
+  const [createLimit, setCreateLimit] = useState<number | null>(null);
+  const [limitEditing, setLimitEditing] = useState(false);
+  const [limitDraft, setLimitDraft] = useState("");
+
+  // 批量管理模式：进入/退出都清空选择，不留隐形状态
+  const [batchMode, setBatchMode] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+  const deleteMany = useWorkbench((s) => s.deleteAutomationsAction);
+  const setManyEnabled = useWorkbench((s) => s.setAutomationsEnabledAction);
+
   // 挂载即拉一次 + 30s 轻轮询：daemon 是唯一权威，下一次运行的倒计时、
   // 运行记录的终态都要跟着它走 —— 不然「3 分钟后」会永远停在 3 分钟前
   useEffect(() => {
@@ -99,6 +114,21 @@ export function AutomationsPage() {
     };
   }, []);
 
+  // 创建上限只在挂载时读一次：改它的唯一入口就在本页，不存在别处会动它
+  useEffect(() => {
+    let cancelled = false;
+    void fetchAutomationCreateLimit()
+      .then((r) => {
+        if (!cancelled) setCreateLimit(r.limit);
+      })
+      .catch(() => {
+        /* daemon 没起或旧版没有该 RPC —— 维持默认 20 展示 */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // 通知 5 秒自动消失
   useEffect(() => {
     if (notice === null) return;
@@ -110,8 +140,69 @@ export function AutomationsPage() {
   // 回落到库里存的 unit_name，好过在卡片上显示一个「—」
   const unitName = (id: string, fallback?: string) => units.find((u) => u.id === id)?.name ?? fallback ?? "—";
 
+  // 额度分账（与后端创建上限同口径）：用量续跑是 daemon 自动排的，不占 20 条
+  // 创建额度，也不混在用户任务里 —— 频繁撞用量墙的执行器每个窗口都会多一条，
+  // 混排很快把用户自己的任务淹没
+  const userAutomations = useMemo(() => automations.filter((a) => a.origin !== "quota_resume"), [automations]);
+  const resumeAutomations = useMemo(() => automations.filter((a) => a.origin === "quota_resume"), [automations]);
+
   // 口径 1：按 resolveStatusKind 分组，它就是卡片徽章的来源
-  const visible = useMemo(() => filterByStatus(automations, filter), [automations, filter]);
+  const visible = useMemo(() => filterByStatus(userAutomations, filter), [userAutomations, filter]);
+  const visibleResume = useMemo(() => filterByStatus(resumeAutomations, filter), [resumeAutomations, filter]);
+
+  // ---- 批量选择 ----
+  const visibleIds = useMemo(() => [...visible, ...visibleResume].map((a) => a.id), [visible, visibleResume]);
+  const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
+
+  const toggleSelected = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setConfirmingBulkDelete(false);
+  };
+
+  // 选择跨筛选/跨分区保留（切 tab 不清空）：全选用并集、取消全选用差集，
+  // 不会静默丢掉看不见的已选；已选数里把筛选外的那部分如实报出来 ——
+  // 批量删除会动到它们，用户该在按下去之前知道（外加两段确认兜底）
+  const hiddenSelected = selected.size - visibleIds.filter((id) => selected.has(id)).length;
+
+  const toggleSelectAll = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+    setConfirmingBulkDelete(false);
+  };
+
+  /** 批量操作收口：执行 → 清空选择（保持批量模式，连续操作不用反复进出） */
+  const runBulk = async (op: () => Promise<void>) => {
+    await op();
+    setSelected(new Set());
+    setConfirmingBulkDelete(false);
+  };
+
+  /** 改创建上限：本地先验 1-500 的严格整数（3.5 这类直接报错，不静默取整），
+   *  daemon 侧还会再钳一次（双保险） */
+  const saveLimit = async () => {
+    const n = Number(limitDraft);
+    if (!Number.isInteger(n) || n < 1 || n > 500) {
+      setNotice({ kind: "error", text: "创建上限必须是 1-500 的整数" });
+      return;
+    }
+    try {
+      const { limit } = await updateAutomationCreateLimit(n);
+      setCreateLimit(limit);
+      setLimitEditing(false);
+      setNotice({ kind: "info", text: `创建上限已设为 ${limit} 条` });
+    } catch (err: unknown) {
+      setNotice({ kind: "error", text: `上限没改成功：${err instanceof Error ? err.message : String(err)}` });
+    }
+  };
 
   // 续跑提示：只看启用中的执行器，且必须有「值得说一句」的事（排上了 / 有说明）
   const resumeStates = useMemo(() => {
@@ -153,19 +244,78 @@ export function AutomationsPage() {
       {/* pt-5 与头部 mb-5 同值：说明行收进悬停后标题独占一行，顶部留白对齐下方间距 */}
       <div className="mx-auto max-w-4xl px-8 pb-12 pt-5">
 
-        <header className="mb-5 flex items-start justify-between gap-4">
+        <header className="mb-5 flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-body-lg font-medium text-ink" title="按日程自动派活给工作单元，跑完归档产出">
               自动化
+              {limitEditing ? (
+                <span className="ml-2 inline-flex items-center gap-1 align-middle">
+                  <input
+                    autoFocus
+                    value={limitDraft}
+                    onChange={(e) => setLimitDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void saveLimit();
+                      else if (e.key === "Escape") setLimitEditing(false);
+                    }}
+                    inputMode="numeric"
+                    aria-label="定时任务创建上限（1-500）"
+                    className="w-16 rounded-btn border border-line bg-card px-1.5 py-0.5 text-caption text-ink outline-none focus:border-teal"
+                  />
+                  <button
+                    onClick={() => void saveLimit()}
+                    aria-label="保存创建上限"
+                    className="rounded-btn bg-ink p-0.5 text-canvas hover:opacity-90"
+                  >
+                    <Check size={11} />
+                  </button>
+                  <button
+                    onClick={() => setLimitEditing(false)}
+                    aria-label="取消修改上限"
+                    className="rounded-btn p-0.5 text-ash hover:bg-line-soft hover:text-ink"
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              ) : (
+                <button
+                  onClick={() => {
+                    setLimitDraft(String(createLimit ?? 20));
+                    setLimitEditing(true);
+                  }}
+                  title="只数用户自建任务；daemon 自动排的用量续跑不占这个额度（另有独立保留策略）。点击修改上限（1-500）"
+                  className="ml-2 align-middle text-caption font-normal text-ash underline decoration-dotted underline-offset-2 transition hover:text-ink"
+                >
+                  {userAutomations.length} / {createLimit ?? 20}
+                </button>
+              )}
             </h1>
           </div>
-          <button
-            onClick={() => openAutomationDialog({ mode: "create" })}
-            className="flex shrink-0 items-center gap-1.5 rounded-btn bg-ink px-3 py-2 text-body-sm text-canvas hover:opacity-90 active:scale-95 transition"
-          >
-            <Plus size={12} />
-            新建
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {(automations.length > 0 || batchMode) && (
+              <button
+                onClick={() => {
+                  setBatchMode((v) => !v);
+                  setSelected(new Set());
+                  setConfirmingBulkDelete(false);
+                }}
+                aria-pressed={batchMode}
+                className={cn(
+                  "rounded-btn border border-line px-3 py-2 text-body-sm transition active:scale-95",
+                  batchMode ? "bg-ink text-canvas hover:opacity-90" : "text-graphite hover:bg-line-soft hover:text-ink",
+                )}
+              >
+                {batchMode ? "完成" : "批量管理"}
+              </button>
+            )}
+            <button
+              onClick={() => openAutomationDialog({ mode: "create" })}
+              className="flex shrink-0 items-center gap-1.5 rounded-btn bg-ink px-3 py-2 text-body-sm text-canvas hover:opacity-90 active:scale-95 transition"
+            >
+              <Plus size={12} />
+              新建
+            </button>
+          </div>
         </header>
 
         {notice !== null && (
@@ -181,6 +331,59 @@ export function AutomationsPage() {
             <button onClick={() => setNotice(null)} className="ml-auto shrink-0 opacity-60 hover:opacity-100" aria-label="关闭提示">
               ×
             </button>
+          </div>
+        )}
+
+        {/* 批量操作条：只在批量模式渲染。删除走两段确认（同卡片菜单口径），
+            执行完清空选择但保持在批量模式 —— 连续清理不用反复进出 */}
+        {batchMode && (
+          <div className="mb-4 flex flex-wrap items-center gap-2 rounded-btn border border-line bg-card px-3 py-2">
+            <span className="text-body-sm text-graphite">
+              已选 {selected.size} 条
+              {hiddenSelected > 0 && <span className="text-ash">（含当前筛选外 {hiddenSelected} 条）</span>}
+            </span>
+            <button
+              onClick={toggleSelectAll}
+              disabled={visibleIds.length === 0}
+              title={allSelected ? "取消选中当前列表里的所有任务" : "加选当前列表里的所有任务（已选中的不受影响）"}
+              className="rounded-btn px-2 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink disabled:opacity-40"
+            >
+              {allSelected ? "取消全选" : "全选"}
+            </button>
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <button
+                disabled={selected.size === 0}
+                onClick={() => void runBulk(() => setManyEnabled([...selected], true))}
+                className="rounded-btn border border-line px-2.5 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink disabled:opacity-40"
+              >
+                批量启用
+              </button>
+              <button
+                disabled={selected.size === 0}
+                onClick={() => void runBulk(() => setManyEnabled([...selected], false))}
+                className="rounded-btn border border-line px-2.5 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink disabled:opacity-40"
+              >
+                批量停用
+              </button>
+              <button
+                disabled={selected.size === 0}
+                onClick={() => {
+                  if (!confirmingBulkDelete) {
+                    setConfirmingBulkDelete(true);
+                    return;
+                  }
+                  void runBulk(() => deleteMany([...selected]));
+                }}
+                className={cn(
+                  "rounded-btn px-2.5 py-1 text-caption transition disabled:opacity-40",
+                  confirmingBulkDelete
+                    ? "bg-loss text-canvas hover:opacity-90"
+                    : "border border-line text-loss hover:bg-loss/10",
+                )}
+              >
+                {confirmingBulkDelete ? `确认删除 ${selected.size} 条？` : "批量删除"}
+              </button>
+            </div>
           </div>
         )}
 
@@ -231,7 +434,7 @@ export function AutomationsPage() {
           </div>
         </div>
 
-        {/* 卡片网格 */}
+        {/* 卡片网格（用户任务） */}
         {visible.length === 0 ? (
           <EmptyPanel
             icon={<CircleAlert size={16} />}
@@ -249,9 +452,47 @@ export function AutomationsPage() {
                 unitName={unitName(a.unitId, a.unitName)}
                 sessionTitles={sessionTitles}
                 onEdit={() => openAutomationDialog({ mode: "edit", automation: a })}
+                selectable={batchMode}
+                selected={selected.has(a.id)}
+                onToggleSelect={() => toggleSelected(a.id)}
               />
             ))}
           </div>
+        )}
+
+        {/* 用量续跑独立分区：daemon 自动排的一次性续跑，不占 20 条创建额度、
+            已完结的每执行器只留最近 5 条（更旧的 daemon 自动清理）——
+            单列一区，别让它们混在用户任务里越积越多 */}
+        {resumeAutomations.length > 0 && (
+          <section className="mt-6">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <AlarmClock size={13} className="shrink-0 text-amber-600" />
+              <h2 className="text-body-sm font-medium text-ink">用量续跑 · 自动排</h2>
+              <span className="shrink-0 rounded-chip bg-line-soft px-1.5 py-0.5 text-caption text-ash">
+                {resumeAutomations.length} 条
+              </span>
+              <span
+                className="text-caption text-ash"
+                title="用量耗尽时 daemon 自动排的一次性续跑：不计入创建上限（上限只数用户自建任务，可在页头修改）；已完结的每执行器只保留最近 5 条，更旧的自动清理"
+              >
+                不占定时任务额度 · 已完结自动清理
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {visibleResume.map((a) => (
+                <AutomationCard
+                  key={a.id}
+                  a={a}
+                  unitName={unitName(a.unitId, a.unitName)}
+                  sessionTitles={sessionTitles}
+                  onEdit={() => openAutomationDialog({ mode: "edit", automation: a })}
+                  selectable={batchMode}
+                  selected={selected.has(a.id)}
+                  onToggleSelect={() => toggleSelected(a.id)}
+                />
+              ))}
+            </div>
+          </section>
         )}
       </div>
       </div>
@@ -279,12 +520,19 @@ function AutomationCard({
   unitName,
   sessionTitles,
   onEdit,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
 }: {
   a: Automation;
   unitName: string;
   /** 会话 id → 标题：把 targetSessionId 翻译成人话，否则用户判不出是哪段对话 */
   sessionTitles: ReadonlyMap<string, string>;
   onEdit: () => void;
+  /** 批量管理模式：整卡变成选择项，单卡操作（菜单 / 立即运行 / 开关）让位 */
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const toggle = useWorkbench((s) => s.toggleAutomation);
   const runNow = useWorkbench((s) => s.runAutomationNowAction);
@@ -303,12 +551,39 @@ function AutomationCard({
 
   return (
     <div
+      role={selectable ? "checkbox" : undefined}
+      aria-checked={selectable ? selected : undefined}
+      aria-label={selectable ? `选择 ${a.name}` : undefined}
+      tabIndex={selectable ? 0 : undefined}
+      onClick={selectable ? onToggleSelect : undefined}
+      onKeyDown={
+        selectable
+          ? (ev) => {
+              if (ev.key !== "Enter" && ev.key !== " ") return;
+              ev.preventDefault();
+              onToggleSelect?.();
+            }
+          : undefined
+      }
       className={cn(
         "relative flex flex-col gap-2.5 rounded-card border border-line bg-card px-4 py-3",
         !a.enabled && "opacity-60",
+        selectable && "cursor-pointer select-none hover:border-teal/60",
+        selectable && selected && "border-teal ring-2 ring-teal/40",
       )}
     >
       <div className="flex items-start gap-2">
+        {selectable && (
+          <span
+            aria-hidden
+            className={cn(
+              "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition",
+              selected ? "border-teal bg-teal text-canvas" : "border-line bg-card",
+            )}
+          >
+            {selected && <Check size={10} />}
+          </span>
+        )}
         <div className="min-w-0 flex-1">
           <p className="truncate text-body-sm font-medium text-ink">{a.name}</p>
           {a.description && (
@@ -318,17 +593,19 @@ function AutomationCard({
           )}
         </div>
         <div className="relative shrink-0">
-          <button
-            aria-label={`${a.name} 更多操作`}
-            aria-expanded={menuOpen}
-            onClick={() => {
-              setMenuOpen((v) => !v);
-              setConfirmingDelete(false);
-            }}
-            className="rounded-btn p-1 text-ash hover:bg-line-soft hover:text-ink"
-          >
-            <MoreHorizontal size={12} />
-          </button>
+          {!selectable && (
+            <button
+              aria-label={`${a.name} 更多操作`}
+              aria-expanded={menuOpen}
+              onClick={() => {
+                setMenuOpen((v) => !v);
+                setConfirmingDelete(false);
+              }}
+              className="rounded-btn p-1 text-ash hover:bg-line-soft hover:text-ink"
+            >
+              <MoreHorizontal size={12} />
+            </button>
+          )}
           {menuOpen && (
             <>
               {/* 点击外部即收起：全屏透明捕获层 */}
@@ -459,7 +736,10 @@ function AutomationCard({
                     <span
                       role="button"
                       tabIndex={0}
-                      onClick={() => {
+                      onClick={(ev) => {
+                        // 卡片在批量模式下是选择项：嵌套可点元素必须掐掉冒泡，
+                        // 否则点「监控」会连着把卡也选上/取消
+                        ev.stopPropagation();
                         // 监控 tab 按 owner 过滤可见：自动化可能属于别的 bot（本页是
                         // 全局页），不先切过去就是「点了没反应」（Sidebar/通知跳行同款守卫）
                         const w = useWorkbench.getState();
@@ -473,6 +753,7 @@ function AutomationCard({
                       }}
                       onKeyDown={(ev) => {
                         if (ev.key !== "Enter" && ev.key !== " ") return;
+                        ev.stopPropagation();
                         const w = useWorkbench.getState();
                         if (String(w.activeUnitId) !== String(a.unitId)) w.selectUnit(asUnitId(a.unitId));
                         useSidePane.getState().openLiveSession({
@@ -548,32 +829,35 @@ function AutomationCard({
             {a.launchMode === "headless" ? "后台" : a.launchMode === "chat" ? "对话页" : "TUI"}
           </span>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => void runNow(a.id)}
-            className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn px-1.5 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink"
-          >
-            <Play size={12} />
-            立即运行
-          </button>
-          <button
-            role="switch"
-            aria-checked={a.enabled}
-            aria-label={`${a.name} 开关`}
-            onClick={() => void toggle(a.id)}
-            className={cn(
-              "relative ml-auto h-5 w-9 shrink-0 rounded-chip transition",
-              a.enabled ? "bg-teal" : "bg-line",
-            )}
-          >
-            <span
+        {/* 批量模式下让位给整卡选择：这里的可点元素会和选卡点击互相打架 */}
+        {!selectable && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => void runNow(a.id)}
+              className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn px-1.5 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink"
+            >
+              <Play size={12} />
+              立即运行
+            </button>
+            <button
+              role="switch"
+              aria-checked={a.enabled}
+              aria-label={`${a.name} 开关`}
+              onClick={() => void toggle(a.id)}
               className={cn(
-                "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all",
-                a.enabled ? "left-[18px]" : "left-0.5",
+                "relative ml-auto h-5 w-9 shrink-0 rounded-chip transition",
+                a.enabled ? "bg-teal" : "bg-line",
               )}
-            />
-          </button>
-        </div>
+            >
+              <span
+                className={cn(
+                  "absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all",
+                  a.enabled ? "left-[18px]" : "left-0.5",
+                )}
+              />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
