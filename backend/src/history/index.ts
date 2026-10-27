@@ -58,6 +58,11 @@ export function readerOf(executorId: string): SessionReader | null {
   return readers.find((r) => r.executorId === executorId) ?? null;
 }
 
+/** 全部 reader 的 executorId（自动收录的缓存通道按家聚合用） */
+export function readerIds(): readonly string[] {
+  return readers.map((r) => r.executorId);
+}
+
 /** 跨家聚合列表。executorIds 为空 = 全部家。 */
 export async function listNativeSessions(
   rootPath: string | null,

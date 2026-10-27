@@ -43,7 +43,7 @@ import { ensureWorktree } from "../git/repo.ts";
 import { asSessionId, type SessionSource } from "../../../prototype/src/core/units.ts";
 import { planProposedFromTodoTool } from "./planTools.ts";
 import type { TraceSink } from "./trace.ts";
-import type { Store } from "../store/db.ts";
+import type { Store, SessionRow } from "../store/db.ts";
 import type { PermissionGate } from "../permissions/gate.ts";
 import { appendJournal, MAX_USAGE } from "../store/journals.ts";
 import { redact as redactText } from "../memory/redact.ts";
@@ -494,61 +494,7 @@ export class RuntimeHost {
   loadPersisted(): void {
     for (const row of this.store.listSessions()) {
       if (this.sessions.has(row.id as SessionId)) continue;
-      const adapter = this.adapters.get(row.runtimeId);
-      if (adapter === undefined) continue;
-      let status = row.status as SessionStatus;
-      let endedAt = row.endedAt ?? undefined;
-      // 启动自愈：从盘加载的会话在当前进程内没有任何活着的 impl（impl 为 null）
-      // 1. 如果没有 cliRef，说明根本无法接回，异常中断的会话收口为 failed
-      if (row.cliRef === null && (status === "running" || status === "awaiting_permission" || status === "awaiting_input")) {
-        status = "failed";
-        endedAt = endedAt ?? row.startedAt;
-        this.store.setSessionStatus(row.id, "failed", endedAt, { ...row.stats });
-      } else if (status === "running" || status === "awaiting_permission" || status === "awaiting_input") {
-        // 2. 有 cliRef，但当前进程并没有在跑它：不可伪装成 running，置为挂起待恢复的 idle 态
-        status = "idle";
-        this.store.setSessionStatus(row.id, "idle", endedAt ?? null, { ...row.stats });
-      }
-      this.sessions.set(row.id as SessionId, {
-        id: row.id as SessionId,
-        unitId: row.unitId as UnitId,
-        runtimeId: row.runtimeId as RuntimeId,
-        conversationId: row.conversationId,
-        forkOfSession: row.forkOfSession,
-        forkAtSeq: row.forkAtSeq,
-        forkKind: row.forkKind,
-        // 老行可能没写 rootPath（列后加的）：空串 = 未知，删树防拆判定自然不命中
-        rootPath: row.rootPath ?? "",
-        title: row.title,
-        status,
-        startedAt: row.startedAt,
-        endedAt,
-        // 从盘装载的死会话：来源与模型没落 state.db（老会话更是连字段都没有），
-        // 只能按「工作台起的」处理。徽标显示成「工作台」而不是空——空会让人以为
-        // 这个字段没实现。同理 interactive 按缺省 false：resume 后不自动放行，
-        // 与工作台当面确认的行为一致。
-        source: "workbench",
-        interactive: false,
-        modelActual: null,
-        modelHintDropped: null,
-        stats: { ...row.stats },
-        // ADR 0012 不变量 3：seq/轮号从落库值续号，换代不重置（afterSeq 补拉与
-        // turn 配对跨代成立）
-        seq: row.lastSeq,
-        turnCount: row.turnCount,
-        impl: null,
-        adapter,
-        lastTool: null,
-        // 行上的 cli_ref 即恢复凭据（ADR 0012 readiness：lastCliRef 非空 = resumable）
-        lastCliRef: row.cliRef,
-        pendingSends: [],
-        queueSeq: 0,
-        queuePaused: false,
-        turnBusy: false,
-        turnOpen: false,
-        cancelRequested: false,
-        events: [],
-      });
+      this.adoptRow(row);
     }
     if (this.sessions.size > 0) log.info("sessions loaded from store", { count: this.sessions.size });
     // 崩溃对账（review P1）：quiesce 落库可能落后于 trace 已写盘的 seq（进程暴毙），
@@ -583,6 +529,79 @@ export class RuntimeHost {
     if (adapter.models.length === 0) throw new Error(`adapter ${adapter.id} declares no models (contract hard requirement)`);
     this.adapters.set(adapter.id, adapter);
     log.info("adapter registered", { id: adapter.id, models: adapter.models.length });
+  }
+
+  /**
+   * 运行期收编一条落盘会话行进内存台账（loadPersisted 的单行版）。
+   * 导入行（history.import.apply / 自动收录）在 daemon 存活期内落库，不收编就
+   * 永远不在 listSessions 里——前端点开走 historyOnly 回落（session.list 找行）
+   * 会得到「打不开这个会话」，events.since 的热环查询也会按 unknown_session 抛错。
+   */
+  adoptPersisted(sessionId: string): boolean {
+    if (this.sessions.has(asSessionId(sessionId))) return true;
+    const row = this.store.getSession(sessionId);
+    if (row === undefined) return false;
+    return this.adoptRow(row);
+  }
+
+  /** loadPersisted / adoptPersisted 共用的单行装载（含启动自愈的落库副作用） */
+  private adoptRow(row: SessionRow): boolean {
+    const adapter = this.adapters.get(row.runtimeId);
+    if (adapter === undefined) return false;
+    let status = row.status as SessionStatus;
+    let endedAt = row.endedAt ?? undefined;
+    // 从盘加载的会话在当前进程内没有任何活着的 impl（impl 为 null）
+    // 1. 如果没有 cliRef，说明根本无法接回，异常中断的会话收口为 failed
+    if (row.cliRef === null && (status === "running" || status === "awaiting_permission" || status === "awaiting_input")) {
+      status = "failed";
+      endedAt = endedAt ?? row.startedAt;
+      this.store.setSessionStatus(row.id, "failed", endedAt, { ...row.stats });
+    } else if (status === "running" || status === "awaiting_permission" || status === "awaiting_input") {
+      // 2. 有 cliRef，但当前进程并没有在跑它：不可伪装成 running，置为挂起待恢复的 idle 态
+      status = "idle";
+      this.store.setSessionStatus(row.id, "idle", endedAt ?? null, { ...row.stats });
+    }
+    this.sessions.set(row.id as SessionId, {
+      id: row.id as SessionId,
+      unitId: row.unitId as UnitId,
+      runtimeId: row.runtimeId as RuntimeId,
+      conversationId: row.conversationId,
+      forkOfSession: row.forkOfSession,
+      forkAtSeq: row.forkAtSeq,
+      forkKind: row.forkKind,
+      // 老行可能没写 rootPath（列后加的）：空串 = 未知，删树防拆判定自然不命中
+      rootPath: row.rootPath ?? "",
+      title: row.title,
+      status,
+      startedAt: row.startedAt,
+      endedAt,
+      // 从盘装载的死会话：来源与模型没落 state.db（老会话更是连字段都没有），
+      // 只能按「工作台起的」处理。徽标显示成「工作台」而不是空——空会让人以为
+      // 这个字段没实现。同理 interactive 按缺省 false：resume 后不自动放行，
+      // 与工作台当面确认的行为一致。
+      source: "workbench",
+      interactive: false,
+      modelActual: null,
+      modelHintDropped: null,
+      stats: { ...row.stats },
+      // ADR 0012 不变量 3：seq/轮号从落库值续号，换代不重置（afterSeq 补拉与
+      // turn 配对跨代成立）
+      seq: row.lastSeq,
+      turnCount: row.turnCount,
+      impl: null,
+      adapter,
+      lastTool: null,
+      // 行上的 cli_ref 即恢复凭据（ADR 0012 readiness：lastCliRef 非空 = resumable）
+      lastCliRef: row.cliRef,
+      pendingSends: [],
+      queueSeq: 0,
+      queuePaused: false,
+      turnBusy: false,
+      turnOpen: false,
+      cancelRequested: false,
+      events: [],
+    });
+    return true;
   }
 
   /**

@@ -67,7 +67,7 @@ import { SEARCH_PROVIDER_INFOS } from "./searchctl/providers.ts";
 import { COMPUTER_MCP_PATH, controlActions, registerAcpEntriesProvider, setControlContext } from "./ctrl/store.ts";
 import { TerminalManager } from "./terminal/terminals.ts";
 import { Store } from "./store/db.ts";
-import { listNativeSessions, readNativeSession, readerOf, type NativeSessionSummary } from "./history/index.ts";
+import { listNativeSessions, readNativeSession, readerOf, readerIds, type NativeSessionSummary } from "./history/index.ts";
 import { syncNativeSession, forgetNativeSyncState, NativeSessionWatcher } from "./history/sync.ts";
 import {
   knownNativeRefs,
@@ -1274,7 +1274,24 @@ nativeWatcher.start();
 const autoCollector = startNativeAutoCollect({
   store,
   listBots: () => botRegistry.listBots(),
+  // 候选列表走 TTL 缓存通道（与 unit.history 行级回溯共享同一次扫描）——
+  // 自动收录绝不每轮裸跑 14 家 reader 的同步 fs（loop-stall 实测教训）
+  listUnitCandidates: cachedNativeListAll,
+  readNativeSession,
   backfillTerminalRefs: backfillUnitTerminalRefs,
+  // 运行期落库的导入行必须收编进 host 台账，否则 session.list 缺行、前端打不开
+  adoptSession: (sessionId) => {
+    host.adoptPersisted(sessionId);
+  },
+  dropSession: (sessionId) => {
+    // 影子行删除：store 行已删，这里摘 host 内存台账（forgetSession 对 store 的
+    // 二次删除是幂等空操作；live 行本来就不在清扫范围）
+    try {
+      host.forgetSession(asSessionId(sessionId));
+    } catch {
+      /* live/未知都跳过——清扫侧已保证只删 done 行 */
+    }
+  },
   getWss: () => wss,
 });
 
@@ -1918,6 +1935,13 @@ function cachedNativeList(executorId: string, rootPath: string | null): Promise<
   return p;
 }
 
+/** 全家聚合的缓存通道（自动收录专用）：逐家走 cachedNativeList（30s TTL +
+ * 单飞，与 unit.history 的行级回溯共享同一次扫描），绝不裸跑 14 家 reader。 */
+async function cachedNativeListAll(rootPath: string): Promise<readonly NativeSessionSummary[]> {
+  const rows = await Promise.all(readerIds().map((id) => cachedNativeList(id, rootPath)));
+  return rows.flat().sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
 /**
  * TUI 运行的原生会话回溯：按「时间窗 ±30s + 工作目录吻合优先」在原生存储里找
  * 这场运行对应的 CLI 会话，取其 id 当 resumeRef。
@@ -2136,11 +2160,28 @@ registerMethod("unit.history", async (params) => {
     });
   }
 
+  // 影子行判定集：非导入台账行与终端运行认领的 (执行器|原生会话 id)
+  const shadowedNativeRefs = new Set<string>();
+  for (const s of store.listSessions()) {
+    if (s.source !== "imported" && s.cliRef !== null && s.cliRef !== "") {
+      shadowedNativeRefs.add(`${s.runtimeId.replace(/^daemon:/, "")}|${s.cliRef}`);
+    }
+  }
+  for (const r of store.listTerminalRuns(targetUnitId ?? undefined, 200)) {
+    if (r.resumeRef !== null && r.resumeRef !== "") shadowedNativeRefs.add(`${r.runtimeId.replace(/^daemon:/, "")}|${r.resumeRef}`);
+  }
+
   for (const s of store.listSessions()) {
     if ((targetUnitId !== null && s.unitId !== targetUnitId) || claimedSessionIds.has(s.id)) continue;
-    // 导入的外部会话：terminal 形态呈现 —— 点击走 TUI resume（cliRef=原生 id）、
-    // 展开走原生转录；不给 sessionId（host 账本里没有它，聊天页接不回）
+    // 导入的外部会话：session 形态呈现（launchMode=chat）——点击进聊天页
+    // （events.since 触发原生转录投影）、右键可 TUI resume（cliRef=原生 id）
     const imported = s.source === "imported";
+    // 影子行过滤（展示层兜底；自动收录每轮的清扫通常会先删掉它们）：真会话或
+    // 终端运行已认领同一原生会话时，imp_ 行是冗余投影，不再各自成行——
+    // 否则「聊天页新建对话 → 侧栏多出一行相同内容」的竞态残留会一直双显
+    if (imported && s.cliRef !== null && s.cliRef !== "" && shadowedNativeRefs.has(`${s.runtimeId.replace(/^daemon:/, "")}|${s.cliRef}`)) {
+      continue;
+    }
     let title = s.title.trim();
     if (title === "" || title === "（无标题会话）") {
       const cached = sessionTitleCache.get(s.id);
@@ -2354,6 +2395,9 @@ registerMethod("history.import.apply", async (params) => {
     // 导入是显式关注动作：落库即开始实时同步外部续写（不用等打开一次），
     // 25 个的 watch 上限正是给「正在看 / 刚导入」的会话留的
     nativeWatcher.watchSession(rowId);
+    // 手动导入同样要收编进 host 台账：否则 daemon 存活期内 session.list 缺这行，
+    // 前端点开 historyOnly 回落会「打不开这个会话」（与自动收录同口径）
+    host.adoptPersisted(rowId);
     keys.push(`session-${rowId}`);
     imported++;
   }

@@ -294,3 +294,23 @@ size=0，挡 mcode 模型探测残留）；差集前先回填该单元 terminal_
 实时同步）。自动收录**不**自动 watch——25 个的 watch 上限是给「正在看 /
 刚导入」的会话的，打开（session.resume / events.since）才同步的语义不变。
 
+**实测收口（2026-10-27 当天，三处修正）**：
+1. **loop-stall**——首版每轮裸跑 14 家 reader 的同步 fs + mcode read() 兜底的
+   3 个月×7 天目录扫，daemon 主循环实测停顿 5.7s×2，前端点会话要等很久甚至
+   「打不开」。改为：候选列表走 cachedNativeList 的 30s TTL 通道（与
+   unit.history 共享一次扫描）、负探测按 (sessionId, updatedAt) 记忆、收录间
+   setImmediate 让行——同负载零停顿，unit.history 稳定 18ms。
+2. **运行期导入行不可见**——host.listSessions 只返回内存表，loadPersisted 只在
+   启动时回灌：daemon 存活期内落库的导入行（自动收录/手动导入）不在
+   session.list 里，前端 historyOnly 回落「打不开这个会话」、events.since 按
+   unknown_session 抛错。host 新增 adoptPersisted（单行收编，与 loadPersisted
+   共用 adoptRow），收录/导入落库即收编。
+3. **影子行**——工作台自己开的会话，cliRef 要等首个 turn 事件才落账，窗口期内
+   收录会产生「同一段对话两行」。三层收口：45s 年龄门槛（太年轻不收）+ 每轮
+   清扫（真会话/终端运行认领了同一原生会话的 imp_ 行删除并广播，只清 status=done
+   的、reattach 过的不动）+ unit.history 展示层过滤兜底。
+
+已知深度限制（沿 reader 既有口径，非本次回归）：mcode 列表取全局最近 50 条，
+安静目录里的很久以前的会话进不了候选——这类会话手动导入同样列不出，
+属 reader 分页深度问题，留待后续按目录查询优化。
+
