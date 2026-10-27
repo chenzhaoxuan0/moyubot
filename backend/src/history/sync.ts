@@ -11,6 +11,7 @@ import path from "node:path";
 import type { WebSocketServer } from "ws";
 import type { Store } from "../store/db.ts";
 import type { TraceSink } from "../runtime/trace.ts";
+import type { TraceRecord } from "../contract.ts";
 import { readNativeSession, type NativeSessionDetail } from "./index.ts";
 import { asSessionId, asUnitId, type RuntimeEvent, type UnitId } from "../contract.ts";
 import { broadcastEvent } from "../wsd.ts";
@@ -161,16 +162,17 @@ async function performNativeSync(
   let pendingCallIdx: number | null = null;
   let pendingCallTool = "";
 
-  const emitToolCompleted = async (callId: string, output: string): Promise<void> => {
-    const evCompleted: RuntimeEvent = {
-      type: "tool.completed",
-      sessionId: sid,
-      callId,
-      ok: true,
-      output,
-    };
-    await traceSink.append({ seq: ++lastSeq, at: Date.now(), sessionId: sid, unitId, runtimeId: executorId, event: evCompleted });
-    if (wss) broadcastEvent(wss, evCompleted, lastSeq);
+  // 批量落账（首开的整段投影动辄上千条记录，逐条 append 是上千次串行
+  // appendFile——RPC 秒级等待的元凶；攒齐后 appendMany 一次写，广播随批后发）
+  const records: TraceRecord[] = [];
+  const frames: Array<{ ev: RuntimeEvent; seq: number }> = [];
+  const emit = (at: number, ev: RuntimeEvent): void => {
+    records.push({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: ev });
+    frames.push({ ev, seq: lastSeq });
+  };
+
+  const emitToolCompleted = (callId: string, output: string, at: number): void => {
+    emit(at, { type: "tool.completed", sessionId: sid, callId, ok: true, output });
   };
 
   for (let idx = currentCount; idx < nativeCount; idx++) {
@@ -179,108 +181,62 @@ async function performNativeSync(
 
     if (entry.kind === "tool" && entry.meta?.phase === "result") {
       if (pendingCallIdx !== null) {
-        await emitToolCompleted(`tc_ext_${pendingCallIdx + 1}`, entry.text);
+        emitToolCompleted(`tc_ext_${pendingCallIdx + 1}`, entry.text, at);
         pendingCallIdx = null;
       } else {
         // 孤立 result（防御）：按旧形态自成一对
         const callId = `tc_ext_${idx + 1}`;
-        const evStarted: RuntimeEvent = {
-          type: "tool.started", sessionId: sid, callId,
-          toolName: entry.toolName ?? "tool", title: "", input: "",
-        };
-        await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evStarted });
-        if (wss) broadcastEvent(wss, evStarted, lastSeq);
-        await emitToolCompleted(callId, entry.text);
+        emit(at, { type: "tool.started", sessionId: sid, callId, toolName: entry.toolName ?? "tool", title: "", input: "" });
+        emitToolCompleted(callId, entry.text, at);
       }
       continue;
     }
     // 非工具条目打断未闭合的 call：补一个空结果收口（mcode 正常都配对，防御兜底）
     if (pendingCallIdx !== null) {
-      await emitToolCompleted(`tc_ext_${pendingCallIdx + 1}`, "");
+      emitToolCompleted(`tc_ext_${pendingCallIdx + 1}`, "", at);
       pendingCallIdx = null;
     }
 
     if (entry.kind === "user") {
-      const messageId = `msg_ext_${idx + 1}`;
       store.insertMessage(sessionId, at, "user", entry.text);
-      const evDelta: RuntimeEvent = {
-        type: "message.delta",
-        sessionId: sid,
-        messageId,
-        role: "user",
-        text: entry.text,
-      };
-      await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evDelta });
-      if (wss) {
-        broadcastEvent(wss, evDelta, lastSeq);
-      }
+      emit(at, { type: "message.delta", sessionId: sid, messageId: `msg_ext_${idx + 1}`, role: "user", text: entry.text });
     } else if (entry.kind === "assistant") {
       const messageId = `msg_ext_${idx + 1}`;
       store.insertMessage(sessionId, at, "assistant", entry.text);
-      const evDelta: RuntimeEvent = {
-        type: "message.delta",
-        sessionId: sid,
-        messageId,
-        role: "assistant",
-        text: entry.text,
-      };
-      const evDone: RuntimeEvent = {
-        type: "message.completed",
-        sessionId: sid,
-        messageId,
-        text: entry.text,
-      };
-      await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evDelta });
-      await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evDone });
-      if (wss) {
-        broadcastEvent(wss, evDelta, lastSeq - 1);
-        broadcastEvent(wss, evDone, lastSeq);
-      }
+      emit(at, { type: "message.delta", sessionId: sid, messageId, role: "assistant", text: entry.text });
+      emit(at, { type: "message.completed", sessionId: sid, messageId, text: entry.text });
     } else if (entry.kind === "thinking") {
       // 思考块也进账本（reasoning.delta）：折叠组里能看到「思考 N 阶段」的真实内容
-      const evThink: RuntimeEvent = {
-        type: "reasoning.delta",
-        sessionId: sid,
-        messageId: `think_ext_${idx + 1}`,
-        text: entry.text,
-      };
-      await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evThink });
-      if (wss) broadcastEvent(wss, evThink, lastSeq);
+      emit(at, { type: "reasoning.delta", sessionId: sid, messageId: `think_ext_${idx + 1}`, text: entry.text });
     } else if (entry.kind === "compaction") {
       // 续链会话的上文压缩摘要：投成说明卡，文件「从中间开始」不再莫名其妙
       const clipped = entry.text.length > 600 ? `${entry.text.slice(0, 600)}…（截断）` : entry.text;
-      const evNotice: RuntimeEvent = {
-        type: "system.notice",
-        sessionId: sid,
-        title: "前情摘要（续链会话的上文压缩）",
-        text: clipped,
-        level: "info",
-      };
-      await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evNotice });
-      if (wss) broadcastEvent(wss, evNotice, lastSeq);
+      emit(at, { type: "system.notice", sessionId: sid, title: "前情摘要（续链会话的上文压缩）", text: clipped, level: "info" });
     } else if (entry.kind === "tool") {
       const callId = `tc_ext_${idx + 1}`;
-      const evStarted: RuntimeEvent = {
+      emit(at, {
         type: "tool.started",
         sessionId: sid,
         callId,
         toolName: entry.toolName ?? "tool",
         title: entry.text.slice(0, 80),
         input: entry.text,
-      };
-      await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evStarted });
-      if (wss) {
-        broadcastEvent(wss, evStarted, lastSeq);
-      }
+      });
       if (entry.meta?.phase === "call") {
         // 只发 started：completed 等它的 result 条目（或保持待决）
         pendingCallIdx = idx;
         pendingCallTool = entry.toolName ?? "tool";
       } else {
         // 无相位（其他 CLI reader）：started+completed 立即成对（旧形态）
-        await emitToolCompleted(callId, "");
+        emitToolCompleted(callId, "", at);
       }
     }
+  }
+
+  // 一次链节点写完全部投影记录，再补发广播帧
+  await traceSink.appendMany(records);
+  if (wss) {
+    for (const f of frames) broadcastEvent(wss, f.ev, f.seq);
   }
 
   // 更新已同步游标

@@ -7,7 +7,7 @@
  */
 
 import { appendFile, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { SessionId, TraceRecord } from "../contract.ts";
 
@@ -44,6 +44,45 @@ export class TraceSink {
     return next;
   }
 
+  /**
+   * 批量追加（同一会话的一次性投影/重放用）：一条链节点写完全部记录——
+   * 逐条 append 是每个记录一次 appendFile 系统调用，重投影一个数百条目的
+   * 会话要上千次串行 IO，RPC 秒级等待的元凶之一。记录必须同会话同日期段
+   * （调用方保证；跨日自动按日期分段写）。
+   */
+  appendMany(records: readonly TraceRecord[]): Promise<void> {
+    if (records.length === 0) return Promise.resolve();
+    const next = this.chain.then(
+      () => this.appendManyNow(records),
+      () => this.appendManyNow(records),
+    );
+    this.chain = next.catch(() => undefined);
+    return next;
+  }
+
+  private async appendManyNow(records: readonly TraceRecord[]): Promise<void> {
+    // 按日期分段（投影时间戳取自原生转录，可能跨天）
+    const byDate = new Map<string, TraceRecord[]>();
+    for (const r of records) {
+      const dateKey = new Date(r.at).toISOString().slice(0, 10);
+      const bucket = byDate.get(dateKey);
+      if (bucket === undefined) byDate.set(dateKey, [r]);
+      else bucket.push(r);
+    }
+    for (const [dateKey, bucket] of byDate) {
+      const file = this.fileFor(dateKey);
+      await mkdir(path.dirname(file), { recursive: true });
+      const lines = bucket.map((r) => JSON.stringify(r));
+      const body = lines.join("\n") + "\n";
+      if (existsSync(file)) {
+        await appendFile(file, body, "utf8");
+      } else {
+        await appendFile(file, HEADER + "\n" + body, "utf8");
+      }
+      this.#indexAppend(file, lines);
+    }
+  }
+
   private async appendNow(record: TraceRecord): Promise<void> {
     const dateKey = new Date(record.at).toISOString().slice(0, 10);
     const file = this.fileFor(dateKey);
@@ -51,7 +90,77 @@ export class TraceSink {
     if (!existsSync(file)) {
       await appendFile(file, HEADER + "\n", "utf8");
     }
-    await appendFile(file, JSON.stringify(record) + "\n", "utf8");
+    const line = JSON.stringify(record);
+    await appendFile(file, line + "\n", "utf8");
+    this.#indexAppend(file, [line]);
+  }
+
+  /**
+   * 按文件索引：file → {签名, 会话→行[]}。readSessionNdjson 曾是每次调用
+   * 全库读入+逐行解析（42MB 级，秒级），点开会话/断线补拉都在这条路上——
+   * 现在每个文件只解析一次，之后按 (mtime,size) 签名增量失效；追加写直接
+   * 往索引里补行，读路径零解析。
+   */
+  readonly #fileIndex = new Map<string, { mtimeMs: number; size: number; bySid: Map<string, string[]> }>();
+
+  async #ensureIndex(): Promise<void> {
+    const dir = path.join(this.homeDir, "traces");
+    if (!existsSync(dir)) return;
+    const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl")).sort();
+    for (const f of files) {
+      const full = path.join(dir, f);
+      let st: { mtimeMs: number; size: number };
+      try {
+        st = statSync(full);
+      } catch {
+        continue;
+      }
+      const cur = this.#fileIndex.get(f);
+      if (cur !== undefined && cur.mtimeMs === st.mtimeMs && cur.size === st.size) continue;
+      const bySid = new Map<string, string[]>();
+      try {
+        const raw = await readFile(full, "utf8");
+        for (const line of raw.split("\n")) {
+          if (line === "" || !line.startsWith("{")) continue; // 首行是 {"v":1,"format":"trace"} 头
+          try {
+            const rec = JSON.parse(line) as TraceRecord;
+            if (typeof rec.sessionId !== "string") continue;
+            const bucket = bySid.get(rec.sessionId);
+            if (bucket === undefined) bySid.set(rec.sessionId, [line]);
+            else bucket.push(line);
+          } catch {
+            // 坏行跳过：账本容错读
+          }
+        }
+      } catch {
+        continue;
+      }
+      this.#fileIndex.set(f, { mtimeMs: st.mtimeMs, size: st.size, bySid });
+    }
+  }
+
+  /** 追加后同步索引（避免下次读时因签名变化整文件重解析） */
+  #indexAppend(file: string, lines: readonly string[]): void {
+    const cur = this.#fileIndex.get(path.basename(file));
+    if (cur === undefined) return; // 该文件还没进索引：下次 ensure 按需解析
+    try {
+      const st = statSync(file);
+      cur.mtimeMs = st.mtimeMs;
+      cur.size = st.size;
+    } catch {
+      /* 签名拿不到就让下次重解析 */
+    }
+    for (const line of lines) {
+      try {
+        const rec = JSON.parse(line) as TraceRecord;
+        if (typeof rec.sessionId !== "string") continue;
+        const bucket = cur.bySid.get(rec.sessionId);
+        if (bucket === undefined) cur.bySid.set(rec.sessionId, [line]);
+        else bucket.push(line);
+      } catch {
+        /* ignore */
+      }
+    }
   }
 
   /**
@@ -60,17 +169,19 @@ export class TraceSink {
    * afterSeq > 0 时只返回 seq 大于它的行（断线补拉的游标）。
    */
   async readSessionNdjson(sessionId: SessionId, afterSeq = 0): Promise<string> {
-    const dir = path.join(this.homeDir, "traces");
-    if (!existsSync(dir)) return "";
-    const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl")).sort();
+    await this.#ensureIndex();
     const out: string[] = [];
-    for (const f of files) {
-      const raw = await readFile(path.join(dir, f), "utf8");
-      for (const line of raw.split("\n")) {
-        if (line === "" || !line.startsWith("{")) continue; // 首行是 {"v":1,"format":"trace"} 头
+    for (const [, entry] of this.#fileIndex) {
+      const bucket = entry.bySid.get(sessionId);
+      if (bucket === undefined) continue;
+      if (afterSeq === 0) {
+        out.push(...bucket);
+        continue;
+      }
+      for (const line of bucket) {
         try {
           const rec = JSON.parse(line) as TraceRecord;
-          if (rec.sessionId === sessionId && rec.seq > afterSeq) out.push(line);
+          if (rec.seq > afterSeq) out.push(line);
         } catch {
           // 坏行跳过：账本容错读
         }
@@ -142,6 +253,8 @@ export class TraceSink {
         const tmp = `${full}.tmp`;
         await writeFile(tmp, kept.join("\n"), "utf8");
         await rename(tmp, full);
+        // 重写过：该文件的索引条目作废（下次读按需重解析）
+        this.#fileIndex.delete(f);
       }
     }
     return removed;

@@ -492,6 +492,13 @@ function applyPutResult(
 /** 时间线序号 —— 全局递增，pushUserBubble / pushNotice / 事件泵共用 */
 let seq = 0;
 
+/**
+ * 会话视图令牌：openSession 在途期间用户又切了会话/单元（selectUnit 或更新的
+ * openSession）时递增——旧的在途加载在落位前校验令牌，失效即弃（防旧结果
+ * 覆盖新视图、防加载中「点不动」的观感：新点击立即生效，旧加载静默退场）。
+ */
+let sessionViewToken = 0;
+
 /** 会话被用户打开/发送即视为「已读」—— 侧栏「完成未读」绿灯据此熄灭 */
 function markSessionViewed(id: SessionId | string): void {
   useHistoryPrefs.getState().markViewed(`session-${String(id)}`);
@@ -967,6 +974,8 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   },
 
   selectUnit: (activeUnitId) => {
+    // 视图切换：在途的 openSession 全部作废（见 sessionViewToken 注释）
+    sessionViewToken++;
     // 切单元 = 切对话视图：时间线跟着换（ADR 0012 后时间线不再随开新段清空，
     // 单元边界成了唯一的显式清空点之一）。分叉意图指向旧单元的段，一并作废
     // （零持久化，用户在新单元里重新发起即可）。输入历史同口径清空 ——
@@ -1282,6 +1291,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   },
 
   openSession: async (input) => {
+    const token = ++sessionViewToken;
     const unit = get().units.find((u) => u.id === input.unitId);
     if (unit === undefined) {
       get().pushNotice("找不到所属 bot", `会话 ${input.sessionId} 所属的单元不在列表里。`, { level: "warn" });
@@ -1402,6 +1412,9 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     // 先 set busy/activeSessionId 再切执行器，会被自家门禁按「本轮进行中」拦下，
     // activeRuntimeId 留在旧执行器上，续聊判定从此错位。selectUnit 先清
     // activeSessionId（门禁的会话半边恒 false）、busy 尚未置位 → 切换必成。
+    // 在途校验：回放期间用户切走了（selectUnit / 新 openSession）就整段弃置，
+    // 不把旧会话的 timeline/activeSessionId 盖到新视图上
+    if (token !== sessionViewToken) return;
     get().selectUnit(input.unitId);
     get().selectRuntime(String(adapter.id));
     // 队列 / usage 从回放重建：主段先种上 resume 返回的权威快照（live 会话

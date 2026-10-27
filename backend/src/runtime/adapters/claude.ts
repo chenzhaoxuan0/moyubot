@@ -42,7 +42,7 @@ import type {
 } from "../../contract.ts";
 import { execLines, resolveCommand } from "../exec.ts";
 import { builtinCommandsFor } from "./builtin-catalogs.ts";
-import { hasDotSegment, readStandardAgentsWorkspace } from "./discovery.ts";
+import { hasDotSegment, readStandardAgentsWorkspace, listMarkdownFilesPruned } from "./discovery.ts";
 import { log } from "../../log.ts";
 
 // ---- SDK 消息宽松视图（顶层判别用 SDK 类型，字段按宽容记录取） -------------------
@@ -193,7 +193,7 @@ function readSkillDirs(dir: string): Array<{ name: string; description?: string 
 function readMarkdownDefs(dir: string): Array<{ name: string; description?: string; argumentHint?: string }> {
   let files: string[];
   try {
-    files = readdirSync(dir, { recursive: true }).filter((f) => String(f).toLowerCase().endsWith(".md") && !hasDotSegment(String(f))).map((f) => join(dir, String(f)));
+    files = listMarkdownFilesPruned(dir).map((f) => join(dir, f));
   } catch {
     return [];
   }

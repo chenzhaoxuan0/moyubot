@@ -13,7 +13,7 @@
  * - 提供通用去重合并（重名时：项目级 > 用户级，技能/子智能体优先于宽泛命令分类）。
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { NativeCommandInfo } from "../../contract.ts";
@@ -150,6 +150,39 @@ export function hasDotSegment(relPath: string): boolean {
 }
 
 /**
+ * 枚举目录下全部 `*.md`（相对路径，**不进入**点目录与 node_modules）。
+ * 取代 `readdirSync(dir, { recursive: true })` + 事后 hasDotSegment 过滤：
+ * recursive 枚举会先钻进 node_modules/.git 把里面所有条目都列一遍再丢弃——
+ * bot 根目录里一个 node_modules 就是数万条目，命令面板预热曾因此把主循环
+ * 卡出 23 秒 loop-stall（实测 2026-10-27）。栈式遍历在进入前剪枝。
+ */
+export function listMarkdownFilesPruned(dir: string, limit = 2000): string[] {
+  const out: string[] = [];
+  const skip = (name: string): boolean => name.startsWith(".") || name === "node_modules";
+  const walk = (d: string, prefix: string): void => {
+    if (out.length >= limit) return;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (out.length >= limit) return;
+      const rel = prefix === "" ? e.name : `${prefix}/${e.name}`;
+      if (e.isDirectory()) {
+        if (skip(e.name)) continue;
+        walk(join(d, e.name), rel);
+      } else if (e.isFile() && e.name.toLowerCase().endsWith(".md")) {
+        out.push(rel);
+      }
+    }
+  };
+  walk(dir, "");
+  return out;
+}
+
+/**
  * 扫描指定目录下的子智能体（`*.md` 规范）。
  * 过滤掉 primary 模式（主对话形态），只保留子智能体形态。
  */
@@ -158,14 +191,7 @@ export function discoverAgentsInDir(
   source: "user" | "project" | "plugin",
 ): NativeCommandInfo[] {
   if (!existsSync(dir)) return [];
-  let files: string[] = [];
-  try {
-    files = readdirSync(dir, { recursive: true })
-      .map((f) => String(f))
-      .filter((f) => f.toLowerCase().endsWith(".md") && !hasDotSegment(f));
-  } catch {
-    return [];
-  }
+  const files = listMarkdownFilesPruned(dir);
 
   const out: NativeCommandInfo[] = [];
   for (const rel of files) {
@@ -205,14 +231,7 @@ export function discoverCommandsInDir(
   source: "user" | "project" | "plugin",
 ): NativeCommandInfo[] {
   if (!existsSync(dir)) return [];
-  let files: string[] = [];
-  try {
-    files = readdirSync(dir, { recursive: true })
-      .map((f) => String(f))
-      .filter((f) => f.toLowerCase().endsWith(".md") && !hasDotSegment(f));
-  } catch {
-    return [];
-  }
+  const files = listMarkdownFilesPruned(dir);
 
   const out: NativeCommandInfo[] = [];
   for (const rel of files) {

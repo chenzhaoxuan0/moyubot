@@ -45,7 +45,7 @@ import type {
 } from "../../contract.ts";
 import { execLines, resolveCommand } from "../exec.ts";
 import { builtinCommandsFor } from "./builtin-catalogs.ts";
-import { hasDotSegment, readStandardAgentsWorkspace } from "./discovery.ts";
+import { hasDotSegment, readStandardAgentsWorkspace, listMarkdownFilesPruned } from "./discovery.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -688,7 +688,7 @@ function readGrokAgents(rootPath: string): readonly NativeCommandInfo[] {
     if (!existsSync(dir)) continue;
     let files: string[];
     try {
-      files = readdirSync(dir, { recursive: true }).filter((f) => String(f).toLowerCase().endsWith(".md") && !hasDotSegment(String(f))).map((f) => join(dir, String(f)));
+      files = listMarkdownFilesPruned(dir).map((f) => join(dir, f));
     } catch {
       continue;
     }
