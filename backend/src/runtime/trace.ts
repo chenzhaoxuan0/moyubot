@@ -6,7 +6,7 @@
  * 第一行写 {"v":1,"format":"trace"} 头——以后格式演进靠文件头升版，行内容不动。
  */
 
-import { appendFile, mkdir, readdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { SessionId, TraceRecord } from "../contract.ts";
@@ -105,5 +105,45 @@ export class TraceSink {
       }
     }
     return out;
+  }
+
+  /**
+   * 一次性迁移用：从账本剔除指定会话的**原生投影**记录（msg_ext_/tc_ext_/
+   * think_ext_ 前缀），保留可能存在的真实 host 事件（旧版点击即 reattach 的
+   * 续聊轮次）。逐文件原子重写；返回剔除条数。
+   */
+  async pruneExtRecords(sessionIds: readonly string[]): Promise<number> {
+    const ids = new Set(sessionIds);
+    const dir = path.join(this.homeDir, "traces");
+    if (!existsSync(dir) || ids.size === 0) return 0;
+    let removed = 0;
+    for (const f of await readdir(dir)) {
+      if (!f.endsWith(".jsonl")) continue;
+      const full = path.join(dir, f);
+      const raw = await readFile(full, "utf8");
+      let changed = false;
+      const kept = raw.split("\n").filter((line) => {
+        if (line === "" || !line.startsWith("{")) return true;
+        try {
+          const rec = JSON.parse(line) as TraceRecord & { event?: { messageId?: unknown; callId?: unknown } };
+          if (!ids.has(String(rec.sessionId ?? ""))) return true;
+          const extId = String(rec.event?.messageId ?? rec.event?.callId ?? "");
+          if (/^(msg_ext_|tc_ext_|think_ext_)/.test(extId)) {
+            changed = true;
+            removed++;
+            return false;
+          }
+        } catch {
+          // 坏行保留：账本容错
+        }
+        return true;
+      });
+      if (changed) {
+        const tmp = `${full}.tmp`;
+        await writeFile(tmp, kept.join("\n"), "utf8");
+        await rename(tmp, full);
+      }
+    }
+    return removed;
   }
 }

@@ -107,6 +107,22 @@ function querySessionById(sessionId: string): McodeSessionRow | null {
   }
 }
 
+/**
+ * 剥掉 user 消息开头连续的 <system-reminder>…</system-reminder> 包裹块
+ * （内嵌的其它 reminder 标签随整块一起剥掉；剥完为空 = 纯系统注入，整条丢弃）。
+ */
+function stripLeadingReminders(text: string): string {
+  let t = text;
+  for (;;) {
+    const m = /^\s*<system-reminder>/.exec(t);
+    if (m === null) break;
+    const close = t.indexOf("</system-reminder>");
+    if (close === -1) break; // 未闭合：不剥，原样保留
+    t = t.slice(close + "</system-reminder>".length);
+  }
+  return t.trimStart();
+}
+
 function parseTranscript(messagesFile: string) {
   const transcript = [];
   for (const l of readJsonLines(messagesFile)) {
@@ -117,8 +133,19 @@ function parseTranscript(messagesFile: string) {
     if (role === "user" || role === "assistant") {
       const entries = entriesFromContent(role, msg["content"]);
       for (const e of entries) {
-        if (e.kind === "user" && e.text.trim().startsWith("<system")) continue;
-        transcript.push(e);
+        if (e.kind === "user") {
+          // mcode 把系统提醒（tool_search 指引 / agent-context / master-reminder 等）
+          // 与真实任务 prompt 拼在**同一条** user 消息里（子 agent 会话的首条即如此，
+          // 实测 7KB 消息里前 4.4KB 是 reminder 包裹块）。剥掉前导的
+          // <system-reminder>…</system-reminder> 块，余下正文才是真正的 prompt——
+          // 整条丢弃会让会话「没有首条用户消息」，桌面端显示的正是剥后这段
+          const stripped = stripLeadingReminders(e.text);
+          if (stripped.trim() === "") continue;
+          if (stripped !== e.text) transcript.push({ ...e, text: stripped });
+          else transcript.push(e);
+        } else {
+          transcript.push(e);
+        }
       }
     } else if (role === "compactionSummary") {
       // 续链会话（--session resume）的开头上文：前一段对话压缩成的摘要。不投影

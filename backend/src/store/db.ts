@@ -418,6 +418,11 @@ export class Store {
     this.db.prepare(`DELETE FROM sessions WHERE id = ?`).run(id);
   }
 
+  /** 一次性迁移用：只清消息行，保留会话行（导入会话重投影前调用） */
+  clearSessionMessages(id: string): void {
+    this.db.prepare(`DELETE FROM messages WHERE session_id = ?`).run(id);
+  }
+
   listSessions(): SessionRow[] {
     const rows = this.db.prepare(`SELECT * FROM sessions ORDER BY started_at DESC`).all() as Array<Record<string, unknown>>;
     return rows.map((r) => this.toRow(r));

@@ -468,6 +468,11 @@ export function detectQuestionnaireFromTimeline(
   if (toolAskQuestion) return toolAskQuestion;
   if (!assistantMessageId && !assistantCompletedText) return null;
 
+  // 导入会话（原生投影的 messageId 带 msg_ext_ 前缀）的最终回复常带编号交付
+  // 清单（关键事实 1. 2. 3.…），形状像选项但不是问题——文本兜底只对工作台
+  // 自生会话生效；导入会话的问卷一律走上面的结构化工具判定
+  if (assistantMessageId !== null && assistantMessageId.startsWith("msg_ext_")) return null;
+
   // 文本兜底的时效判定：最后一条助手消息之后若还有任何工具/用户活动（问卷的
   // 结果条目、新一轮输入……），这段「像选项的编号文本」早已被回应过——
   // 历史会话的最终回复常带编号列表，不能凭形状就弹成选项卡

@@ -351,6 +351,27 @@ host.register(new GrokAdapter());
 host.register(new CursorAdapter());
 host.register(new OpenclawAdapter());
 host.register(new MockPermAdapter());
+// 一次性迁移（kv 防重）：导入会话的旧投影缺首条 prompt（<system-reminder> 包裹块
+// 连同正文一起被丢）与 compaction/thinking 条目——剔除旧 ext 投影记录 + 清消息，
+// 各会话下次打开时按新 reader 全量重投影。真实 host 事件（曾点击 reattach 的续聊
+// 轮次）保留不动。必须在 loadPersisted 之前跑，装载的 seq 才基于修剪后的账本
+try {
+  if (store.kvGet("imp-reproj-v2") !== "1") {
+    const rows = store.listSessions().filter((s) => s.source === "imported");
+    if (rows.length > 0) {
+      const removed = await traceSink.pruneExtRecords(rows.map((r) => r.id));
+      for (const r of rows) {
+        store.clearSessionMessages(r.id);
+        store.setSessionProgress(r.id, r.lastSeq, 0);
+      }
+      log.info("imported sessions re-projection migration", { sessions: rows.length, removedRecords: removed });
+    }
+    store.kvSet("imp-reproj-v2", "1");
+  }
+} catch (err) {
+  // 失败下次启动重试（kv 未置位）
+  log.warn("re-projection migration failed", { err: String(err) });
+}
 host.loadPersisted();
 memoryScheduler?.start();
 // ⚠ 这里**刻意不做**启动预热探测。
