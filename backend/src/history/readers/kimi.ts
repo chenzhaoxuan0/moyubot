@@ -91,15 +91,39 @@ export function createKimiReader(): SessionReader {
         if (!isRecord(l)) continue;
         const type = str(l["type"]);
         if (type === "config.update" || type === "tools.set_active_tools" || type === "metadata") continue;
-        const rc = looseRoleContent(l);
-        if (rc !== null && (rc.role === "user" || rc.role === "assistant")) {
-          for (const e of entriesFromContent(rc.role, rc.content)) {
-            if (e.kind === "user" && e.text.trim().startsWith("<")) continue;
-            transcript.push(e);
+      const rc = looseRoleContent(l);
+      if (rc !== null && (rc.role === "user" || rc.role === "assistant")) {
+        for (const e of entriesFromContent(rc.role, rc.content)) {
+          if (e.kind === "user" && e.text.trim().startsWith("<")) continue;
+          transcript.push(e);
+        }
+      }
+      // wire 的工具调用不走 content 块：assistant 在 message.toolCalls 携带
+      //（含 AskUserQuestion 问卷），结果以 role:"tool" 记录回投（源码：
+      // kimi-code packages/agent-core-v2/src/wire/human.ts）——单独捞，防御式
+      const msg = isRecord(l["message"]) ? l["message"] : undefined;
+      if (msg !== undefined && Array.isArray(msg["toolCalls"])) {
+        for (const tc of msg["toolCalls"]) {
+          if (!isRecord(tc)) continue;
+          const fn = isRecord(tc["function"]) ? tc["function"] : tc;
+          const name = str(fn["name"]) ?? "tool";
+          const args = fn["arguments"];
+          const argText = typeof args === "string" ? args : JSON.stringify(args ?? "");
+          if (argText !== "" && argText !== "{}") {
+            transcript.push({ kind: "tool" as const, toolName: name, text: argText.slice(0, 4000) });
           }
         }
       }
-      return { ...hit.summary, transcript };
+      if (rc !== null && rc.role === "tool" && msg !== undefined) {
+        const name = str(msg["toolName"]) ?? "tool";
+        const resultText =
+          typeof rc.content === "string" ? rc.content : rc.content === undefined ? "" : JSON.stringify(rc.content);
+        if (resultText.trim() !== "") {
+          transcript.push({ kind: "tool" as const, toolName: `${name} ·结果`, text: resultText.slice(0, 2000) });
+        }
+      }
+    }
+    return { ...hit.summary, transcript };
     },
   };
 }

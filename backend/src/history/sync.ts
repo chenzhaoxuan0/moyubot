@@ -295,20 +295,27 @@ async function performNativeSync(
   }
 
   // 广播状态更新让前端侧栏与任务栏无缝刷新。
-  // 待决判定（mcode 协议口径，见 minimax-code local-ask-user.ts）：ask_user 会
-  // **立即返回**一条 result——「is waiting for the local user」= 待决（本轮
-  // terminate）；答案后续以 <questionnaire-response> 注入。所以判据是：转录
-  // 末条是问卷族工具，且（还没有 result，或 result 是 waiting 文案）。
-  // 历史会话里已作答的问卷末条是 response/后续正文，不再误亮待决灯
+  // 待决判定（各家执行器协议口径，源码调研 2026-10）：转录末条是问卷族工具，
+  // 且结果不像「已答/已取消」。mcode 立即返回 waiting 文案（已答注入
+  // <questionnaire-response>）；dsh timed 超时返回 {"pending":true}；其余
+  //（claude/zcode/kimi/grok/codex/opencode/hermes/openclaw）挂起式——末条
+  // 是 call（无结果）即待决，已答的结果文案含 answered/answers 等标记。
   if (wss) {
     const tail = detail.transcript[nativeCount - 1];
     const tailTool = String(tail?.toolName ?? "").toLowerCase();
-    const isAwaiting = Boolean(
+    const isQuestionnaireTool = Boolean(
       tail &&
       tail.kind === "tool" &&
-      (tailTool === "ask_user" || tailTool === "questionnaire" || tailTool === "ask_question" || tailTool === "askuserquestion") &&
-      (tail.meta?.phase !== "result" || tail.text.includes("is waiting for the local user")),
+      (tailTool === "ask_user" || tailTool === "ask_user_question" || tailTool === "askuserquestion" ||
+        tailTool === "askquestion" || tailTool === "questionnaire" || tailTool === "question" ||
+        tailTool === "clarify" || tailTool === "request_user_input"),
     );
+    const answeredLooking = /<questionnaire-response>|user has answered|user selected|"status":\s*"answered"|"answers"\s*:|cancelled|question not asked/i;
+    const pendingPositive = /is waiting for the local user|"pending":\s*true/i;
+    const isAwaiting =
+      isQuestionnaireTool &&
+      !answeredLooking.test(tail?.text ?? "") &&
+      (tail?.meta?.phase !== "result" || pendingPositive.test(tail?.text ?? ""));
     const syncStatus = isAwaiting ? "awaiting_input" : "idle";
     broadcastEvent(wss, { type: "session.status", sessionId: sid, status: syncStatus }, ++lastSeq);
   }

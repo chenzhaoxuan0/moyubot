@@ -106,6 +106,20 @@ export function createGrokReader(): SessionReader {
         } else if (type === "tool_use" || type === "tool_result") {
           transcript.push({ kind: "tool", toolName: str(l["name"]) ?? type, text: JSON.stringify(l["content"]).slice(0, 1200) });
         }
+        // OpenAI 风格行级 tool_calls（assistant 行携带，含 ask_user_question 问卷；
+        // 源码：grok-build xai-grok-sampling-types conversation.rs AssistantItem）
+        if (Array.isArray(l["tool_calls"])) {
+          for (const tc of l["tool_calls"]) {
+            if (!isRecord(tc)) continue;
+            const fn = isRecord(tc["function"]) ? tc["function"] : tc;
+            const name = str(fn["name"]) ?? "tool";
+            const args = fn["arguments"] ?? tc["arguments"];
+            const argText = typeof args === "string" ? args : JSON.stringify(args ?? "");
+            if (argText !== "" && argText !== "{}") {
+              transcript.push({ kind: "tool", toolName: name, text: argText.slice(0, 1200) });
+            }
+          }
+        }
         // system（系统提示）不进转录
       }
       return { ...hit.summary, transcript };

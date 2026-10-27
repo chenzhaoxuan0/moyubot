@@ -39,7 +39,10 @@ function checkIsMultiSelect(
     raw?.is_multi_select === true ||
     raw?.isMultiSelect === true ||
     raw?.multiSelect === true ||
+    raw?.multi_select === true ||
     raw?.multiple === true ||
+    raw?.allow_multiple === true ||
+    raw?.allowMultipleSelections === true ||
     raw?.selectionMode === "multiple" ||
     raw?.type === "multiselect"
   ) {
@@ -90,8 +93,9 @@ export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionna
 
   const isQuestionnaire =
     obj.mode === "questionnaire" ||
-    (Array.isArray(obj.steps) && obj.steps.length > 0 && (Array.isArray(obj.steps[0]?.options) || obj.steps[0]?.question)) ||
-    (Array.isArray(obj.questions) && obj.questions.length > 0 && Array.isArray(obj.questions[0]?.options));
+    (Array.isArray(obj.steps) && obj.steps.length > 0 && (Array.isArray(obj.steps[0]?.options) || Array.isArray(obj.steps[0]?.choices) || obj.steps[0]?.question)) ||
+    // hermes clarify 用 choices 承载选项（源码 tools/clarify_tool.py）
+    (Array.isArray(obj.questions) && obj.questions.length > 0 && (Array.isArray(obj.questions[0]?.options) || Array.isArray(obj.questions[0]?.choices)));
 
   if (!isQuestionnaire) return null;
 
@@ -109,7 +113,7 @@ export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionna
     const rawStep = rawStepsList[idx];
     if (!rawStep || typeof rawStep !== "object") continue;
 
-    const question = String(rawStep.question || rawStep.header || obj.title || `问题 ${idx + 1}`);
+    const question = String(rawStep.question || rawStep.header || rawStep.title || obj.title || `问题 ${idx + 1}`);
     const header =
       rawStep.header && rawStep.header !== question
         ? String(rawStep.header)
@@ -117,7 +121,7 @@ export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionna
           ? String(obj.title)
           : undefined;
     const description = rawStep.description ? String(rawStep.description) : undefined;
-    const rawOptions: unknown[] = Array.isArray(rawStep.options) ? rawStep.options : [];
+    const rawOptions: unknown[] = Array.isArray(rawStep.options) ? rawStep.options : Array.isArray(rawStep.choices) ? rawStep.choices : [];
 
     if (rawOptions.length < 2) continue;
 
@@ -133,7 +137,7 @@ export function parseStructuredQuestionnaireJson(raw: unknown): ParsedQuestionna
       const rec = opt as Record<string, unknown>;
       const rawId = rec.id !== undefined ? String(rec.id).trim() : String.fromCharCode(65 + oIdx);
       const key = rawId.length === 1 ? rawId.toUpperCase() : String.fromCharCode(65 + oIdx);
-      const label = String(rec.label || rec.text || rec.title || `选项 ${key}`);
+      const label = String(rec.label || rec.text || rec.title || rec.display || rec.value || `选项 ${key}`);
       const desc = rec.description ? String(rec.description) : undefined;
       const recommended = rec.recommended === true || label.includes("推荐");
       const cleanLabel = label.replace(/[（(]推荐[）)]/g, "").trim();
@@ -299,26 +303,29 @@ export function detectQuestionnaireFromTimeline(
 ): ParsedQuestionnaire | null {
   if (!timeline || timeline.length === 0) return null;
 
-  // —— mcode 问卷协议（minimax-code packages/agent-tools/src/desktop/local-ask-user.ts）：
-  // ask_user **立即返回**，状态全在 result 文案里——「is waiting for the local
-  // user」= 待决（terminate 本轮）；「<questionnaire-response>」= 已作答（答案
-  // 注入 result，**不会**出现用户消息）；「Question not asked」= 被新指令压制；
-  // 「did not wait for an answer」= 非阻塞问卷。另有存量口径：旧投影对每个
-  // 条目落 started+completed 且 output 恒为空串——空 output 的待决只能靠
-  // 「尾部无后续活动」判定。
+  // —— 各家执行器的问卷协议（源码调研 2026-10，详见仓库对照）：
+  // · mcode ask_user：立即返回，待决 = result「is waiting for the local user」，
+  //   已答 = result 注入 <questionnaire-response>（不走用户消息）
+  // · dsh ask_user_question（timed）：超时返回 {"pending":true,"callId":...}，
+  //   答案晚到（user-question-reply 用户消息）
+  // · 其余（claude/zcode/kimi AskUserQuestion、grok ask_user_question、
+  //   codex request_user_input、opencode question、hermes clarify、openclaw
+  //   ask_user、pi question/questionnaire）：挂起式，存储上「有 call 无 result」，
+  //   已答 result 文案含「User has answered / User selected / "answers" /
+  //   "status": "answered」等；grok 取消时合成「cancelled」文案
+  // 另有存量口径：旧投影对每个条目落 started+completed 且 output 恒为空串——
+  // 空 output 的待决只能靠「其后没有任何消息」判定。
   const completedOutputs = new Map<string, string>();
   for (const t of timeline) {
     if (t.event.type === "tool.completed") completedOutputs.set(String(t.event.callId), String(t.event.output ?? ""));
   }
-  // 尾部活动下标（用户输入/助手输出/工具发起；completed 是配对，不算新活动）
-  let lastActivityIdx = -1;
+  // 尾部消息下标（用户输入/助手输出；工具发起/completed 不算——挂起式执行器
+  // 的 pending 问题尾部就是工具，旧投影的 waiting-result 也是工具形态）
   let lastMessageIdx = -1;
   for (let i = timeline.length - 1; i >= 0; i--) {
-    const it = timeline[i]!;
-    const et = it.event.type;
-    if (lastMessageIdx === -1 && (et === "message.delta" || et === "message.completed")) lastMessageIdx = i;
-    if (et === "message.delta" || et === "message.completed" || et === "tool.started") {
-      lastActivityIdx = i;
+    const et = timeline[i]!.event.type;
+    if (et === "message.delta" || et === "message.completed") {
+      lastMessageIdx = i;
       break;
     }
   }
@@ -326,9 +333,22 @@ export function detectQuestionnaireFromTimeline(
   const isPending = (callId: string, startedIdx: number): boolean => {
     const out = completedOutputs.get(callId);
     if (out === undefined) return true;
+    // 待决正向标记：mcode waiting 文案 / dsh timed 的 pending JSON
     if (out.includes("is waiting for the local user")) return true;
-    if (out.includes("<questionnaire-response>")) return false;
-    if (out.includes("Question not asked")) return false;
+    if (out.includes('"pending":true') || out.includes('"pending": true')) return true;
+    // 已答/失效负向标记：mcode 注入答案与压制文案，各家 answered 文案与结构化答案
+    if (
+      out.includes("<questionnaire-response>") ||
+      out.includes("Question not asked") ||
+      out.includes("user has answered") ||
+      out.includes("User has answered") ||
+      out.includes("User selected") ||
+      out.includes("user selected") ||
+      out.includes('"status": "answered"') ||
+      out.includes('"status":"answered"') ||
+      out.includes('"answers"') ||
+      out.includes("cancelled")
+    ) return false;
     if (out !== "") return false;
     // 空结果（旧投影形态，output 恒空）：其后没有再出现任何消息即待决——
     // 旧投影把 waiting-result 也落成了 started（工具形态不算消息），所以
@@ -408,7 +428,12 @@ export function detectQuestionnaireFromTimeline(
         break;
       }
 
-      if (tn === "askuser" || tn === "askquestion" || tn === "askuserquestion" || tn === "questionnaire") {
+      if (
+        tn === "askuser" || tn === "askquestion" || tn === "askuserquestion" || tn === "questionnaire" ||
+        // 各家执行器的同义工具（源码调研 2026-10）：opencode/pi 的 question、
+        // hermes 的 clarify、codex 的 request_user_input（含 async 变体）
+        tn === "question" || tn === "clarify" || tn === "requestuserinput" || tn === "requestuserinputasync"
+      ) {
         if (!pending) return null;
         let inp: unknown = ev.input;
         if (typeof inp === "string") {

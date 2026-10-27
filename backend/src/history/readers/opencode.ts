@@ -126,6 +126,28 @@ export function createOpencodeReader(): SessionReader {
           for (const part of partsByMessage.get(mid) ?? []) {
             const type = str(part.data["type"]);
             const text = (str(part.data["text"]) ?? "").trim();
+            // 工具 part（含 question 问卷工具）：input 是发起（含选项 schema），
+            // state.content 是结果——问卷待决识别全靠这两段（源码：opencode
+            // packages/core/src/tool/plugin/question.ts，state.status running/completed）
+            if (type === "tool") {
+              const name = str(part.data["name"]) ?? "tool";
+              const state = isRecord(part.data["state"]) ? part.data["state"] : undefined;
+              const inputRaw = state?.["input"];
+              const inputText = typeof inputRaw === "string" ? inputRaw : inputRaw === undefined ? "" : JSON.stringify(inputRaw);
+              if (inputText !== "" && inputText !== "{}") {
+                transcript.push({ kind: "tool", toolName: name, text: inputText.slice(0, 4000), at: part.at });
+              }
+              const contentRaw = state?.["content"];
+              const resultText = Array.isArray(contentRaw)
+                ? contentRaw.map((c) => (isRecord(c) && typeof c["text"] === "string" ? c["text"] : "")).join("\n").trim()
+                : typeof contentRaw === "string"
+                  ? contentRaw.trim()
+                  : "";
+              if (resultText !== "") {
+                transcript.push({ kind: "tool", toolName: `${name} ·结果`, text: resultText.slice(0, 2000), at: part.at });
+              }
+              continue;
+            }
             if (text === "") continue;
             if (type === "reasoning") transcript.push({ kind: "thinking", text: text.slice(0, 4000), at: part.at });
             else if (type === "text") transcript.push({ kind: role, text: text.slice(0, 4000), at: part.at });
