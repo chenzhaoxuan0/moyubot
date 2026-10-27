@@ -3875,7 +3875,11 @@ registerMethod("session.syncNative", async (params) => {
   if (typeof p.sessionId !== "string" || p.sessionId === "") {
     throw Object.assign(new Error("sessionId 必填"), { code: "bad_params" });
   }
-  return syncNativeSession(p.sessionId, store, traceSink, wss);
+  const out = await syncNativeSession(p.sessionId, store, traceSink, wss);
+  // 结果落通知中心（操作面事实源）：GUI 头部按钮与 aw CLI 调同一 RPC、得同一份
+  // 反馈——前端不必另行上报，铃铛/通知面板经 WS notifications 帧即时点亮
+  notifications.notifySyncOutcome(p.sessionId, out.changed, out.newMessages);
+  return out;
 });
 registerMethod("history.refreshNative", () => {
   nativeListCache.clear();

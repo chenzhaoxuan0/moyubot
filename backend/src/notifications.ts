@@ -269,4 +269,32 @@ export class NotificationsService {
       text: name,
     });
   }
+
+  /**
+   * 手动同步外部源文件的结果（chatUI 头部同步按钮 / `aw call session.syncNative`）。
+   * 状态键二分：「已是最新」与「同步到 N 条」各有自然键——状态变化才产生新行
+   * 亮铃铛，重复点击同状态原位刷新不刷屏。GUI 与 CLI 调的是同一个 RPC，
+   * 反馈落同一份事实源（ADR 0015 操作面纪律）。
+   */
+  notifySyncOutcome(sessionId: string, changed: boolean, newMessages: number): void {
+    if (changed && newMessages > 0) {
+      this.#upsert({
+        id: `sync:${sessionId}:ok`,
+        level: "ok",
+        kind: "notice",
+        title: "外部源同步",
+        text: `同步到 ${newMessages} 条新消息`,
+        sessionId,
+      });
+      return;
+    }
+    this.#upsert({
+      id: `sync:${sessionId}:idle`,
+      level: "info",
+      kind: "notice",
+      title: "外部源同步",
+      text: "已是最新，源文件没有新消息",
+      sessionId,
+    });
+  }
 }

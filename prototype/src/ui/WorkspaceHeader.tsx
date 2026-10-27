@@ -32,6 +32,9 @@ export function WorkspaceHeader() {
   const sidebarCollapsed = useShell((s) => s.sidebarCollapsed);
   const activeSessionId = useWorkbench((s) => s.activeSessionId);
   const [isSyncing, setIsSyncing] = useState(false);
+  /** 同步完成的就地确认态（✓ 2 秒）：RPC 常在几十 ms 内完成，转圈一闪而过
+   *  等于没有反馈——通知中心有事实源行，按钮自身也要有看得见的收尾 */
+  const [syncDone, setSyncDone] = useState(false);
 
   const { preference, setPreference, windowIsMobile } = useIsMobile();
   const unit = useWorkbench(selectActiveUnit);
@@ -128,16 +131,21 @@ export function WorkspaceHeader() {
               onClick={() => {
                 if (isSyncing) return;
                 setIsSyncing(true);
+                setSyncDone(false);
                 import("../adapters/daemon/client.ts").then(({ DaemonClient, defaultDaemonEndpoint }) => {
                   const client = DaemonClient.get(defaultDaemonEndpoint());
                   client
                     .rpc<{ changed: boolean; newMessages: number }>("session.syncNative", { sessionId: String(activeSessionId) })
                     .then((res: { changed: boolean; newMessages: number }) => {
                       if (res.changed && res.newMessages > 0) {
-                        useWorkbench.getState().pushNotice("同步完成", `成功从外部源文件同步了 ${res.newMessages} 条新消息。`, { level: "info" });
+                        useWorkbench.getState().pushNotice("同步完成", `成功从外部源文件同步了 ${res.newMessages} 条新消息。`, { level: "success" });
                       } else {
-                        useWorkbench.getState().pushNotice("已是最新", "当前会话与外部源文件已保持一致。", { level: "info" });
+                        useWorkbench.getState().pushNotice("已是最新", "当前会话与外部源文件已保持一致。", { level: "success" });
                       }
+                      // 通知中心的事实源行由 daemon 侧落（WS notifications 帧推回），
+                      // 这里只做按钮的就地确认态
+                      setSyncDone(true);
+                      setTimeout(() => setSyncDone(false), 2000);
                       window.dispatchEvent(new CustomEvent("awb:history-refresh"));
                     })
                     .catch((err: unknown) => {
@@ -150,7 +158,11 @@ export function WorkspaceHeader() {
               title="从外部源文件（如 messages.jsonl）实时同步最新消息"
               className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-btn text-graphite transition hover:bg-line-soft hover:text-ink @min-[480px]:flex cursor-pointer"
             >
-              <RotateCw size={13} className={isSyncing ? "animate-spin text-teal" : ""} />
+              {syncDone ? (
+                <Check size={13} className="text-teal" />
+              ) : (
+                <RotateCw size={13} className={isSyncing ? "animate-spin text-teal" : ""} />
+              )}
             </button>
             <button
               onClick={() => useTaskbar.getState().minimize()}
