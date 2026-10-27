@@ -362,22 +362,20 @@ export function buildWorkRuns(items: readonly GroupedItem[]): RenderUnit[] {
     if (FOLDABLE_KINDS.has(it.kind)) buf.push(it);
     else emitItem(it);
   };
-  /** 未落定轮 / 轮外前缀的保守口径：只折叠思考与工具链（旧语义），
-   * 中间正文保持可见——正被阅读的文本不进折叠组 */
-  const emitChainFoldable = (it: GroupedItem): void => {
-    if (it.kind === "thinking" || it.kind === "tool") buf.push(it);
-    else emitItem(it);
-  };
 
-  // 轮缓冲：用户消息开启，段/会话边界关闭；null = 轮外（无轮上下文）
-  let turn: GroupedItem[] | null = null;
+  // 轮缓冲：用户消息开启新一轮；段/会话边界切轮。首个用户消息之前的内容
+  // （自动化/续链会话可能整段都没有用户消息）作为「伪轮」走同一套切分——
+  // 否则管道会话的中间正文永远平铺，折叠形同虚设
+  let turn: GroupedItem[] = [];
 
-  const flushTurn = (): void => {
-    if (turn === null) return;
+  const flushTurn = (isLastTurn: boolean): void => {
+    // 历史轮一律「折到最后一条正文，其后条目照常可见」（ZCode 的
+    // history/following 二分）：被 steer 打断的轮（用户在执行中途插话）末条
+    // 常是工具而非正文，只有最后一轮才需要「落定才折」防流式中途收口
     const last = turn[turn.length - 1];
     const settled = last !== undefined && last.kind === "assistant.message" && last.data.streaming !== true;
-    if (settled) {
-      // 轮末正是完成态正文：它之前的全部过程（含中间正文）折叠，正文独立在下
+    const hasAssistant = turn.some((e) => e.kind === "assistant.message");
+    if ((!isLastTurn || settled) && hasAssistant) {
       let lastAssistant = 0;
       for (let i = turn.length - 1; i >= 0; i--) {
         if (turn[i]!.kind === "assistant.message") {
@@ -385,39 +383,41 @@ export function buildWorkRuns(items: readonly GroupedItem[]): RenderUnit[] {
           break;
         }
       }
+      // 最终正文之前全部折叠（含中间正文）；正文独立；其后条目（steer 打断的
+      // 续工作）也收进第二个折叠组——历史轮的完整形态是 W… A W…
       for (const e of turn.slice(0, lastAssistant)) emitFoldable(e);
       flush();
-      for (const e of turn.slice(lastAssistant)) emitItem(e);
+      emitItem(turn[lastAssistant]!);
+      for (const e of turn.slice(lastAssistant + 1)) emitFoldable(e);
+      flush();
     } else {
-      // 轮还在跑（或没有正文收口）：中间正文保持可见，只折叠思考/工具链，
+      // 末轮还在跑（或没有正文可锚）：中间正文保持可见，只折叠思考/工具链，
       // 轮落定后的下一次重建再整体收口
-      for (const e of turn) emitChainFoldable(e);
+      for (const e of turn) {
+        if (e.kind === "thinking" || e.kind === "tool") buf.push(e);
+        else emitItem(e);
+      }
       flush();
     }
-    turn = null;
+    turn = [];
   };
 
   for (const it of items) {
     if (it.kind === "user.message") {
-      flushTurn();
+      // 中途撞到下一条用户消息 = 上一轮已成历史（含被 steer 打断的），按历史轮折叠
+      flushTurn(false);
       emitItem(it);
-      turn = [];
       continue;
     }
     if (it.kind === "segment.divider" || it.kind === "fork.point" || it.kind === "session.start" || it.kind === "session.end") {
-      flushTurn();
+      flushTurn(false);
       emitItem(it);
-      continue;
-    }
-    if (turn === null) {
-      // 轮外前缀（谱系段从中段回放、无用户消息开头）：退回链式折叠语义，
-      // 思考/工具链照样归组，不能因为缺轮锚点就整段平铺
-      emitChainFoldable(it);
       continue;
     }
     turn.push(it);
   }
-  flushTurn();
+  // 循环结束才冲刷的是最后一轮（或无用户消息的整段）：只有它需要「落定才折」
+  flushTurn(true);
   flush();
   return out;
 }

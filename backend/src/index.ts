@@ -2232,6 +2232,14 @@ registerMethod("unit.history", async (params) => {
       }
     }
 
+    // 导入行没有本进程的活实现：idle 是旧版「点击即 reattach」的残留，收口 done
+    //（与 host 侧 adoptRow 的同款自愈，双保险：不重启 daemon 也能消掉常亮蓝灯）
+    if (sessionStatus === "idle" && s.source === "imported" && !host.isLive(asSessionId(s.id))) {
+      sessionStatus = "done";
+      endedAt = endedAt ?? s.endedAt;
+      store.setSessionStatus(s.id, "done", endedAt, s.stats);
+    }
+
     entries.push({
       key: `session-${s.id}`,
       kind: "session",
@@ -3810,6 +3818,10 @@ registerMethod("session.resume", (params) => {
   const { sessionId } = (params ?? {}) as { sessionId?: string };
   if (typeof sessionId !== "string") throw Object.assign(new Error("sessionId is required"), { code: "bad_params" });
   nativeWatcher.watchSession(sessionId);
+  // 旧路径落的行可能还没进 host 内存表：先收编（幂等），resume 才不会 unknown_session
+  host.adoptPersisted(sessionId);
+  // 查看不接回执行器（resumeSession 语义已改）：点开历史/导入行零进程开销，
+  // 续聊的接回延迟到 session.send
   return host.resumeSession(asSessionId(sessionId));
 });
 registerMethod("session.messages", (params) => {

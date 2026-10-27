@@ -155,12 +155,53 @@ async function performNativeSync(
   const unitId = asUnitId(s?.unitId ?? "");
   const sid = asSessionId(sessionId);
 
+  // 工具配对（mcode 的 call/result 相位）：result 条目只补完对应 call 的
+  // tool.completed，不再各自成对——否则问卷的「结果（=已作答）」条目会被投影
+  // 成第二张问卷卡（选项解析出乱码），末尾 call 无 result 才是真待决
+  let pendingCallIdx: number | null = null;
+  let pendingCallTool = "";
+
+  const emitToolCompleted = async (callId: string, output: string): Promise<void> => {
+    const evCompleted: RuntimeEvent = {
+      type: "tool.completed",
+      sessionId: sid,
+      callId,
+      ok: true,
+      output,
+    };
+    await traceSink.append({ seq: ++lastSeq, at: Date.now(), sessionId: sid, unitId, runtimeId: executorId, event: evCompleted });
+    if (wss) broadcastEvent(wss, evCompleted, lastSeq);
+  };
+
   for (let idx = currentCount; idx < nativeCount; idx++) {
     const entry = detail.transcript[idx]!;
     const at = entry.at || detail.updatedAt || Date.now();
-    const messageId = `msg_ext_${idx + 1}`;
+
+    if (entry.kind === "tool" && entry.meta?.phase === "result") {
+      if (pendingCallIdx !== null) {
+        await emitToolCompleted(`tc_ext_${pendingCallIdx + 1}`, entry.text);
+        pendingCallIdx = null;
+      } else {
+        // 孤立 result（防御）：按旧形态自成一对
+        const callId = `tc_ext_${idx + 1}`;
+        const evStarted: RuntimeEvent = {
+          type: "tool.started", sessionId: sid, callId,
+          toolName: entry.toolName ?? "tool", title: "", input: "",
+        };
+        await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evStarted });
+        if (wss) broadcastEvent(wss, evStarted, lastSeq);
+        await emitToolCompleted(callId, entry.text);
+      }
+      continue;
+    }
+    // 非工具条目打断未闭合的 call：补一个空结果收口（mcode 正常都配对，防御兜底）
+    if (pendingCallIdx !== null) {
+      await emitToolCompleted(`tc_ext_${pendingCallIdx + 1}`, "");
+      pendingCallIdx = null;
+    }
 
     if (entry.kind === "user") {
+      const messageId = `msg_ext_${idx + 1}`;
       store.insertMessage(sessionId, at, "user", entry.text);
       const evDelta: RuntimeEvent = {
         type: "message.delta",
@@ -174,6 +215,7 @@ async function performNativeSync(
         broadcastEvent(wss, evDelta, lastSeq);
       }
     } else if (entry.kind === "assistant") {
+      const messageId = `msg_ext_${idx + 1}`;
       store.insertMessage(sessionId, at, "assistant", entry.text);
       const evDelta: RuntimeEvent = {
         type: "message.delta",
@@ -194,6 +236,28 @@ async function performNativeSync(
         broadcastEvent(wss, evDelta, lastSeq - 1);
         broadcastEvent(wss, evDone, lastSeq);
       }
+    } else if (entry.kind === "thinking") {
+      // 思考块也进账本（reasoning.delta）：折叠组里能看到「思考 N 阶段」的真实内容
+      const evThink: RuntimeEvent = {
+        type: "reasoning.delta",
+        sessionId: sid,
+        messageId: `think_ext_${idx + 1}`,
+        text: entry.text,
+      };
+      await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evThink });
+      if (wss) broadcastEvent(wss, evThink, lastSeq);
+    } else if (entry.kind === "compaction") {
+      // 续链会话的上文压缩摘要：投成说明卡，文件「从中间开始」不再莫名其妙
+      const clipped = entry.text.length > 600 ? `${entry.text.slice(0, 600)}…（截断）` : entry.text;
+      const evNotice: RuntimeEvent = {
+        type: "system.notice",
+        sessionId: sid,
+        title: "前情摘要（续链会话的上文压缩）",
+        text: clipped,
+        level: "info",
+      };
+      await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evNotice });
+      if (wss) broadcastEvent(wss, evNotice, lastSeq);
     } else if (entry.kind === "tool") {
       const callId = `tc_ext_${idx + 1}`;
       const evStarted: RuntimeEvent = {
@@ -204,18 +268,17 @@ async function performNativeSync(
         title: entry.text.slice(0, 80),
         input: entry.text,
       };
-      const evCompleted: RuntimeEvent = {
-        type: "tool.completed",
-        sessionId: sid,
-        callId,
-        ok: true,
-        output: "",
-      };
       await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evStarted });
-      await traceSink.append({ seq: ++lastSeq, at, sessionId: sid, unitId, runtimeId: executorId, event: evCompleted });
       if (wss) {
-        broadcastEvent(wss, evStarted, lastSeq - 1);
-        broadcastEvent(wss, evCompleted, lastSeq);
+        broadcastEvent(wss, evStarted, lastSeq);
+      }
+      if (entry.meta?.phase === "call") {
+        // 只发 started：completed 等它的 result 条目（或保持待决）
+        pendingCallIdx = idx;
+        pendingCallTool = entry.toolName ?? "tool";
+      } else {
+        // 无相位（其他 CLI reader）：started+completed 立即成对（旧形态）
+        await emitToolCompleted(callId, "");
       }
     }
   }
@@ -231,17 +294,15 @@ async function performNativeSync(
     store.setSessionProgress(s.id, lastSeq, nativeCount);
   }
 
-  // 广播状态更新让前端侧栏与任务栏无缝刷新
+  // 广播状态更新让前端侧栏与任务栏无缝刷新。
+  // 待决判定（相位口径）：转录末尾是一个**没有 result 的问卷族 call** 才算
+  // awaiting_input——历史会话里已作答的问卷（call 后面跟着 result 条目）不再
+  // 被误判成待决，问卷卡与蓝灯也不会在打开历史会话时凭空复活
   if (wss) {
-    const lastEntry = detail.transcript[detail.transcript.length - 1];
-    const isAwaiting = Boolean(
-      lastEntry &&
-      lastEntry.kind === "tool" &&
-      (lastEntry.toolName?.toLowerCase() === "ask_user" ||
-        lastEntry.toolName?.toLowerCase() === "questionnaire" ||
-        lastEntry.toolName?.toLowerCase() === "ask_question" ||
-        lastEntry.toolName?.toLowerCase() === "askuserquestion")
-    );
+    const awaitingTool = pendingCallTool.toLowerCase();
+    const isAwaiting =
+      pendingCallIdx !== null &&
+      (awaitingTool === "ask_user" || awaitingTool === "questionnaire" || awaitingTool === "ask_question" || awaitingTool === "askuserquestion");
     const syncStatus = isAwaiting ? "awaiting_input" : "idle";
     broadcastEvent(wss, { type: "session.status", sessionId: sid, status: syncStatus }, ++lastSeq);
   }

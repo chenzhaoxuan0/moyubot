@@ -561,6 +561,12 @@ export class RuntimeHost {
       status = "idle";
       this.store.setSessionStatus(row.id, "idle", endedAt ?? null, { ...row.stats });
     }
+    // 导入行（外部终端会话的投影）在本进程永远没有活 impl：idle 是旧版「点击即
+    // reattach」残留的状态，收口为 done——侧栏不再常亮「空闲在线」蓝灯
+    if (row.source === "imported" && status === "idle") {
+      status = "done";
+      this.store.setSessionStatus(row.id, "done", endedAt ?? null, { ...row.stats });
+    }
     this.sessions.set(row.id as SessionId, {
       id: row.id as SessionId,
       unitId: row.unitId as UnitId,
@@ -1663,7 +1669,26 @@ export class RuntimeHost {
   ): void {
     const h = this.sessions.get(sessionId);
     if (h === undefined) throw adapterError("unknown_session", `no such session: ${sessionId}`);
-    if (h.impl === null) throw adapterError("session_not_live", `session ${sessionId} is persisted but not live — resume it first`);
+    if (h.impl === null) {
+      // 惰性接回（resumeSession 不再接回的另一半）：首次发消息才 spawn 执行器。
+      // 没有 cliRef 的死行维持原语义（接不回就是接不回，如实抛）
+      const row = this.store.getSession(sessionId);
+      if (row === undefined || row.cliRef === null || row.cliRef === "") {
+        throw adapterError("session_not_live", `session ${sessionId} is persisted but not live — no executor reference to reattach`);
+      }
+      const sink = this.makeSink(h);
+      try {
+        h.impl = h.adapter.reattach(sessionId, row.cliRef, row.rootPath ?? "", sink);
+      } catch (err: unknown) {
+        h.status = "failed";
+        h.endedAt = h.endedAt ?? Date.now();
+        this.store.setSessionStatus(sessionId, "failed", h.endedAt, { ...h.stats });
+        throw err;
+      }
+      h.status = "idle";
+      this.store.setSessionStatus(sessionId, "idle", h.endedAt ?? null, { ...h.stats });
+      log.info("session reattached on send", { sessionId, runtimeId: h.runtimeId, cliRef: row.cliRef });
+    }
 
     if (h.turnBusy) {
       if (h.pendingSends.length >= 10) {
@@ -1858,26 +1883,9 @@ export class RuntimeHost {
     const h = this.sessions.get(sessionId);
     if (h === undefined) throw adapterError("unknown_session", `no such session: ${sessionId}`);
     if (h.impl !== null) return this.toSession(h); // 活着的不用 resume
-    const row = this.store.getSession(sessionId);
-    if (row === undefined) throw adapterError("unknown_session", `session not in store: ${sessionId}`);
-    if (row.cliRef === null) {
-      h.status = "failed";
-      h.endedAt = h.endedAt ?? Date.now();
-      this.store.setSessionStatus(sessionId, "failed", h.endedAt, { ...h.stats });
-      throw adapterError("no_cli_ref", `session ${sessionId} has no executor reference to resume`);
-    }
-    const sink = this.makeSink(h);
-    try {
-      h.impl = h.adapter.reattach(sessionId, row.cliRef, row.rootPath ?? "", sink);
-    } catch (err: unknown) {
-      h.status = "failed";
-      h.endedAt = h.endedAt ?? Date.now();
-      this.store.setSessionStatus(sessionId, "failed", h.endedAt, { ...h.stats });
-      throw err;
-    }
-    h.status = "idle";
-    this.store.setSessionStatus(sessionId, "idle", h.endedAt ?? null, { ...h.stats });
-    log.info("session resumed", { sessionId, runtimeId: h.runtimeId, cliRef: row.cliRef });
+    // 查看（openSession 点开历史/导入行）**不再自动接回执行器**：为「看一眼历史」
+    // spawn 一个 ACP 常驻进程，换来的是侧栏永久「空闲在线」蓝灯与无谓开销——
+    // 续聊的接回延迟到 sendMessage（首次发消息真正需要执行器时，见其惰性接回）
     return this.toSession(h);
   }
 

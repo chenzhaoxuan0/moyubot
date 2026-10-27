@@ -120,6 +120,13 @@ function parseTranscript(messagesFile: string) {
         if (e.kind === "user" && e.text.trim().startsWith("<system")) continue;
         transcript.push(e);
       }
+    } else if (role === "compactionSummary") {
+      // 续链会话（--session resume）的开头上文：前一段对话压缩成的摘要。不投影
+      // 的话这份文件「凭空从中间开始」，用户翻到头只看到莫名的中段步骤
+      const summary = str(msg["summary"]) ?? "";
+      if (summary !== "") {
+        transcript.push({ kind: "compaction" as const, text: summary });
+      }
     } else if (role === "toolResult" || role === "toolCall") {
       const name = str(msg["toolName"]) ?? str(msg["name"]) ?? "tool";
       const content = msg["arguments"] ?? msg["args"] ?? msg["input"] ?? msg["content"];
@@ -128,6 +135,9 @@ function parseTranscript(messagesFile: string) {
         kind: "tool" as const,
         toolName: name,
         text,
+        // 相位标记（同步器用）：call = 发起（可能仍在等待结果），result = 该调用的
+        // 结果。配对后一个工具只占一个条目位；末尾 call 无 result = 真待决（问卷）
+        meta: { phase: role === "toolCall" ? "call" : "result" },
       });
     }
   }
