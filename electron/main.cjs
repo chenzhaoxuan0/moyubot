@@ -288,6 +288,28 @@ ipcMain.handle("dialog:pick-directory", (_event, opts) => {
 });
 
 /**
+ * 保存文本文件（docs/26 会话分享导出的落地点）：系统「另存为」框选位置，
+ * 主进程直接写盘（渲染进程在 app:// 协议下没有 fs 权限）。取消返回 null。
+ */
+ipcMain.handle("dialog:save-file", async (_event, opts) => {
+  const o = opts !== null && typeof opts === "object" ? opts : {};
+  if (typeof o.defaultName !== "string" || o.defaultName === "" || typeof o.text !== "string") {
+    return null;
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+  const picked = await dialog.showSaveDialog(mainWindow, {
+    title: typeof o.title === "string" && o.title !== "" ? o.title : "保存文件",
+    defaultPath: o.defaultName,
+    filters: Array.isArray(o.filters)
+      ? o.filters
+      : [{ name: "JSON", extensions: ["json"] }],
+  });
+  if (picked.canceled || typeof picked.filePath !== "string" || picked.filePath === "") return null;
+  await fs.promises.writeFile(picked.filePath, o.text, "utf8");
+  return picked.filePath;
+});
+
+/**
  * 前端自绘窗口控制按钮（WindowControls.tsx）的主进程侧：
  * 最小化 / 最大化切换 / 关闭三个动作 + 最大化状态推送（切图标用）。
  */

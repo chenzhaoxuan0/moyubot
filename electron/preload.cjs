@@ -23,6 +23,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
    */
   pickDirectory: (opts) => ipcRenderer.invoke("dialog:pick-directory", opts),
   /**
+   * 保存文本文件（docs/26 会话分享导出）：系统「另存为」框 + 主进程写盘。
+   * resolve 实际保存的绝对路径；取消 / 不可用 resolve null。
+   */
+  saveFile: (opts) => ipcRenderer.invoke("dialog:save-file", opts),
+  /**
    * 用系统默认程序打开文件 / 在资源管理器中显示（设置页「打开文件」按钮）。
    * 纯浏览器访问时整块 electronAPI 不存在，前端回落 daemon 的 open-folder。
    */

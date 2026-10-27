@@ -589,7 +589,9 @@ export type SessionSource =
   /** 外部 agent 经 `aw` CLI / POST /rpc 驱动的轮次（docs/21 P4a）——与渠道同级的第五扇窗 */
   | "cli"
   /** 外部终端里跑的 CLI 会话，经「导入外部会话」收入历史（不是真实事件来源，仅台账标记） */
-  | "imported";
+  | "imported"
+  /** 从分享文件（session.export 导出的 bundle）导入的会话（docs/26）：跨机器传递的完整执行历史回放 */
+  | "shared";
 
 /** 来源徽标文案 —— Timeline / 历史弹窗共用（docs/13 结构化聊天恢复） */
 export const SESSION_SOURCE_LABEL: Record<SessionSource, string> = {
@@ -604,6 +606,7 @@ export const SESSION_SOURCE_LABEL: Record<SessionSource, string> = {
   automation: "自动化",
   cli: "CLI",
   imported: "导入",
+  shared: "分享",
 };
 
 export interface Session {

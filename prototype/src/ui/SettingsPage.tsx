@@ -51,6 +51,7 @@ import { ImageSettingsSection } from "./ImageSettingsSection.tsx";
 import { AppearanceSettingsSection } from "./AppearanceSettingsSection.tsx";
 import { HeartbeatSettingsSection } from "./HeartbeatSettingsSection.tsx";
 import { ImportSessionsSection } from "./ImportSessionsSection.tsx";
+import { ImportSharedSection } from "./ImportSharedSection.tsx";
 import { ArchivedTasksSettingsSection } from "./ArchivedTasksSettingsSection.tsx";
 import { useHistoryPrefs } from "../store/useHistoryPrefs.ts";
 import { useChatTerminal } from "../store/useChatTerminal.ts";
@@ -300,6 +301,15 @@ function SectionBody({ section }: { section: SettingsSectionDef }) {  switch (se
               </h2>
             </div>
             <ImportSessionsGlobalSection />
+          </section>
+          {/* 分享文件导入（docs/26）：接收别的机器导出的 .awb.json，导入即完整回放 */}
+          <section className="space-y-3 rounded-card border border-line bg-rail/60 p-4">
+            <div>
+              <h2 className="font-medium text-ink" title="接收别的工作台导出的会话分享文件（.awb.json）：消息/工具卡/思考/用量完整回放，继续对话走换代开新段">
+                从分享文件导入
+              </h2>
+            </div>
+            <ImportSharedSection />
           </section>
         </div>
       );

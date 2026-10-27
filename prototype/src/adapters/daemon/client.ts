@@ -429,7 +429,8 @@ export class DaemonClient {
   }
 }
 
-/** 拉执行器清单 —— 前端据此为每个 daemon 执行器注册一个 RuntimeAdapter */
+/**
+ * 拉执行器清单 —— 前端据此为每个 daemon 执行器注册一个 RuntimeAdapter */
 export async function listDaemonExecutors(endpoint: string = defaultDaemonEndpoint()): Promise<DaemonExecutorInfo[]> {
   const client = DaemonClient.get(endpoint);
   const list = await client.rpc<DaemonExecutorInfo[]>("adapter.list", null, 10000);
@@ -1673,6 +1674,37 @@ export async function forgetSession(
 ): Promise<void> {
   const client = DaemonClient.get(endpoint);
   await client.rpc<{ forgotten: string }>("session.forget", { sessionId }, 15000);
+}
+
+/** 会话分享包（docs/26）：daemon session.export 组装的全量执行历史（结构只透传，导入时 daemon 再校验） */
+export type SharedSessionBundle = Record<string, unknown>;
+
+/** 导出一条会话为分享 bundle（台账行 + messages + RuntimeEvent 流；长会话，超时放宽） */
+export async function exportSession(
+  sessionId: string,
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<SharedSessionBundle> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<SharedSessionBundle>("session.export", { sessionId }, 60000);
+}
+
+/** 分享文件导入结果：已导入 / 幂等跳过（同 originId 已存在） */
+export interface ImportSharedOutcome {
+  readonly imported: boolean;
+  readonly sessionId?: string;
+  readonly reason?: "exists";
+  readonly messages: number;
+  readonly events: number;
+}
+
+/** 导入分享 bundle 到指定 bot（unitId）。bundle 由前端读文件得到，daemon 侧校验形状与版本 */
+export async function importSessionFile(
+  bundle: unknown,
+  unitId: string,
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<ImportSharedOutcome> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<ImportSharedOutcome>("session.importFile", { bundle, unitId }, 60000);
 }
 
 /** 读取终端会话的输出文本快照（ANSI 过滤后的纯文本日志） */

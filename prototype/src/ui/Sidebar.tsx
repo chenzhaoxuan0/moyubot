@@ -26,6 +26,7 @@ import {
   RotateCw,
   Search,
   Settings,
+  Share2,
   SquareTerminal,
   X,
 } from "lucide-react";
@@ -37,7 +38,8 @@ import { BrandLogo } from "./BrandLogo.tsx";
 import { detectQuestionnaireFromTimeline } from "./chat/items/QuestionnaireCard.tsx";
 import type { AvatarFrame } from "../core/appearance.ts";
 import { describeRule, formatAbsolute, formatAbsoluteHuman, formatRelative, type Automation } from "../core/automation.ts";
-import { DaemonClient, defaultDaemonEndpoint, dispatchTerminal, fetchAutomations, fetchUnitHistory, renameHistoryEntry, type UnitHistoryEntry } from "../adapters/daemon/client.ts";
+import { DaemonClient, defaultDaemonEndpoint, dispatchTerminal, exportSession, fetchAutomations, fetchUnitHistory, renameHistoryEntry, type UnitHistoryEntry } from "../adapters/daemon/client.ts";
+import { saveTextFile, sanitizeFileName } from "./fileSave.ts";
 import {
   asModelId,
   asRuntimeId,
@@ -1296,6 +1298,38 @@ function UnitRow({
                         label: "重命名",
                         icon: Pencil,
                         onSelect: () => setRenamingKey(e.key),
+                      },
+                      {
+                        label: "分享 / 导出",
+                        icon: Share2,
+                        disabled: e.sessionId === null,
+                        onSelect: () => {
+                          if (e.sessionId === null) return;
+                          // docs/26 会话分享：整条执行历史（消息/工具卡/思考/用量）打包成
+                          // .awb.json —— 桌面端走系统另存为，浏览器走下载；文件传到别的
+                          // 机器后在 设置 → 历史会话 → 从分享文件导入 完整回放
+                          const wb = useWorkbench.getState();
+                          const day = new Date(e.startedAt).toISOString().slice(0, 10);
+                          void exportSession(e.sessionId)
+                            .then((bundle) =>
+                              saveTextFile(`${sanitizeFileName(e.title) || "session"}-${day}.awb.json`, JSON.stringify(bundle), {
+                                title: "导出会话分享文件",
+                              }),
+                            )
+                            .then((out) => {
+                              if (out.canceled) return;
+                              wb.pushNotice(
+                                "已导出会话",
+                                out.path !== null
+                                  ? `已保存到 ${out.path} —— 传到别的机器后，在 设置 → 历史会话 → 从分享文件导入 即可完整回放`
+                                  : "浏览器已开始下载分享文件 —— 传到别的机器后，在 设置 → 历史会话 → 从分享文件导入 即可完整回放",
+                                { level: "success" },
+                              );
+                            })
+                            .catch((err: unknown) => {
+                              wb.pushNotice("导出失败", err instanceof Error ? err.message : String(err), { level: "warn" });
+                            });
+                        },
                       },
                       {
                         label: "实时监控此会话",

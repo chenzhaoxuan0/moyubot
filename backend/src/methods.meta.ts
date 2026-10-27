@@ -46,6 +46,8 @@ export const METHOD_META: Record<string, MethodMeta> = {
   "session.resume": { description: "按 cli_ref 续接既有会话，之后 send/cancel 照常", paramsHint: "{sessionId}" },
   "session.messages": { description: "读会话消息流（user/assistant，落盘事实）", paramsHint: "{sessionId}" },
   "session.trace": { description: "读会话轨迹 NDJSON 账本（跨日期落盘），afterSeq 游标续拉", paramsHint: "{sessionId, afterSeq?}" },
+  "session.export": { description: "导出会话为分享 bundle（台账行+消息+全量事件流，docs/26），前端落 .awb.json 文件", paramsHint: "{sessionId}" },
+  "session.importFile": { description: "导入分享 bundle 落成 impf_ 台账行（source=shared，事件重放进账本即完整回放；同 originId 幂等跳过）", paramsHint: "{bundle, unitId}" },
   "session.events.since": { description: "断线补拉会话事件（热环直出，游标滑出环回落账本）", paramsHint: "{sessionId, afterSeq?}" },
   "session.gc": { description: "列超龄死会话的回收候选，默认 14 天", paramsHint: "{maxAgeDays?}" },
   "session.forget": { description: "遗忘指定会话（删台账行与消息，轨迹文件永不删）", paramsHint: "{sessionId}" },

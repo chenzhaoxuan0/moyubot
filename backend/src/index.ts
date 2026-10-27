@@ -76,6 +76,12 @@ import {
   TERMINAL_BACKFILL_MAX_AGE_MS,
 } from "./history/autocollect.ts";
 import { samePath } from "./history/util.ts";
+import {
+  buildSharedBundle,
+  importSharedSession,
+  parseSharedBundle,
+  parseTraceNdjson,
+} from "./history/shareImport.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
 import { QuotaResumeWatcher } from "./automation/quotaResume.ts";
 import { getAutomationCreateLimit, setAutomationCreateLimit } from "./automation/limits.ts";
@@ -3866,6 +3872,39 @@ registerMethod("session.trace", (params) => {
   const p = (params ?? {}) as { sessionId?: string; afterSeq?: number };
   if (typeof p.sessionId !== "string") throw Object.assign(new Error("sessionId is required"), { code: "bad_params" });
   return traceSink.readSessionNdjson(asSessionId(p.sessionId), typeof p.afterSeq === "number" ? p.afterSeq : 0);
+});
+// 会话分享（docs/26）：导出 = 台账行 + messages + 账本 RuntimeEvent 流打成带版本的
+// bundle，前端拿到后走系统保存框/浏览器下载落 .awb.json 文件。跨机器传递即传文件。
+registerMethod("session.export", async (params) => {
+  const p = (params ?? {}) as { sessionId?: string };
+  if (typeof p.sessionId !== "string") throw Object.assign(new Error("sessionId is required"), { code: "bad_params" });
+  const row = store.getSession(p.sessionId);
+  if (row === undefined) throw Object.assign(new Error(`no such session: ${p.sessionId}`), { code: "unknown_session" });
+  const messages = store.listMessages(p.sessionId);
+  const events = parseTraceNdjson(await traceSink.readSessionNdjson(asSessionId(p.sessionId), 0));
+  return buildSharedBundle(row, messages, events);
+});
+// 导入侧对称：bundle 校验 → impf_ 台账行（source="shared"，cliRef 剥离）→ messages 落库
+// → 事件重放进账本（导入即完整时间线）。重复导入同 originId 幂等跳过。
+registerMethod("session.importFile", async (params) => {
+  const p = (params ?? {}) as { bundle?: unknown; unitId?: string };
+  if (typeof p.unitId !== "string" || p.unitId === "") {
+    throw Object.assign(new Error("unitId 必填"), { code: "bad_params" });
+  }
+  let bundle;
+  try {
+    bundle = parseSharedBundle(p.bundle);
+  } catch (err) {
+    throw Object.assign(new Error(err instanceof Error ? err.message : String(err)), { code: "bad_bundle" });
+  }
+  const out = await importSharedSession(store, traceSink, { bundle, unitId: p.unitId });
+  if (out.imported) {
+    // 与 history.import.apply 同口径：收编进 host 台账（daemon 存活期内 session.list
+    // 就有这行）。执行器本机未装时收编失败——侧栏历史来自 store 不受影响，点开回放
+    // 走账本也不需要 host，只是 session.list 到重启前缺这行，可接受。
+    host.adoptPersisted(out.sessionId ?? "");
+  }
+  return out;
 });
 // 断线补拉（WP-2）：热路径读事件环；游标滑出环外（gap）时回落落盘账本。
 // ADR 0012：返回 {seq, at, event} —— at 供前端重建时间线（TimelineItem 需要）。
