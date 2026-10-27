@@ -317,8 +317,28 @@ export function groupTimelineEvents(
   return result;
 }
 
+/** 可收进折叠组的「过程」条目：思考、工具、中间正文、子代理、文件产物 */
+const FOLDABLE_KINDS = new Set([
+  "thinking",
+  "tool",
+  "assistant.message",
+  "file.diff",
+  "deliverable",
+  "subagent.spawned",
+  "subagent.finished",
+]);
+
 /**
- * 连续的 思考/工具调用 归并成一个可折叠「工作组」（对齐 ZCode AssistantHistory）
+ * 轮级「过程」归并（借鉴 ZCode AssistantHistory 的折叠设计）：
+ * 一轮 = 用户消息 → …过程… → 最终正文。最终正文 = 轮内最后一条已完成的
+ * assistant 消息（usage 已并入它）；它之前的所有过程条目（含中间正文）收进
+ * 一个默认折叠的工作组，最终正文独立渲染在折叠组之下 —— 用户一眼看到清晰
+ * 回复，按需展开执行过程。
+ *
+ * 未落定的轮（末条是运行中工具或流式正文）不折叠中间正文：正被阅读的文本
+ * 不该在流式过程中突然缩进组里，轮落定后的下一次重建再收口（ZCode 的
+ * auto-collapse-on-settle 同款语义，只是 ours 无动画、直接收）。
+ * 权限裁决 / 错误 / 系统通知 / 段边界永远留在折叠组外——待决与失败不可藏。
  */
 export function buildWorkRuns(items: readonly GroupedItem[]): RenderUnit[] {
   const out: RenderUnit[] = [];
@@ -334,15 +354,70 @@ export function buildWorkRuns(items: readonly GroupedItem[]): RenderUnit[] {
     });
     buf = [];
   };
+  const emitItem = (it: GroupedItem): void => {
+    flush();
+    out.push({ kind: "item", key: String(it.id), item: it });
+  };
+  const emitFoldable = (it: GroupedItem): void => {
+    if (FOLDABLE_KINDS.has(it.kind)) buf.push(it);
+    else emitItem(it);
+  };
+  /** 未落定轮 / 轮外前缀的保守口径：只折叠思考与工具链（旧语义），
+   * 中间正文保持可见——正被阅读的文本不进折叠组 */
+  const emitChainFoldable = (it: GroupedItem): void => {
+    if (it.kind === "thinking" || it.kind === "tool") buf.push(it);
+    else emitItem(it);
+  };
+
+  // 轮缓冲：用户消息开启，段/会话边界关闭；null = 轮外（无轮上下文）
+  let turn: GroupedItem[] | null = null;
+
+  const flushTurn = (): void => {
+    if (turn === null) return;
+    const last = turn[turn.length - 1];
+    const settled = last !== undefined && last.kind === "assistant.message" && last.data.streaming !== true;
+    if (settled) {
+      // 轮末正是完成态正文：它之前的全部过程（含中间正文）折叠，正文独立在下
+      let lastAssistant = 0;
+      for (let i = turn.length - 1; i >= 0; i--) {
+        if (turn[i]!.kind === "assistant.message") {
+          lastAssistant = i;
+          break;
+        }
+      }
+      for (const e of turn.slice(0, lastAssistant)) emitFoldable(e);
+      flush();
+      for (const e of turn.slice(lastAssistant)) emitItem(e);
+    } else {
+      // 轮还在跑（或没有正文收口）：中间正文保持可见，只折叠思考/工具链，
+      // 轮落定后的下一次重建再整体收口
+      for (const e of turn) emitChainFoldable(e);
+      flush();
+    }
+    turn = null;
+  };
 
   for (const it of items) {
-    if (it.kind === "thinking" || it.kind === "tool") {
-      buf.push(it);
-    } else {
-      flush();
-      out.push({ kind: "item", key: String(it.id), item: it });
+    if (it.kind === "user.message") {
+      flushTurn();
+      emitItem(it);
+      turn = [];
+      continue;
     }
+    if (it.kind === "segment.divider" || it.kind === "fork.point" || it.kind === "session.start" || it.kind === "session.end") {
+      flushTurn();
+      emitItem(it);
+      continue;
+    }
+    if (turn === null) {
+      // 轮外前缀（谱系段从中段回放、无用户消息开头）：退回链式折叠语义，
+      // 思考/工具链照样归组，不能因为缺轮锚点就整段平铺
+      emitChainFoldable(it);
+      continue;
+    }
+    turn.push(it);
   }
+  flushTurn();
   flush();
   return out;
 }

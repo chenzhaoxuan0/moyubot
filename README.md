@@ -198,7 +198,7 @@ agent-workbench/
 
 | 仓库 | 许可证 | 参照内容与主要落点 |
 |---|---|---|
-| **ZCode**（`zocdeusually/ZCode`） | Apache-2.0 | 外壳骨架总蓝本：Shell 布局「收起即归零」、设置覆盖层、命令中心、自动化页两条口径、空态原则（功能不因空而消失）；MCP 配置同步的原子写与坏文件 fail-stop 规范、技能扫描策略（点目录跳过）→ MCP / 技能管理 |
+| **ZCode**（`zocdeusually/ZCode`） | Apache-2.0 | 外壳骨架总蓝本：Shell 布局「收起即归零」、设置覆盖层、命令中心、自动化页两条口径、空态原则（功能不因空而消失）；MCP 配置同步的原子写与坏文件 fail-stop 规范、技能扫描策略（点目录跳过）→ MCP / 技能管理；聊天轮级过程折叠（AssistantHistory：最终正文永远可见、过程默认收起、落定才收口、展开态跨虚拟滚动记忆）→ ChatViewport 工作组 |
 | **Apache Maka**（Apache 软件基金会，孵化中） | Apache-2.0 | **仅架构与设计参照，未复制代码**（2026-10 引入的后期架构参照，非起步四家之一）：①「日志即运行时」——host 拥有 canonical 对话账本，界面 / 历史 / 恢复都是这份日志的投影；② 对话谱系 = 段的链；③ 分支 = 新物理段 + 血缘字段 + 读模型折叠 → `backend/src/runtime/host.ts` `backend/src/store/db.ts` `prototype/src/core/events.ts` `prototype/src/ui/forkHistory.ts`；逐条明细见本节下方「Apache Maka —— 借鉴点明细」 |
 | **t3code**（T3） | MIT | 供应商实例管理（ProviderInstancesPanel）、模型偏好系统（隐藏/排序/自定义模型）、harness 品牌图标、opencode 接入形态（serve + SSE） |
 | **deepseek-harness**（dsh） | MIT | 轨迹账本与轮次头、会话内页签、StatsPills/ModelsSection；其 ACP 协议实现是 dsh/mcode/hermes/kimi 四家 acp 接入的参照 |

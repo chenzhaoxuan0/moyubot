@@ -298,6 +298,7 @@ function UnitRowRenderer({
   if (unit.kind === "work") {
     return (
       <WorkGroupRow
+        groupKey={unit.key}
         entries={unit.entries}
         running={unit.running}
         busy={busy}
@@ -316,23 +317,52 @@ function UnitRowRenderer({
 
 /* ------------------------------------------------------------- 思考与工具工作组 */
 
+/**
+ * 工作组展开态的模块级记忆（借鉴 ZCode ToolLayout 的 toolLayoutOpenState）：
+ * 虚拟滚动把行卸载重挂后恢复用户的选择，不强制回默认折叠。
+ */
+const workGroupOpenStates = new Map<string, boolean>();
+
 function WorkGroupRow({
+  groupKey,
   entries,
   running,
   busy,
   lastUserTurnId,
 }: {
+  groupKey: string;
   entries: readonly GroupedItem[];
   running: boolean;
   busy: boolean;
   lastUserTurnId: string | number | undefined;
 }) {
-  // 保持默认折叠状态，绝不随运行状态自动展开收起导致画面剧烈跳跃
-  const [open, setOpen] = useState(false);
+  // 保持默认折叠状态，绝不随运行状态自动展开收起导致画面剧烈跳跃；
+  // 用户展开过的组在虚拟卸载重挂后保持展开（记忆见 workGroupOpenStates）
+  const [open, setOpen] = useState(() => workGroupOpenStates.get(groupKey) ?? false);
+  const toggleOpen = (): void => {
+    const next = !open;
+    workGroupOpenStates.set(groupKey, next);
+    setOpen(next);
+  };
 
   const toolCount = entries.filter((e) => e.kind === "tool").length;
   const thinkCount = entries.filter((e) => e.kind === "thinking").length;
+  // 中间正文（最终回复之前的过程文本段）：折叠摘要里如实计数，用户知道组里
+  // 不止命令，还有被收起来的模型叙述
+  const noteCount = entries.filter((e) => e.kind === "assistant.message").length;
   const failed = entries.some((e) => e.kind === "tool" && e.data?.ok === false);
+
+  // 落定后的整段时长（首末条目时间差）：摘要行给「这轮花了多久」的直觉
+  const durationLabel = useMemo(() => {
+    if (running || entries.length < 2) return null;
+    const ms = entries[entries.length - 1]!.at - entries[0]!.at;
+    if (!(ms > 0)) return null;
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s} 秒`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m} 分 ${s % 60} 秒`;
+    return `${Math.floor(m / 60)} 时 ${m % 60} 分`;
+  }, [entries, running]);
 
   // 提取当前正在进行的操作或思考摘要
   const activeLabel = useMemo(() => {
@@ -365,7 +395,7 @@ function WorkGroupRow({
     <div className="rounded-card border border-line/60 bg-rail/15 px-3 py-2 shadow-2xs transition">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggleOpen}
         aria-expanded={open}
         className={cn(
           "flex w-full cursor-pointer items-center gap-1.5 text-left text-caption transition select-none",
@@ -380,12 +410,14 @@ function WorkGroupRow({
           )}
         />
         <span className={cn("shrink-0 font-medium", running ? "text-teal" : "text-graphite")}>
-          {running ? (activeLabel ?? "工作中…") : "执行已就绪"}
+          {running ? (activeLabel ?? "工作中…") : toolCount > 0 ? "执行过程" : "思考过程"}
         </span>
         <span className="min-w-0 truncate text-ash font-mono text-[11px]">
           {toolCount > 0 && ` · ${toolCount} 条命令`}
           {thinkCount > 0 && ` · 思考 ${thinkCount} 阶段`}
+          {noteCount > 0 && ` · 过程文本 ${noteCount} 段`}
           {failed && " · 含有失败项"}
+          {durationLabel !== null && ` · 用时 ${durationLabel}`}
         </span>
         <span className="ml-auto flex items-center gap-1 text-[11px] text-ash">
           <span className="hidden sm:inline">{open ? "收起明细" : "展开过程"}</span>
@@ -396,17 +428,20 @@ function WorkGroupRow({
         </span>
       </button>
 
-      {/* 展开的详细执行流 */}
+      {/* 展开的详细执行流。file.diff / deliverable 不逐条渲染——底部已聚合成
+          一张交付摘要卡，逐条再画一遍是同一信息两份 */}
       {open && (
         <div className="mt-2.5 space-y-2 border-l border-line/70 pl-3">
-          {entries.map((e) => (
-            <SingleItemRow
-              key={e.id}
-              item={e}
-              busy={busy}
-              lastUserTurnId={lastUserTurnId}
-            />
-          ))}
+          {entries
+            .filter((e) => e.kind !== "file.diff" && e.kind !== "deliverable")
+            .map((e) => (
+              <SingleItemRow
+                key={e.id}
+                item={e}
+                busy={busy}
+                lastUserTurnId={lastUserTurnId}
+              />
+            ))}
 
           {/* 聚合文件交付卡 */}
           {deliverableFiles.length > 0 && (
