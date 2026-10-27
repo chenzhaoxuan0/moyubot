@@ -91,13 +91,13 @@ export function createKimiReader(): SessionReader {
         if (!isRecord(l)) continue;
         const type = str(l["type"]);
         if (type === "config.update" || type === "tools.set_active_tools" || type === "metadata") continue;
-      const rc = looseRoleContent(l);
-      if (rc !== null && (rc.role === "user" || rc.role === "assistant")) {
-        for (const e of entriesFromContent(rc.role, rc.content)) {
-          if (e.kind === "user" && e.text.trim().startsWith("<")) continue;
-          transcript.push(e);
+        const rc = looseRoleContent(l);
+        if (rc !== null && (rc.role === "user" || rc.role === "assistant")) {
+          for (const e of entriesFromContent(rc.role, rc.content)) {
+            if (e.kind === "user" && e.text.trim().startsWith("<")) continue;
+            transcript.push(e);
+          }
         }
-      }
       // wire 的工具调用不走 content 块：assistant 在 message.toolCalls 携带
       //（含 AskUserQuestion 问卷），结果以 role:"tool" 记录回投（源码：
       // kimi-code packages/agent-core-v2/src/wire/human.ts）——单独捞，防御式

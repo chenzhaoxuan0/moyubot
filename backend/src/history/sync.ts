@@ -306,9 +306,10 @@ async function performNativeSync(
     const isQuestionnaireTool = Boolean(
       tail &&
       tail.kind === "tool" &&
-      (tailTool === "ask_user" || tailTool === "ask_user_question" || tailTool === "askuserquestion" ||
-        tailTool === "askquestion" || tailTool === "questionnaire" || tailTool === "question" ||
-        tailTool === "clarify" || tailTool === "request_user_input"),
+      (tailTool === "ask_user" || tailTool === "ask_question" || tailTool === "ask_user_question" ||
+        tailTool === "askuserquestion" || tailTool === "askquestion" || tailTool === "questionnaire" ||
+        tailTool === "question" || tailTool === "clarify" ||
+        tailTool === "request_user_input" || tailTool === "request_user_input_async"),
     );
     const answeredLooking = /<questionnaire-response>|user has answered|user selected|"status":\s*"answered"|"answers"\s*:|cancelled|question not asked/i;
     const pendingPositive = /is waiting for the local user|"pending":\s*true/i;
