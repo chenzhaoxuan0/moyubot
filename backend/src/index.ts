@@ -1936,9 +1936,12 @@ function cachedNativeList(executorId: string, rootPath: string | null): Promise<
 }
 
 /** 全家聚合的缓存通道（自动收录专用）：逐家走 cachedNativeList（30s TTL +
- * 单飞，与 unit.history 的行级回溯共享同一次扫描），绝不裸跑 14 家 reader。 */
+ * 单飞，与 unit.history 的行级回溯共享同一次扫描），绝不裸跑 14 家 reader。
+ * rootPath 先 resolve 归一：bot.json 手可编辑，正斜杠写法会让朴素比较的
+ * reader 过滤（如 mcode 的 cwd 匹配）静默全空。 */
 async function cachedNativeListAll(rootPath: string): Promise<readonly NativeSessionSummary[]> {
-  const rows = await Promise.all(readerIds().map((id) => cachedNativeList(id, rootPath)));
+  const root = path.resolve(rootPath);
+  const rows = await Promise.all(readerIds().map((id) => cachedNativeList(id, root)));
   return rows.flat().sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -2311,12 +2314,29 @@ registerMethod("history.native.list", async (params) => {
 });
 
 registerMethod("history.native.detail", async (params) => {
-  const p = (params ?? {}) as { executorId?: string; sessionId?: string };
+  const p = (params ?? {}) as { executorId?: string; sessionId?: string; tail?: number };
   if (typeof p.executorId !== "string" || typeof p.sessionId !== "string" || p.executorId === "" || p.sessionId === "") {
     throw Object.assign(new Error("executorId 与 sessionId 必填"), { code: "bad_params" });
   }
   const detail = await readNativeSession(p.executorId, p.sessionId);
   if (detail === null) throw Object.assign(new Error("会话不存在或读取失败"), { code: "not_found" });
+  // tail：只带最近 N 条（历史详情展开的默认口径）。长会话全量转录动辄 10MB 级——
+  // 传输 + 前端 JSON.parse + 逐条渲染（assistant 还走 markdown）会把点开详情
+  // 卡成秒级冻结；截尾后 messageCount 仍是全量数，前端据此显示「共 X 条」
+  // 并提供「加载全部」显式兜底。tail 模式下单条文本同时截到 6KB——大工具
+  // 输出一条就能占几 MB，只按条数截砍不干净
+  if (typeof p.tail === "number" && Number.isFinite(p.tail) && p.tail > 0 && detail.transcript.length > p.tail) {
+    const tail = Math.min(Math.round(p.tail), 2000);
+    const TAIL_ENTRY_TEXT_MAX = 6000;
+    return {
+      detail: {
+        ...detail,
+        transcript: detail.transcript.slice(-tail).map((e) =>
+          e.text.length > TAIL_ENTRY_TEXT_MAX ? { ...e, text: `${e.text.slice(0, TAIL_ENTRY_TEXT_MAX)}\n…（单条已截断，加载全部可见完整内容）` } : e,
+        ),
+      },
+    };
+  }
   return { detail };
 });
 
@@ -2342,7 +2362,8 @@ registerMethod("history.import.list", async (params) => {
   }
   const executorIds = typeof p.runtimeId === "string" && p.runtimeId !== "" ? [p.runtimeId.replace(/^daemon:/, "")] : [];
   const limit = Math.min(Math.max(typeof p.limit === "number" ? Math.round(p.limit) : 60, 1), 200);
-  const rows = await listNativeSessions(rootPath, executorIds, limit);
+  // resolve 归一：手改 bot.json 可能写正斜杠路径，朴素比较的 reader 会静默全空
+  const rows = await listNativeSessions(path.resolve(rootPath), executorIds, limit);
   const known = knownNativeRefs(store);
   return {
     rootPath,

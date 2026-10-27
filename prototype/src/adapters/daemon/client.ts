@@ -1729,16 +1729,17 @@ export async function fetchNativeSessions(
   return r.sessions;
 }
 
-/** 单条原生会话的富转录下钻 */
+/** 单条原生会话的富转录下钻。tail：只取最近 N 条（长会话截尾，防大 payload + 全量渲染卡顿） */
 export async function fetchNativeSessionDetail(
   executorId: string,
   sessionId: string,
+  tail?: number,
   endpoint: string = defaultDaemonEndpoint(),
 ): Promise<NativeSessionDetail> {
   const client = DaemonClient.get(endpoint);
   const r = await client.rpc<{ detail: NativeSessionDetail }>(
     "history.native.detail",
-    { executorId, sessionId },
+    { executorId, sessionId, ...(tail !== undefined ? { tail } : {}) },
     20000,
   );
   return r.detail;

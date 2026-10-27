@@ -349,6 +349,21 @@ export class NativeSessionWatcher {
         }
         if (!bareExec || !cliRef) continue;
 
+        // 快路径：上一轮已定位过源文件时先 stat，签名没变就零读取。此前每 500ms
+        // 对每个被关注会话做一次全量 readNativeSession（只为算签名）——大会话
+        // （10MB+ 转录）同步解析要秒级，等于把 daemon 主循环卡成常数级停顿，
+        // 前端所有 RPC 跟着遭殃。变了（或缓存失位）才走慢路径全量读。
+        const knownFile = this.sessionFiles.get(sid);
+        if (knownFile !== undefined) {
+          try {
+            const kst = statSync(knownFile);
+            const ksig = `${kst.mtimeMs}_${kst.size}`;
+            if (ksig === this.fileSignatures.get(knownFile)) continue;
+          } catch {
+            // 缓存的源文件没了（CLI 清理/迁移）：落到慢路径重新定位
+          }
+        }
+
         const detail = await readNativeSession(bareExec, cliRef).catch(() => null);
         if (!detail || !detail.source) continue;
 

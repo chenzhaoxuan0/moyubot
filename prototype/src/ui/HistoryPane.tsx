@@ -125,6 +125,14 @@ const RESUME_ARGS: Record<string, (ref: string) => string[]> = {
   openclaw: (ref) => ["agent", "--session-id", ref],
 };
 
+/**
+ * 转录展开的默认截尾条数（服务端 tail + 客户端渲染上限同口径）：长会话全量
+ * 转录动辄数千条 / 10MB 级——一次性传输 + JSON.parse + 逐条渲染（assistant 还
+ * 走 markdown）会把「点开历史详情」卡成秒级冻结。默认只取末尾，「加载全部」
+ * 是显式选择。
+ */
+const TRANSCRIPT_TAIL = 200;
+
 /** 可恢复判定（侧栏子列表与历史面板共用） */
 export function resumeArgsFor(runtimeId: string, resumeRef: string | null): string[] | null {
   if (resumeRef === null) return null;
@@ -646,16 +654,17 @@ function NativeRow({
   );
 }
 
-/** 原生会话富转录：user/assistant 对话 + 工具行 + 思考折叠 */
+/** 原生会话富转录：user/assistant 对话 + 工具行 + 思考折叠（默认尾断，可显式加载全部） */
 function NativeTranscript({ executorId, sessionId }: { executorId: string; sessionId: string }): ReactElement {
   const [detail, setDetail] = useState<NativeSessionDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [full, setFull] = useState(false);
 
   useEffect(() => {
     let alive = true;
     setDetail(null);
     setErr(null);
-    void fetchNativeSessionDetail(executorId, sessionId)
+    void fetchNativeSessionDetail(executorId, sessionId, full ? undefined : TRANSCRIPT_TAIL)
       .then((d) => {
         if (alive) setDetail(d);
       })
@@ -665,14 +674,30 @@ function NativeTranscript({ executorId, sessionId }: { executorId: string; sessi
     return () => {
       alive = false;
     };
-  }, [executorId, sessionId]);
+  }, [executorId, sessionId, full]);
 
   if (err !== null) return <p className="px-4 pb-2 text-caption text-loss">转录读取失败：{err}</p>;
   if (detail === null) return <p className="px-4 pb-2 text-caption text-ash">读取转录…</p>;
   if (detail.transcript.length === 0) return <p className="px-4 pb-2 text-caption text-ash">这条会话没有可展示的对话内容</p>;
+  // messageCount 是服务端全量数（tail 截尾不影响它）——据此识别截断
+  const truncated = detail.transcript.length < detail.messageCount;
 
   return (
     <div className="mx-2 mb-2 max-h-80 space-y-1.5 overflow-y-auto rounded-btn bg-rail p-2.5">
+      {truncated && (
+        <div className="flex items-center justify-between gap-2 pb-1 text-[10px] text-ash">
+          <span>
+            共 {detail.messageCount} 条，显示最近 {detail.transcript.length} 条
+          </span>
+          <button
+            type="button"
+            onClick={() => setFull(true)}
+            className="cursor-pointer rounded px-1.5 py-0.5 transition hover:bg-line-soft hover:text-ink"
+          >
+            加载全部
+          </button>
+        </div>
+      )}
       {detail.transcript.map((e, i) => {
         if (e.kind === "tool") {
           return (
@@ -1093,10 +1118,11 @@ function HistoryRow({
   );
 }
 
-/** 展开的对话内容：user/assistant 两栏流（工具消息等次要角色灰显） */
+/** 展开的对话内容：user/assistant 两栏流（工具消息等次要角色灰显；超长默认只渲染末尾） */
 function SessionMessages({ sessionId }: { sessionId: string }): ReactElement {
   const [msgs, setMsgs] = useState<Array<{ at: number; role: string; text: string }> | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [full, setFull] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -1116,9 +1142,25 @@ function SessionMessages({ sessionId }: { sessionId: string }): ReactElement {
   if (msgs === null) return <p className="px-4 pb-2 text-caption text-ash">读取对话…</p>;
   if (msgs.length === 0) return <p className="px-4 pb-2 text-caption text-ash">这条会话没有留下消息记录</p>;
 
+  const visible = full ? msgs : msgs.slice(-TRANSCRIPT_TAIL);
+
   return (
     <div className="mx-2 mb-2 max-h-72 space-y-1.5 overflow-y-auto rounded-btn bg-rail p-2.5">
-      {msgs.map((m, i) => (
+      {visible.length < msgs.length && (
+        <div className="flex items-center justify-between gap-2 pb-1 text-[10px] text-ash">
+          <span>
+            共 {msgs.length} 条，显示最近 {visible.length} 条
+          </span>
+          <button
+            type="button"
+            onClick={() => setFull(true)}
+            className="cursor-pointer rounded px-1.5 py-0.5 transition hover:bg-line-soft hover:text-ink"
+          >
+            显示全部
+          </button>
+        </div>
+      )}
+      {visible.map((m, i) => (
         <div key={i} className="flex items-start gap-2">
           <span
             className={cn(
@@ -1158,12 +1200,15 @@ function TerminalTranscript({
 }): ReactElement {
   const bareExec = runtimeId.replace(/^daemon:/, "").replace(/:yolo$/, "");
   const [native, setNative] = useState<NativeSessionDetail | null | "failed">(resumeRef !== null ? null : "failed");
+  const [nativeFull, setNativeFull] = useState(false);
   const [text, setText] = useState<string | null>(null);
+  const [textFull, setTextFull] = useState(false);
   const [loading, setLoading] = useState(terminalId !== null);
   const [err, setErr] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // 原生转录：resumeRef 在（回溯/实时捕获链路补齐后覆盖 14 家执行器）
+  // 原生转录：resumeRef 在（回溯/实时捕获链路补齐后覆盖 14 家执行器）；
+  // 默认尾断（TRANSCRIPT_TAIL），长会话全量渲染会卡死展开
   useEffect(() => {
     if (resumeRef === null) {
       setNative("failed");
@@ -1171,7 +1216,7 @@ function TerminalTranscript({
     }
     let alive = true;
     setNative(null);
-    void fetchNativeSessionDetail(bareExec, resumeRef)
+    void fetchNativeSessionDetail(bareExec, resumeRef, nativeFull ? undefined : TRANSCRIPT_TAIL)
       .then((d) => {
         if (alive) setNative(d !== null && d.transcript.length > 0 ? d : "failed");
       })
@@ -1181,7 +1226,7 @@ function TerminalTranscript({
     return () => {
       alive = false;
     };
-  }, [bareExec, resumeRef]);
+  }, [bareExec, resumeRef, nativeFull]);
 
   useEffect(() => {
     if (!terminalId) {
@@ -1219,6 +1264,13 @@ function TerminalTranscript({
 
   const lineCount = text ? text.split("\n").length : 0;
   const nativeReady = native !== null && native !== "failed";
+  // 终端快照超长时默认只渲染末尾（单个 <pre> 塞几 MB 文本，首帧布局一样卡）
+  const MAX_TEXT_LINES = 2000;
+  const textTrimmed =
+    !textFull && text !== null && lineCount > MAX_TEXT_LINES
+      ? text.split("\n").slice(-MAX_TEXT_LINES).join("\n")
+      : text;
+  const textWasTrimmed = textTrimmed !== text;
 
   return (
     <div className="mx-2 mb-2 space-y-2">
@@ -1236,6 +1288,20 @@ function TerminalTranscript({
             </div>
           </div>
           <div className="max-h-72 space-y-1.5 overflow-y-auto p-2.5">
+            {native.transcript.length < native.messageCount && (
+              <div className="flex items-center justify-between gap-2 pb-1 text-[10px] text-ash">
+                <span>
+                  共 {native.messageCount} 条，显示最近 {native.transcript.length} 条
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setNativeFull(true)}
+                  className="cursor-pointer rounded px-1.5 py-0.5 transition hover:bg-line-soft hover:text-ink"
+                >
+                  加载全部
+                </button>
+              </div>
+            )}
             {native.transcript.map((t, i) => (
               <div key={i} className="flex items-start gap-2">
                 <span
@@ -1285,9 +1351,23 @@ function TerminalTranscript({
           {loading && <p className="text-caption text-ash">正在读取终端输出…</p>}
           {err !== null && <p className="text-caption text-loss">输出读取失败：{err}</p>}
           {!loading && err === null && text && text.trim() !== "" && (
-            <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-ink select-text">
-              {text}
-            </pre>
+            <>
+              {textWasTrimmed && (
+                <div className="flex items-center justify-between gap-2 pb-1 text-[10px] text-ash">
+                  <span>共 {lineCount} 行，显示最近 {MAX_TEXT_LINES} 行</span>
+                  <button
+                    type="button"
+                    onClick={() => setTextFull(true)}
+                    className="cursor-pointer rounded px-1.5 py-0.5 transition hover:bg-line-soft hover:text-ink"
+                  >
+                    显示全部
+                  </button>
+                </div>
+              )}
+              <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-ink select-text">
+                {textTrimmed}
+              </pre>
+            </>
           )}
           {!loading && err === null && (!text || text.trim() === "") && !nativeReady && (
             <div className="space-y-1 text-caption text-ash">
