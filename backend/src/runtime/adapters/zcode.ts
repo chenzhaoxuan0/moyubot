@@ -32,7 +32,7 @@ import {
   type ModelSyncOutcome,
   type StartRequest,
 } from "./types.ts";
-import { hasDotSegment, listMarkdownFilesPruned } from "./discovery.ts";
+import { listMarkdownFilesPruned } from "./discovery.ts";
 import type {
   ModelId,
   NativeCommandInfo,

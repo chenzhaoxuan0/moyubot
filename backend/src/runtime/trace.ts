@@ -105,8 +105,15 @@ export class TraceSink {
 
   async #ensureIndex(): Promise<void> {
     const dir = path.join(this.homeDir, "traces");
-    if (!existsSync(dir)) return;
+    if (!existsSync(dir)) {
+      this.#fileIndex.clear();
+      return;
+    }
     const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl")).sort();
+    // 磁盘上已消失的文件：索引条目一并清掉（防幽灵行）
+    for (const known of this.#fileIndex.keys()) {
+      if (!files.includes(known)) this.#fileIndex.delete(known);
+    }
     for (const f of files) {
       const full = path.join(dir, f);
       let st: { mtimeMs: number; size: number };

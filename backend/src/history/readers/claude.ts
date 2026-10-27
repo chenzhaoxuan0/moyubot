@@ -78,24 +78,31 @@ function parseSessionFile(file: string): ClaudeScan | null {
 }
 
 /**
- * 扫描 ~/.claude/projects 的会话文件（按 mtime 取最新的前 limit 个）。
- * 逐文件同步读+逐行解析在会话多时是数秒级连续阻塞（实测把主循环卡出
- * loop-stall）——mtime 排序取 top-K + 每 8 个文件让行一次，首扫毫秒级。
+ * 扫描 ~/.claude/projects 的会话文件：mtime 从新到旧解析，**凑满 want 个匹配
+ * rootPath 的会话即停**（早停语义）——活跃 bot 秒出；安静 bot 的老会话最坏
+ * 全量（不再被全局 top-K 截断丢失，有 TTL 缓存与每 8 文件让行兜底）。
+ * 逐文件同步解析曾是数秒级连续阻塞（实测 loop-stall），让行保住事件循环。
  */
-async function scanAll(limit: number): Promise<ClaudeScan[]> {
+async function scanAll(limit: number, rootPath: string | null): Promise<ClaudeScan[]> {
   const root = path.join(homeDir(), ".claude", "projects");
   if (!existsSync(root)) return [];
   const all = collectFiles(root, (n) => n.endsWith(".jsonl"), 800);
-  // updatedAt ≈ 文件 mtime（文件随对话持续追加）：mtime 排序后只需解析前 K 个
+  // updatedAt ≈ 文件 mtime（文件随对话持续追加）：从新到旧解析
   const byMtime = all
     .map((f) => ({ f, m: fileMtimeMs(f) }))
     .sort((a, b) => b.m - a.m);
   const out: ClaudeScan[] = [];
-  const target = byMtime.slice(0, limit);
-  for (let fi = 0; fi < target.length; fi++) {
+  let matched = 0;
+  for (let fi = 0; fi < byMtime.length && matched < limit; fi++) {
     if (fi % 8 === 7) await new Promise<void>((resolve) => setImmediate(resolve));
-    const hit = parseSessionFile(target[fi]!.f);
-    if (hit !== null) out.push(hit);
+    const hit = parseSessionFile(byMtime[fi]!.f);
+    if (hit === null) continue;
+    // 目录过滤在解析后做（cwd 在文件内容里）：不匹配的也要占解析名额但计数
+    if (rootPath !== null && hit.summary.rootPath !== null && !samePath(hit.summary.rootPath, rootPath)) {
+      continue;
+    }
+    out.push(hit);
+    matched++;
   }
   return out;
 }
@@ -118,11 +125,10 @@ export function createClaudeReader(): SessionReader {
   return {
     executorId: "claude",
     async list(rootPath, limit) {
-      // 列表按 mtime 取最新 top-K 解析即可（updatedAt≈文件 mtime，文件随对话
-      // 持续追加）：全量解析 800 个文件是秒级阻塞，top-K 后首扫毫秒级
-      const all = await scanAll(Math.min(800, Math.max(60, limit * 2)));
-      const filtered = rootPath === null ? all : all.filter((s) => s.summary.rootPath !== null && samePath(s.summary.rootPath, rootPath));
-      return filtered
+      // 早停扫描：凑满 limit 个匹配该目录的会话即停（详见 scanAll 注释）——
+      // 活跃 bot 毫秒级，安静 bot 的老会话也不会被全局截断丢掉
+      const all = await scanAll(limit, rootPath);
+      return all
         .map((s) => s.summary)
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, limit);

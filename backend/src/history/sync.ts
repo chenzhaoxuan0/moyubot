@@ -160,7 +160,6 @@ async function performNativeSync(
   // tool.completed，不再各自成对——否则问卷的「结果（=已作答）」条目会被投影
   // 成第二张问卷卡（选项解析出乱码），末尾 call 无 result 才是真待决
   let pendingCallIdx: number | null = null;
-  let pendingCallTool = "";
 
   // 批量落账（首开的整段投影动辄上千条记录，逐条 append 是上千次串行
   // appendFile——RPC 秒级等待的元凶；攒齐后 appendMany 一次写，广播随批后发）
@@ -225,7 +224,6 @@ async function performNativeSync(
       if (entry.meta?.phase === "call") {
         // 只发 started：completed 等它的 result 条目（或保持待决）
         pendingCallIdx = idx;
-        pendingCallTool = entry.toolName ?? "tool";
       } else {
         // 无相位（其他 CLI reader）：started+completed 立即成对（旧形态）
         emitToolCompleted(callId, "", at);

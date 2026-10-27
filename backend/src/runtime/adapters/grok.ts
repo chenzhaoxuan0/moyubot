@@ -45,7 +45,7 @@ import type {
 } from "../../contract.ts";
 import { execLines, resolveCommand } from "../exec.ts";
 import { builtinCommandsFor } from "./builtin-catalogs.ts";
-import { hasDotSegment, readStandardAgentsWorkspace, listMarkdownFilesPruned } from "./discovery.ts";
+import { readStandardAgentsWorkspace, listMarkdownFilesPruned } from "./discovery.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
