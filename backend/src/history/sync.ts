@@ -295,14 +295,20 @@ async function performNativeSync(
   }
 
   // 广播状态更新让前端侧栏与任务栏无缝刷新。
-  // 待决判定（相位口径）：转录末尾是一个**没有 result 的问卷族 call** 才算
-  // awaiting_input——历史会话里已作答的问卷（call 后面跟着 result 条目）不再
-  // 被误判成待决，问卷卡与蓝灯也不会在打开历史会话时凭空复活
+  // 待决判定（mcode 协议口径，见 minimax-code local-ask-user.ts）：ask_user 会
+  // **立即返回**一条 result——「is waiting for the local user」= 待决（本轮
+  // terminate）；答案后续以 <questionnaire-response> 注入。所以判据是：转录
+  // 末条是问卷族工具，且（还没有 result，或 result 是 waiting 文案）。
+  // 历史会话里已作答的问卷末条是 response/后续正文，不再误亮待决灯
   if (wss) {
-    const awaitingTool = pendingCallTool.toLowerCase();
-    const isAwaiting =
-      pendingCallIdx !== null &&
-      (awaitingTool === "ask_user" || awaitingTool === "questionnaire" || awaitingTool === "ask_question" || awaitingTool === "askuserquestion");
+    const tail = detail.transcript[nativeCount - 1];
+    const tailTool = String(tail?.toolName ?? "").toLowerCase();
+    const isAwaiting = Boolean(
+      tail &&
+      tail.kind === "tool" &&
+      (tailTool === "ask_user" || tailTool === "questionnaire" || tailTool === "ask_question" || tailTool === "askuserquestion") &&
+      (tail.meta?.phase !== "result" || tail.text.includes("is waiting for the local user")),
+    );
     const syncStatus = isAwaiting ? "awaiting_input" : "idle";
     broadcastEvent(wss, { type: "session.status", sessionId: sid, status: syncStatus }, ++lastSeq);
   }

@@ -299,13 +299,42 @@ export function detectQuestionnaireFromTimeline(
 ): ParsedQuestionnaire | null {
   if (!timeline || timeline.length === 0) return null;
 
-  // 已答判据（同 callId 存在 tool.completed = 问卷已收口）：原生同步对每个
-  // transcript 条目都投影 started+completed 成对事件——历史会话里早已作答的
-  // 问卷（含它的结果条目）不再被当成待决弹卡。真正待决的问卷只有 started
-  const completedCallIds = new Set<string>();
+  // —— mcode 问卷协议（minimax-code packages/agent-tools/src/desktop/local-ask-user.ts）：
+  // ask_user **立即返回**，状态全在 result 文案里——「is waiting for the local
+  // user」= 待决（terminate 本轮）；「<questionnaire-response>」= 已作答（答案
+  // 注入 result，**不会**出现用户消息）；「Question not asked」= 被新指令压制；
+  // 「did not wait for an answer」= 非阻塞问卷。另有存量口径：旧投影对每个
+  // 条目落 started+completed 且 output 恒为空串——空 output 的待决只能靠
+  // 「尾部无后续活动」判定。
+  const completedOutputs = new Map<string, string>();
   for (const t of timeline) {
-    if (t.event.type === "tool.completed") completedCallIds.add(String(t.event.callId));
+    if (t.event.type === "tool.completed") completedOutputs.set(String(t.event.callId), String(t.event.output ?? ""));
   }
+  // 尾部活动下标（用户输入/助手输出/工具发起；completed 是配对，不算新活动）
+  let lastActivityIdx = -1;
+  let lastMessageIdx = -1;
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const it = timeline[i]!;
+    const et = it.event.type;
+    if (lastMessageIdx === -1 && (et === "message.delta" || et === "message.completed")) lastMessageIdx = i;
+    if (et === "message.delta" || et === "message.completed" || et === "tool.started") {
+      lastActivityIdx = i;
+      break;
+    }
+  }
+  /** 这个问卷 callId 是否仍在待决（协议口径见块注释） */
+  const isPending = (callId: string, startedIdx: number): boolean => {
+    const out = completedOutputs.get(callId);
+    if (out === undefined) return true;
+    if (out.includes("is waiting for the local user")) return true;
+    if (out.includes("<questionnaire-response>")) return false;
+    if (out.includes("Question not asked")) return false;
+    if (out !== "") return false;
+    // 空结果（旧投影形态，output 恒空）：其后没有再出现任何消息即待决——
+    // 旧投影把 waiting-result 也落成了 started（工具形态不算消息），所以
+    // 判「消息」而非「尾部活动」
+    return startedIdx > lastMessageIdx;
+  };
 
   let assistantMessageId: string | null = null;
   let assistantCompletedText: string | null = null;
@@ -325,11 +354,11 @@ export function detectQuestionnaireFromTimeline(
 
     // 1. 优先提取结构化工具调用（ask_user / questionnaire / ask_question / askUserQuestion）
     if (ev.type === "tool.started" && !toolAskQuestion) {
-      const answered = completedCallIds.has(String(ev.callId));
+      const pending = isPending(String(ev.callId), i);
       const parsedTool = parseStructuredQuestionnaireJson(ev.input);
       if (parsedTool) {
-        // 倒序扫到的第一张问卷就是最后一张：它已答 → 整个会话没有待决问卷
-        if (answered) return null;
+        // 倒序扫到的第一张问卷就是最后一张：它非待决 → 整个会话没有待决问卷
+        if (!pending) return null;
         toolAskQuestion = {
           ...parsedTool,
           rawText: `tool_${ev.callId}`,
@@ -339,7 +368,7 @@ export function detectQuestionnaireFromTimeline(
 
       const tn = ev.toolName.toLowerCase().replace(/[\s_\-]+/g, "");
       if (tn === "exitplanmode") {
-        if (answered) return null;
+        if (!pending) return null;
         let inp: unknown = ev.input;
         if (typeof inp === "string") {
           try { inp = JSON.parse(inp); } catch { /* ignore */ }
@@ -380,7 +409,7 @@ export function detectQuestionnaireFromTimeline(
       }
 
       if (tn === "askuser" || tn === "askquestion" || tn === "askuserquestion" || tn === "questionnaire") {
-        if (answered) return null;
+        if (!pending) return null;
         let inp: unknown = ev.input;
         if (typeof inp === "string") {
           try {
