@@ -437,6 +437,35 @@ export async function listDaemonExecutors(endpoint: string = defaultDaemonEndpoi
   return list;
 }
 
+/** 单家执行器的新版本结论（docs/27） */
+export interface ExecutorUpdateItem {
+  readonly runtimeId: string;
+  readonly current: string;
+  readonly latest: string | null;
+  readonly state: "current" | "behind" | "unknown";
+  /** 检测源描述（"npm @openai/codex"） */
+  readonly source: string;
+}
+
+export interface ExecutorUpdatesReport {
+  readonly checkedAt: number;
+  readonly items: readonly ExecutorUpdateItem[];
+  readonly hasUpdates: boolean;
+}
+
+/**
+ * 执行器新版本检测（docs/27）：current 由前端探测注册表提供（裸执行器 id → 版本串，
+ * 只放 ready 的），daemon 查 npm/PyPI latest 缓存比对。force = 绕过 daemon 侧 1h 缓存。
+ */
+export async function fetchExecutorUpdates(
+  current: Readonly<Record<string, string>>,
+  force = false,
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<ExecutorUpdatesReport> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<ExecutorUpdatesReport>("adapter.updates", { current, force }, 30000);
+}
+
 /**
  * 重新探测模型清单（设置页「重新探测模型」按钮的落点）。
  *

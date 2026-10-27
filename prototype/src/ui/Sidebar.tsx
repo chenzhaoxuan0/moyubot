@@ -40,6 +40,7 @@ import type { AvatarFrame } from "../core/appearance.ts";
 import { describeRule, formatAbsolute, formatAbsoluteHuman, formatRelative, type Automation } from "../core/automation.ts";
 import { DaemonClient, defaultDaemonEndpoint, dispatchTerminal, exportSession, fetchAutomations, fetchUnitHistory, renameHistoryEntry, type UnitHistoryEntry } from "../adapters/daemon/client.ts";
 import { saveTextFile, sanitizeFileName } from "./fileSave.ts";
+import { hasUnseenUpdates, useExecutorUpdates } from "../store/useExecutorUpdates.ts";
 import {
   asModelId,
   asRuntimeId,
@@ -177,6 +178,10 @@ export function Sidebar() {
   // 新建 bot 与 bot 设置均已归拢右栏面板（2026-10-23）：＋/空态开「新建 bot」tab，齿轮开「bot 设置」tab
   const updateUnit = useWorkbench((s) => s.updateUnit);
   const settingsActive = useShell((s) => s.settingsOpen);
+  // 执行器新版本红点（docs/27）：启动检测一次，落后未消隐即亮；进「执行器与模型」分区即消隐
+  const updatesReport = useExecutorUpdates((s) => s.report);
+  const updatesDismissed = useExecutorUpdates((s) => s.dismissed);
+  const updatesDot = hasUnseenUpdates(updatesReport, updatesDismissed);
 
   const allUnits = units;
 
@@ -298,6 +303,7 @@ export function Sidebar() {
               label="设置"
               hint="⌘,"
               active={settingsActive}
+              dot={updatesDot}
               onClick={() => useShell.getState().openSettings()}
             />
           </div>
@@ -1956,12 +1962,15 @@ function IconNavBtn({
   label,
   hint,
   active,
+  dot,
   onClick,
 }: {
   icon: typeof Search;
   label: string;
   hint?: string;
   active?: boolean;
+  /** 右上角红点（docs/27 执行器新版本：进设置页「执行器与模型」即消隐） */
+  dot?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -1971,11 +1980,12 @@ function IconNavBtn({
       title={hint ? `${label} · ${hint}` : label}
       aria-pressed={active}
       className={cn(
-        "flex h-7 w-7 items-center justify-center rounded-btn",
+        "relative flex h-7 w-7 items-center justify-center rounded-btn",
         active ? "bg-teal-tint text-ink" : "text-graphite hover:bg-line-soft hover:text-ink",
       )}
     >
       <Icon size={14} className="shrink-0" />
+      {dot && <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-red-500 ring-1 ring-rail" aria-hidden />}
     </button>
   );
 }

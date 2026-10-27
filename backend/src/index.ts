@@ -82,6 +82,7 @@ import {
   parseSharedBundle,
   parseTraceNdjson,
 } from "./history/shareImport.ts";
+import { ExecutorUpdatesChecker } from "./runtime/updates.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
 import { QuotaResumeWatcher } from "./automation/quotaResume.ts";
 import { getAutomationCreateLimit, setAutomationCreateLimit } from "./automation/limits.ts";
@@ -286,6 +287,9 @@ const store = new Store(config.homeDir);
 const gate = new PermissionGate(store);
 const traceSink = new TraceSink(config.homeDir);
 const botRegistry = new BotRegistry(store);
+// 执行器新版本检测（docs/27）：daemon 只拥有网络面（npm/PyPI 查 latest + 缓存），
+// 当前版本由前端传入（探测状态活在前端注册表，daemon 不做启动探测）
+const executorUpdates = new ExecutorUpdatesChecker(config.homeDir);
 // 通知事实源（docs/21 P4b）：挂在 host 事件汇点上聚合，「你不在它面前」与已读留在客户端。
 // metaOf 的 host 引用是闭包惰性求值（构造时 host 还不存在，事件到达时早已就绪）。
 const notifications = new NotificationsService(config.homeDir, (sid) => {
@@ -3324,6 +3328,22 @@ registerMethod("adapter.models", async (params) => {
   }
   const report = await host.syncModels(runtimeId);
   return { report, adapters: await host.listAdapters(false) };
+});
+/**
+ * 执行器新版本检测（docs/27）：current 由前端传入（裸执行器 id → 版本串，只放
+ * ready 的——探测状态活在前端注册表，daemon 不做启动探测）。daemon 查 npm/PyPI
+ * latest（缓存 1h，force 直查）做启发式 semver 比对。升级动作不在这里——
+ * 设置页「升级」按钮仍派发终端命令（PROVIDER_INSTALL_GUIDES 是命令事实源）。
+ */
+registerMethod("adapter.updates", async (params) => {
+  const p = (params ?? {}) as { force?: boolean; current?: Record<string, unknown> | null };
+  const current: Record<string, string> = {};
+  if (p.current !== null && typeof p.current === "object") {
+    for (const [k, v] of Object.entries(p.current)) {
+      if (typeof v === "string" && v !== "") current[k.replace(/^daemon:/, "").toLowerCase()] = v;
+    }
+  }
+  return executorUpdates.check(current, p.force === true);
 });
 
 /**

@@ -59,6 +59,7 @@ export const METHOD_META: Record<string, MethodMeta> = {
   "adapter.list": { description: "已注册执行器摘要（id/显示名/模型清单/能力位）", paramsHint: "null" },
   "adapter.probe": { description: "探测执行器安装/认证/版本现状（只探测，不碰模型清单）", paramsHint: "{runtimeId}" },
   "adapter.models": { description: "刷新模型清单（只读列清单命令或本地目录，零用量）；省略 runtimeId = 全部", paramsHint: "{runtimeId?}" },
+  "adapter.updates": { description: "执行器新版本检测（docs/27）：前端传当前版本，daemon 查 npm/PyPI latest（缓存 1h）比对出 current/behind/unknown", paramsHint: "{current: {runtimeId: version}, force?}" },
   "adapter.commands": { description: "列执行器在某目录下的原生命令面", paramsHint: "{runtimeId, rootPath}" },
   "adapter.modelcatalog.get": { description: "读执行器的模型目录清单", paramsHint: "{runtimeId}" },
   "adapter.modelcatalog.set": { description: "写模型目录进 CLI 目录文件并刷模型清单", paramsHint: "{runtimeId, rows}" },

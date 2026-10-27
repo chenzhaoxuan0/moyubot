@@ -41,6 +41,7 @@ import {
 } from "../adapters/daemon/client.ts";
 import { runtimeRegistry } from "../core/registry.ts";
 import { asModelId } from "../core/units.ts";
+import { useExecutorUpdates } from "../store/useExecutorUpdates.ts";
 import { executorIconSrc } from "./executorIcon.ts";
 import { dispatchTerminalCommand, watchRuntimeProbeUntilResolved } from "./installFlow.ts";
 import { ProviderModelPanel } from "./ModelSettings.tsx";
@@ -483,6 +484,10 @@ export function ProviderInstancesPanel() {
   const syncingModels = useWorkbench((s) => s.syncingModels);
   const modelSync = useWorkbench((s) => s.modelSync);
   const daemonStatus = useWorkbench((s) => s.daemonStatus);
+  const updatesReport = useExecutorUpdates((s) => s.report);
+  const updatesChecking = useExecutorUpdates((s) => s.checking);
+  const refreshUpdates = useExecutorUpdates((s) => s.refresh);
+  const dismissUpdates = useExecutorUpdates((s) => s.dismissCurrent);
 
   const [checkedLabel, setCheckedLabel] = useState("刚刚");
   const [checking, setChecking] = useState(false);
@@ -524,6 +529,15 @@ export function ProviderInstancesPanel() {
     void refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 新版本检测（docs/27）：进面板拉一份（daemon 侧 latest 有 1h 缓存，非 force
+  // 基本零网络）；banner 已经渲染在用户面前，红点即消隐（新版本出现指纹变化自动再亮）
+  useEffect(() => {
+    void refreshUpdates();
+  }, [refreshUpdates]);
+  useEffect(() => {
+    if (updatesReport !== null && updatesReport.hasUpdates) dismissUpdates();
+  }, [updatesReport, dismissUpdates]);
 
   /** 每家的模型同步来源 → 一句话标签。static = 没刷到，用的是内置兜底清单 */
   const syncLabel = useMemo(() => {
@@ -605,6 +619,32 @@ export function ProviderInstancesPanel() {
           <AlertCircle size={12} className="shrink-0" />
           模型刷新失败：{modelSync.error}
         </p>
+      )}
+
+      {/* 新版本 banner（docs/27）：daemon 查 npm/PyPI latest 与本机版本比对，
+          落后的家在卡片上也有琥珀徽标；升级动作仍走各卡片的「升级」按钮（终端可见执行） */}
+      {updatesReport !== null && updatesReport.hasUpdates && (
+        <section className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-card border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+          <span className="flex min-w-0 flex-1 items-center gap-1.5 text-caption text-amber-600">
+            <ArrowUpCircle size={12} className="shrink-0" />
+            <span className="font-medium">{updatesReport.items.filter((i) => i.state === "behind").length} 个执行器有新版本</span>
+            <span className="min-w-0 truncate text-amber-600/80">
+              {updatesReport.items
+                .filter((i) => i.state === "behind")
+                .map((i) => `${i.runtimeId} → ${(formatShortVersion(i.latest ?? "") ?? i.latest ?? "?")}`)
+                .join("、")}
+            </span>
+          </span>
+          <button
+            onClick={() => void refreshUpdates({ force: true })}
+            disabled={updatesChecking}
+            title="绕过缓存，重新查询各执行器的最新版本"
+            className="flex shrink-0 items-center gap-1 rounded-btn border border-amber-500/40 px-2 py-1 text-[11px] font-medium text-amber-600 transition hover:bg-amber-500/10 disabled:opacity-50"
+          >
+            <RefreshCw size={11} className={cn(updatesChecking && "animate-spin")} />
+            {updatesChecking ? "检查中…" : "重新检查"}
+          </button>
+        </section>
       )}
 
       {/* 零就绪引导：一台没装任何 CLI 的新机，用户面对一列「未安装」不知道从哪下手。
@@ -920,6 +960,7 @@ function InstanceEditor({
   const pref = useWorkbench((s) => s.runtimePrefs[runtimeId]) ?? { enabled: true };
   const setPref = useWorkbench((s) => s.setRuntimePref);
   const probeAll = useWorkbench((s) => s.probeAll);
+  const updatesReport = useExecutorUpdates((s) => s.report);
   const [editingName, setEditingName] = useState(false);
   const [copiedInstall, setCopiedInstall] = useState(false);
   /** 薄版升级条：展开态 + 派发中标记 */
@@ -931,6 +972,9 @@ function InstanceEditor({
 
   if (!runtime) return null;
   const bareRuntimeId = runtimeId.replace(/^daemon:/, "").toLowerCase();
+  // 本家的新版本结论（docs/27）：behind 时版本 chip 旁亮琥珀徽标、升级按钮高亮
+  const update = updatesReport?.items.find((i) => i.runtimeId === bareRuntimeId);
+  const behind = update?.state === "behind" && update.latest !== null;
   const name = cleanDisplayName(pref.displayName ?? runtime.presentation.displayName);
   const guide = CLI_GUIDES[bareRuntimeId] ?? {
     desc: `${name} 终端执行器。`,
@@ -960,6 +1004,8 @@ function InstanceEditor({
         .getOrCreate(runtime.id)
         .then((adapter) => adapter.probe())
         .then((probe) => runtimeRegistry.setState(runtime.id, probe.state))
+        // 探测出新版本号后顺带重算新版本结论（behind → current，徽标即灭）
+        .then(() => useExecutorUpdates.getState().refresh())
         .catch(() => undefined);
     }, 120_000);
   };
@@ -1028,6 +1074,15 @@ function InstanceEditor({
                         : runtime.state.version}
                   </span>
                 )}
+                {runtime.state.status === "ready" && behind && update?.latest && (
+                  <span
+                    title={`检测源：${update.source} · 当前 ${runtime.state.version ?? "?"} → 最新 ${update.latest}`}
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-chip border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-caption font-medium text-amber-500"
+                  >
+                    <ArrowUpCircle size={11} />
+                    有新版本 {formatShortVersion(update.latest) ?? update.latest}
+                  </span>
+                )}
                 {runtime.state.status === "not_installed" && (
                   <span className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-chip bg-amber-500/10 border border-amber-500/25 px-2 py-0.5 text-caption font-medium text-amber-500">
                     <AlertCircle size={11} />
@@ -1052,13 +1107,15 @@ function InstanceEditor({
                 title="查看并运行该执行器的升级命令"
                 className={cn(
                   "flex items-center gap-1.5 rounded-btn border px-3 py-1.5 text-caption font-medium transition",
-                  showUpgrade
-                    ? "border-teal bg-teal-tint text-teal"
-                    : "border-line bg-canvas text-graphite hover:border-teal hover:text-ink hover:bg-line-soft",
+                  behind
+                    ? "border-amber-500/50 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20"
+                    : showUpgrade
+                      ? "border-teal bg-teal-tint text-teal"
+                      : "border-line bg-canvas text-graphite hover:border-teal hover:text-ink hover:bg-line-soft",
                 )}
               >
                 <ArrowUpCircle size={12} />
-                <span>升级</span>
+                <span>升级{behind ? "（有新版）" : ""}</span>
               </button>
             )}
             {isDefault ? (
@@ -1098,7 +1155,10 @@ function InstanceEditor({
             <div className="text-caption text-ash">
               <span className="font-sans font-medium">升级命令</span>
               {runtime.state.status === "ready" && runtime.state.version && (
-                <span>（当前 {formatShortVersion(runtime.state.version) ?? runtime.state.version}）</span>
+                <span>
+                  （当前 {formatShortVersion(runtime.state.version) ?? runtime.state.version}
+                  {behind && update?.latest ? ` → 最新 ${formatShortVersion(update.latest) ?? update.latest}` : ""}）
+                </span>
               )}
               <span className="font-sans">：</span>
             </div>
