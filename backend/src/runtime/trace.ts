@@ -78,4 +78,32 @@ export class TraceSink {
     }
     return out.length > 0 ? out.join("\n") + "\n" : "";
   }
+
+  /**
+   * 一次性算出每个会话在账本里的最大 seq（loadPersisted 的崩溃对账用）。
+   * 逐会话调 readSessionNdjson 是每个会话全文重读所有 trace 文件——会话数 ×
+   * 全库体积的并发字符串在途直接把堆打爆（实测 315 会话 × 42MB，启动 8 秒
+   * OOM）；这里每个文件只读一遍，全库对账一次完成。
+   */
+  async maxSeqBySession(): Promise<Map<string, number>> {
+    const out = new Map<string, number>();
+    const dir = path.join(this.homeDir, "traces");
+    if (!existsSync(dir)) return out;
+    const files = (await readdir(dir)).filter((f) => f.endsWith(".jsonl")).sort();
+    for (const f of files) {
+      const raw = await readFile(path.join(dir, f), "utf8");
+      for (const line of raw.split("\n")) {
+        if (line === "" || !line.startsWith("{")) continue;
+        try {
+          const rec = JSON.parse(line) as TraceRecord;
+          if (typeof rec.seq !== "number" || typeof rec.sessionId !== "string") continue;
+          const prev = out.get(rec.sessionId);
+          if (prev === undefined || rec.seq > prev) out.set(rec.sessionId, rec.seq);
+        } catch {
+          // 坏行跳过：账本容错读
+        }
+      }
+    }
+    return out;
+  }
 }

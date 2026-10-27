@@ -499,28 +499,20 @@ export class RuntimeHost {
     if (this.sessions.size > 0) log.info("sessions loaded from store", { count: this.sessions.size });
     // 崩溃对账（review P1）：quiesce 落库可能落后于 trace 已写盘的 seq（进程暴毙），
     // 直接续号会与账本已有记录重号。以 canonical 账本为准扫一遍，把 seq 抬到
-    // max(row.lastSeq, 账本尾)。启动时全部 impl=null（无并发发号），无竞态。
-    for (const h of this.sessions.values()) {
-      void this.trace
-        .readSessionNdjson(h.id, 0)
-        .then((nd) => {
-          let maxSeq = 0;
-          for (const line of nd.split("\n")) {
-            if (line === "") continue;
-            try {
-              const r = JSON.parse(line) as { seq?: number };
-              if (typeof r.seq === "number" && r.seq > maxSeq) maxSeq = r.seq;
-            } catch {
-              // 坏行跳过（账本扫描要容忍个别残行）
-            }
-          }
-          if (maxSeq > h.seq) {
+    // max(row.lastSeq, 账本尾)。一次性全库扫描（maxSeqBySession）——逐会话读
+    // 账本曾是每会话全文重读，会话数上来后启动即 OOM（315 会话 × 42MB 实测）。
+    void this.trace
+      .maxSeqBySession()
+      .then((maxSeqs) => {
+        for (const h of this.sessions.values()) {
+          const maxSeq = maxSeqs.get(h.id);
+          if (maxSeq !== undefined && maxSeq > h.seq) {
             h.seq = maxSeq;
             this.store.setSessionProgress(h.id, maxSeq, h.turnCount);
           }
-        })
-        .catch(() => {});
-    }
+        }
+      })
+      .catch(() => {});
   }
 
   /** 注册执行器。重复 id 与空模型清单都是编程错误，注册即拒（契约原文）。 */
