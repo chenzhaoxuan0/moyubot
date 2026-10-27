@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { ArrowUp, CalendarClock, Check, Copy, PencilLine, Undo2, X } from "lucide-react";
+import { useLayoutEffect, useRef, useState } from "react";
+import { ArrowUp, CalendarClock, Check, ChevronDown, Copy, PencilLine, Undo2, X } from "lucide-react";
 import type { ChatAttachment } from "../../../core/attachments.ts";
 import { AttachmentsBar } from "../../AttachmentsBar.tsx";
 import { useWorkbench } from "../../../store/useWorkbench.ts";
@@ -30,6 +30,67 @@ function parseSlashCommand(text: string): { isCommand: boolean; name: string; ar
  * 其中 —— 不能当撤回/编辑锚点，否则 daemon 直接 unknown_anchor。
  */
 const isLedgerMessageId = (id: string): boolean => /^(user-\d+|msg_ext_\d+)$/.test(id);
+
+/**
+ * 超长 prompt 气泡的折叠（钳 6 视觉行）：外部编排 prompt（子 agent 任务书、
+ * 注入后的长上下文）动辄上百行，整段铺开会把对话流顶得只剩任务书——默认
+ * 钳到 6 行，点「展开全文」看完整内容，展开态按消息记忆（虚拟卸载不丢）。
+ */
+const userBubbleOpenStates = new Map<string, boolean>();
+
+/** 超长正文区：默认钳 6 行，溢出时显示「展开全文」；展开/收起按消息记忆 */
+function ClampedPromptText({ text, stateKey }: { text: string; stateKey: string }) {
+  const [open, setOpen] = useState(() => userBubbleOpenStates.get(stateKey) ?? false);
+  const [overflows, setOverflows] = useState(false);
+  const pRef = useRef<HTMLParagraphElement | null>(null);
+
+  // 钳制态下的溢出检测：scrollHeight 超过 clientHeight 即超过 6 行；宽度变化
+  //（对话列变宽/变窄导致换行数变化）也要重判，挂 ResizeObserver
+  useLayoutEffect(() => {
+    const p = pRef.current;
+    if (p === null || open) return;
+    const check = (): void => {
+      if (p.scrollHeight - p.clientHeight > 2) setOverflows(true);
+    };
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(p);
+    return () => ro.disconnect();
+  }, [open, text]);
+
+  const toggle = (): void => {
+    const next = !open;
+    userBubbleOpenStates.set(stateKey, next);
+    setOpen(next);
+  };
+
+  return (
+    <>
+      <p
+        ref={pRef}
+        className={cn(
+          "whitespace-pre-wrap text-body leading-relaxed text-ink",
+          // 字面量（Tailwind JIT 只扫源码里的完整类名）；与 USER_BUBBLE_CLAMP_LINES 同值
+          !open && "line-clamp-6",
+        )}
+      >
+        {text}
+      </p>
+      {(overflows || open) && (
+        <button
+          type="button"
+          onClick={toggle}
+          className={cn(
+            "mt-1.5 flex cursor-pointer items-center gap-1 rounded-btn px-1.5 py-0.5 text-caption text-ash transition hover:bg-line-soft hover:text-ink select-none",
+          )}
+        >
+          <ChevronDown size={11} className={cn("transition-transform", open && "rotate-180")} />
+          {open ? "收起" : `展开全文（${text.length} 字）`}
+        </button>
+      )}
+    </>
+  );
+}
 
 export function UserMessageBubble({
   text,
@@ -256,7 +317,7 @@ export function UserMessageBubble({
         )}
         {text.trim() && (
           <div className="max-w-full rounded-[16px] rounded-tr-[4px] border border-line bg-card px-4 py-3 shadow-xs">
-            <p className="whitespace-pre-wrap text-body leading-relaxed text-ink">{text}</p>
+            <ClampedPromptText text={text} stateKey={messageId || `t:${text.slice(0, 60)}`} />
           </div>
         )}
       </div>
