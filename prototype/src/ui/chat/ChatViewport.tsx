@@ -100,10 +100,42 @@ export function ChatViewport({
     renderUnits.forEach((u, unitIdx) => {
       if (u.kind === "item" && u.item.kind === "user.message") {
         turnCount += 1;
+        const rawText = typeof u.item.data.text === "string" ? u.item.data.text.trim() : "";
+        let toolCount = 0;
+        let assistantSummary = "";
+        for (let j = unitIdx + 1; j < renderUnits.length; j++) {
+          const nextUnit = renderUnits[j]!;
+          if (nextUnit.kind === "item" && nextUnit.item.kind === "user.message") {
+            break;
+          }
+          if (nextUnit.kind === "work") {
+            toolCount += nextUnit.entries.filter((e) => e.kind === "tool").length;
+            if (!assistantSummary) {
+              const msg = nextUnit.entries.find(
+                (e) => e.kind === "assistant.message" && typeof e.data?.text === "string",
+              );
+              if (msg && typeof msg.data.text === "string") {
+                assistantSummary = msg.data.text.trim().slice(0, 160);
+              }
+            }
+          } else if (nextUnit.kind === "item") {
+            if (nextUnit.item.kind === "tool") toolCount += 1;
+            if (
+              !assistantSummary &&
+              nextUnit.item.kind === "assistant.message" &&
+              typeof nextUnit.item.data?.text === "string"
+            ) {
+              assistantSummary = nextUnit.item.data.text.trim().slice(0, 160);
+            }
+          }
+        }
         anchors.push({
           turnIndex: turnCount,
           userMessageId: String(u.item.data.messageId || u.item.id),
-          queryPreview: typeof u.item.data.text === "string" ? u.item.data.text.trim().slice(0, 36) : "",
+          queryPreview: rawText.slice(0, 36),
+          queryText: rawText,
+          assistantSummary: assistantSummary || undefined,
+          toolCount: toolCount > 0 ? toolCount : undefined,
           at: u.item.at,
           itemIndex: unitIdx,
         });
@@ -183,22 +215,23 @@ export function ChatViewport({
   );
 
   return (
-    <div
-      ref={containerRef}
-      className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden selection:bg-teal-tint selection:text-ink"
-    >
-      {/* 顶部悬浮查找栏（Ctrl+F） */}
-      <InChatFindBar containerRef={containerRef} />
+    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div
+        ref={containerRef}
+        className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden selection:bg-teal-tint selection:text-ink"
+      >
+        {/* 顶部悬浮查找栏（Ctrl+F） */}
+        <InChatFindBar containerRef={containerRef} />
 
-      {/* 选中文本微型交互 Tooltip（引用追问、复制） */}
-      <SelectionTooltip containerRef={containerRef} />
+        {/* 选中文本微型交互 Tooltip（引用追问、复制） */}
+        <SelectionTooltip containerRef={containerRef} />
 
-      {/* 轮次导航大纲条（右轨） */}
-      <TurnNavigator
-        anchors={turnAnchors}
-        containerRef={containerRef}
-        onNavigate={handleScrollToTurn}
-      />
+        {/* 轮次导航大纲条（右轨） */}
+        <TurnNavigator
+          anchors={turnAnchors}
+          containerRef={containerRef}
+          onNavigate={handleScrollToTurn}
+        />
 
       {/* 居中正文阅读列 */}
       <div
@@ -266,16 +299,23 @@ export function ChatViewport({
           </div>
         )}
 
-        {/* 忙态底部指示 */}
+        {/* 忙态底部指示（对齐 DeepSeek 蓝色胶囊状态标） */}
         {busy && (
-          <div className="mt-3 flex items-center gap-2 text-body-sm text-teal select-none">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal" aria-hidden />
-            <span>{unit?.name ?? "bot"} 正在思考与执行…</span>
+          <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-teal/30 bg-teal-tint/40 px-3 py-1 text-caption text-teal select-none shadow-xs">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-teal opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-teal" />
+            </span>
+            <span className="font-medium animate-text-shimmer">
+              {unit?.name ?? "bot"} 正在思考与执行…
+            </span>
           </div>
         )}
       </div>
 
-      {/* 悬浮回到底部 FAB 按钮（带忙态未读流式脉冲指示） */}
+      </div>
+
+      {/* 悬浮回到底部 FAB 按钮（居中悬浮于主对话页面底部对话框上方） */}
       <BackToBottomFab
         visible={showBackToBottom}
         busy={busy}
@@ -357,13 +397,18 @@ function WorkGroupRow({
   busy: boolean;
   lastUserTurnId: string | number | undefined;
 }) {
-  // 保持默认折叠状态，绝不随运行状态自动展开收起导致画面剧烈跳跃；
-  // 用户展开过的组在虚拟卸载重挂后保持展开（记忆见 workGroupOpenStates）
-  const [open, setOpen] = useState(() => workGroupOpenStates.get(groupKey) ?? false);
+  // 运行中默认自动徐徐展开以呈现思考与工具流式执行过程；
+  // 运行结束时（任务落定）自动折叠回收到单行摘要；
+  // 用户手动点击展开/收起时优先遵循用户意图
+  const [userToggled, setUserToggled] = useState(false);
+  const [manualOpen, setManualOpen] = useState(() => workGroupOpenStates.get(groupKey) ?? false);
+  const open = userToggled ? manualOpen : running;
+
   const toggleOpen = (): void => {
     const next = !open;
+    setUserToggled(true);
+    setManualOpen(next);
     workGroupOpenStates.set(groupKey, next);
-    setOpen(next);
   };
 
   const toolCount = entries.filter((e) => e.kind === "tool").length;
@@ -426,7 +471,7 @@ function WorkGroupRow({
         onClick={toggleOpen}
         aria-expanded={open}
         className={cn(
-          "group flex w-full cursor-pointer items-center gap-1.5 -ml-1 rounded-btn px-1 py-1 text-left text-caption transition select-none",
+          "group flex w-full cursor-pointer items-center gap-1.5 rounded-btn px-1.5 py-1 text-left text-caption transition select-none",
           running ? "text-graphite" : "text-ash hover:text-graphite",
         )}
       >
@@ -437,7 +482,7 @@ function WorkGroupRow({
             running ? "animate-pulse text-teal" : failed ? "text-loss" : "text-ash",
           )}
         />
-        <span className={cn("shrink-0 font-medium", running ? "text-teal" : "text-graphite")}>
+        <span className={cn("shrink-0 font-medium", running ? "text-teal animate-text-shimmer" : "text-graphite")}>
           {running ? (activeLabel ?? "工作中…") : toolCount > 0 ? "执行过程" : "思考过程"}
         </span>
         <span className="min-w-0 truncate text-ash font-mono text-[11px]">

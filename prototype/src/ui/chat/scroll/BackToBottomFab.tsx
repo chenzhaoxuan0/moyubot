@@ -19,7 +19,7 @@ export function BackToBottomFab({
       aria-label="回到底部"
       title={busy ? "助手正在生成新内容，点击回到底部跟随" : "回到底部"}
       className={cn(
-        "group absolute bottom-4 right-6 z-20 flex items-center gap-1.5 rounded-full border border-line bg-card/90 px-3 py-1.5 shadow-md backdrop-blur-sm transition-all duration-150 hover:bg-card hover:shadow-lg active:scale-95 cursor-pointer",
+        "group absolute bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1.5 rounded-full border border-line bg-canvas px-3.5 py-1.5 shadow-lg transition-all duration-150 hover:bg-card hover:border-line-soft active:scale-95 cursor-pointer text-ink select-none",
         "animate-in fade-in slide-in-from-bottom-2",
       )}
     >
@@ -29,7 +29,7 @@ export function BackToBottomFab({
           <span className="relative inline-flex h-2 w-2 rounded-full bg-teal" />
         </span>
       ) : (
-        <ArrowDown size={13} className="text-graphite transition-transform group-hover:translate-y-0.5 text-ink" />
+        <ArrowDown size={13} className="text-graphite transition-transform group-hover:translate-y-0.5 group-hover:text-ink" />
       )}
       <span className="text-caption font-medium text-graphite group-hover:text-ink">
         {busy ? "有新生成" : "回到底部"}

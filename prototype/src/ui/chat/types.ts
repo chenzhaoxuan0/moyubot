@@ -59,6 +59,12 @@ export interface TurnNavAnchor {
   readonly turnIndex: number;
   readonly userMessageId: string;
   readonly queryPreview: string;
+  /** 用户提问完整文本（供悬停大纲多行卡片展示） */
+  readonly queryText?: string;
+  /** 该轮助手的回复摘要或工具执行总结（供悬停大纲预览） */
+  readonly assistantSummary?: string;
+  /** 该轮调用的工具总数 */
+  readonly toolCount?: number;
   readonly at: number;
   readonly itemIndex?: number;
 }
