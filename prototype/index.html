@@ -44,6 +44,16 @@
     </script>
   </head>
   <body class="bg-canvas text-ink">
+    <!-- Apple Liquid Glass SVG 光学折射滤镜定义（对齐 macOS Tahoe / visionOS 液体折射规范） -->
+    <svg style="position: absolute; width: 0; height: 0; pointer-events: none; overflow: hidden;" aria-hidden="true">
+      <defs>
+        <filter id="apple-liquid-lens" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">
+          <feTurbulence type="fractalNoise" baseFrequency="0.035" numOctaves="3" result="noise" />
+          <feDisplacementMap in="SourceGraphic" in2="noise" scale="5" xChannelSelector="R" yChannelSelector="G" result="displaced" />
+          <feColorMatrix in="displaced" type="saturate" values="1.8" result="saturated" />
+        </filter>
+      </defs>
+    </svg>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

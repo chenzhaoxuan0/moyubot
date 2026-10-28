@@ -149,7 +149,7 @@ function applyToDom(state: AppearanceState): void {
   root.classList.toggle("dark", resolved === "dark");
   root.setAttribute("data-theme", resolved);
   root.setAttribute("data-chat-style", state.chatStyle ?? "classic");
-  root.style.setProperty("--aw-glass-blur", `${state.glassBlur ?? 16}px`);
+  root.style.setProperty("--aw-glass-blur", `${state.glassBlur ?? 8}px`);
 
   const electronBridge = (
     window as unknown as {
@@ -411,7 +411,7 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
   },
 
   setGlassBlur: (blur) => {
-    set(publish({ ...get(), glassBlur: clamp(Math.round(blur), 4, 48) }));
+    set(publish({ ...get(), glassBlur: clamp(Math.round(blur), 2, 40) }));
   },
 
   applyPreset: (preset) => {

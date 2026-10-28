@@ -272,7 +272,7 @@ export interface AppearanceState {
   presetId: string | null;
   /** 对话视图形态：classic=经典无气泡平铺，glass=液态毛玻璃卡片（特别适合带壁纸） */
   chatStyle: ChatStyle;
-  /** 液态玻璃模糊度 4..48px，默认 16px（对齐 Apple Thin/Liquid 标准） */
+  /** 液态玻璃模糊度 2..32px，默认 8px（对齐 Apple Liquid 晶润水感标准） */
   glassBlur: number;
 }
 
@@ -434,7 +434,7 @@ export function defaultAppearanceState(): AppearanceState {
     avatarFrame: "rounded",
     presetId: PRESET_PARCHMENT.id,
     chatStyle: "classic",
-    glassBlur: 16,
+    glassBlur: 8,
   };
 }
 
@@ -753,7 +753,7 @@ export function sanitizeAppearanceState(raw: unknown): AppearanceState {
     avatarFrame: input.avatarFrame === "square" ? "square" : "rounded",
     presetId: typeof input.presetId === "string" ? input.presetId : null,
     chatStyle: input.chatStyle === "glass" ? "glass" : "classic",
-    glassBlur: typeof input.glassBlur === "number" && Number.isFinite(input.glassBlur) ? clamp(Math.round(input.glassBlur), 4, 48) : 16,
+    glassBlur: typeof input.glassBlur === "number" && Number.isFinite(input.glassBlur) ? clamp(Math.round(input.glassBlur), 2, 40) : 8,
   };
 }
 
@@ -856,6 +856,6 @@ export function toDreamSkinTheme(
     },
     colors: { ...profile.palette },
     chatStyle: state.chatStyle ?? "classic",
-    glassBlur: state.glassBlur ?? 16,
+    glassBlur: state.glassBlur ?? 8,
   };
 }

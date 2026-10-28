@@ -427,7 +427,7 @@ export function AppearanceSettingsSection() {
                 </p>
               </div>
               <span className="font-mono text-body-sm font-semibold text-teal px-2 py-0.5 rounded-btn bg-teal-tint/30">
-                {store.glassBlur ?? 16}px
+                {store.glassBlur ?? 8}px
               </span>
             </div>
 
@@ -436,12 +436,12 @@ export function AppearanceSettingsSection() {
               <p className="mb-1.5 text-caption text-ash">推荐标准档位（Apple Material 分级）</p>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {[
-                  { id: 8, label: "超清水感", desc: "8px · 轻透水膜" },
-                  { id: 16, label: "晶润液态", desc: "16px · 苹果推荐默认" },
-                  { id: 24, label: "柔光润泽", desc: "24px · 细腻柔和" },
-                  { id: 36, label: "沉稳厚实", desc: "36px · 强背景隔绝" },
+                  { id: 4, label: "超透极净", desc: "4px · 极薄透明光膜" },
+                  { id: 8, label: "晶润液态", desc: "8px · 苹果官方推荐" },
+                  { id: 14, label: "柔光水感", desc: "14px · 柔和聚光" },
+                  { id: 22, label: "经典磨砂", desc: "22px · 传统雾面备选" },
                 ].map((tier) => {
-                  const active = (store.glassBlur ?? 16) === tier.id;
+                  const active = (store.glassBlur ?? 8) === tier.id;
                   return (
                     <button
                       key={tier.id}
@@ -466,14 +466,14 @@ export function AppearanceSettingsSection() {
             <div className="space-y-1.5 pt-1">
               <div className="flex items-center justify-between text-caption text-ash">
                 <span>连续滑块微调</span>
-                <span>4px — 48px</span>
+                <span>2px — 32px</span>
               </div>
               <input
                 type="range"
-                min={4}
-                max={48}
+                min={2}
+                max={32}
                 step={1}
-                value={store.glassBlur ?? 16}
+                value={store.glassBlur ?? 8}
                 onChange={(e) => store.setGlassBlur(Number(e.target.value))}
                 className="w-full accent-teal cursor-pointer"
                 aria-label="液态玻璃模糊度（像素）"
