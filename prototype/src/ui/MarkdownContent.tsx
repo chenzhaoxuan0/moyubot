@@ -46,7 +46,7 @@ class MarkdownBoundary extends Component<
 
   render() {
     if (this.state.failed) {
-      return <p className="whitespace-pre-wrap leading-relaxed text-ink">{this.props.content}</p>;
+      return <p className="whitespace-pre-wrap leading-[2] text-ink">{this.props.content}</p>;
     }
     return this.props.children;
   }
