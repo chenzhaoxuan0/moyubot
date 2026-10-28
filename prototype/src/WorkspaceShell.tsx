@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PanelRightOpen } from "lucide-react";
 import { Group, Panel, Separator, type PanelImperativeHandle } from "react-resizable-panels";
 import { AutomationsPage } from "./ui/AutomationsPage.tsx";
@@ -14,9 +14,8 @@ import { SourceControlPage } from "./ui/SourceControlPage.tsx";
 import { PermissionDialog } from "./ui/PermissionDialog.tsx";
 import { Timeline, EmptyState } from "./ui/Timeline.tsx";
 import { ChatTerminalDock } from "./ui/ChatTerminalDock.tsx";
-import { useWorkbench, selectActiveUnit } from "./store/useWorkbench.ts";
-import { useAppearance } from "./store/useAppearance.ts";
-import { deriveChatAccentVariables, isValidColor } from "./core/appearance.ts";
+import { useWorkbench } from "./store/useWorkbench.ts";
+import { useChatAccentStyle } from "./ui/useChatAccentStyle.ts";
 import { useTerminalStore } from "./store/useTerminalStore.ts";
 import { Sidebar } from "./ui/Sidebar.tsx";
 import { TerminalPanel } from "./ui/TerminalPanel.tsx";
@@ -291,15 +290,8 @@ function ConversationSlot() {
   // 与 Timeline 同源判空（raw timeline 为空 ⇔ 归并后 items 为空 —— 归并只在
   // 既有事件间插 divider，不会无中生有）
   const timelineEmpty = useWorkbench((s) => s.timeline.length === 0);
-  // 本 bot 对话强调色（2026-10-28）：active unit 带 themeAccent 时，把 accent 系
-  // 变量内联到对话列容器上——子树继承生效，全局主题不动；无值/非法值 = 跟随全局
-  const unit = useWorkbench(selectActiveUnit);
-  const resolvedTheme = useAppearance((s) => s.resolvedAppearance);
-  const chatAccentStyle = useMemo(() => {
-    const accent = unit?.themeAccent;
-    if (!accent || !isValidColor(accent)) return undefined;
-    return deriveChatAccentVariables(accent, resolvedTheme === "dark") as CSSProperties;
-  }, [unit?.themeAccent, resolvedTheme]);
+  // 本 bot 对话强调色（2026-10-28）：见 ui/useChatAccentStyle.ts
+  const chatAccentStyle = useChatAccentStyle();
 
   return (
     <Panel minSize="30%" className="min-w-0">

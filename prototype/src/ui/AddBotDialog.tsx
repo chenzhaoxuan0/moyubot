@@ -123,6 +123,9 @@ const SECTION_LIBRARY: readonly { label: string; snippet: (name: string) => stri
 const PERSONA_TEMPLATE = (name: string, role: string) =>
   `你是「${name}」——${role || "一个领域专属助手"}。\n\n语气与风格：\n- 简洁、务实、不堆砌客套\n- 结论先行，细节按需展开\n\n原则：\n- 不确定先问，不要猜\n- 交付前自检一遍\n`;
 
+/** 取色器起始位的兜底色（打开后一次性对齐当前全局 accent，见下方 effect） */
+const ACCENT_PICKER_SEED_FALLBACK = "#7aa2f7";
+
 function agentsMdTemplate(name: string, role: string, rootPath: string): string {
   return `# ${name}\n\n> ${role || "（一句话说清这个 bot 被设计用来做什么）"}\n\n## 这个 bot 负责什么\n- 边界：\n- 产出物：\n\n## 工作目录\n- 根目录：\`${rootPath}\`\n- 动手前先读目录里已有的文件，长期记忆与产出都落在这里\n\n## 工作方式\n- 接到任务先列 3 步以内的计划，再执行\n- 不确定的地方先提问，不要猜\n\n## 交付与验收\n- 每次交付一个可检查的产物（文件 / 清单 / 报告）\n- 完成后汇报：做了什么、产出在哪、下一步建议\n`;
 }
@@ -179,7 +182,9 @@ export function AddBotDialog({
   /** hex 输入的草稿（draft-on-blur 提交，AppearanceSettingsSection.ColorField 同款） */
   const [accentHexDraft, setAccentHexDraft] = useState<string | null>(null);
   /** 未设主题色时原生取色器的起始位（读一次全局 accent，让 picker 从用户熟悉的颜色出发） */
-  const [accentPickerSeed, setAccentPickerSeed] = useState("#7aa2f7");
+  const [accentPickerSeed, setAccentPickerSeed] = useState(ACCENT_PICKER_SEED_FALLBACK);
+  /** 上传路径刚同步提取过候选的那个头像 data URL——effect 据此跳过重复提取 */
+  const lastExtractedAvatarRef = useRef<string | null>(null);
   const [resident, setResident] = useState(false);
   const [autoCollect, setAutoCollect] = useState(true);
   /** 单元形态（弱标签）：编辑模式可切 bot ↔ 项目（ADR 0011 第 2 条） */
@@ -229,8 +234,15 @@ export function AddBotDialog({
     setRuntimeId(rid);
     setModelHint(binding?.modelHint ?? runtimes.find((r) => r.id === rid)?.defaultModel ?? null);
     setAvatar(b.avatar ?? null);
-    setThemeAccent(b.themeAccent ?? null);
+    // bot.json 是手可编辑文件：themeAccent 可能是任意 JSON 值，非法/非字符串一律
+    // 归零（跟随全局），避免坏值进表单后又原样写回盘上
+    const rawAccent = b.themeAccent;
+    setThemeAccent(typeof rawAccent === "string" && isValidColor(rawAccent) ? toHex(rawAccent) : null);
     setAccentHexDraft(null);
+    // 换填充即换头像：旧候选清空（effect 会按新头像重提），防止上一张头像的
+    // 签名色被点到这个 bot 上
+    setAccentCandidates([]);
+    lastExtractedAvatarRef.current = null;
     setResident(Boolean(b.resident));
     setAutoCollect(b.autoCollect !== false);
     setKind(b.kind ?? "bot");
@@ -310,15 +322,19 @@ export function AddBotDialog({
 
   // 头像候选签名色：头像一变（上传 / 更换 / 编辑预填）就重算。黑底头像的
   // 签名色常只有小面积，这里只出候选，选哪个永远归用户；头像清空即候选清空。
+  // 上传路径已在裁剪画布上同步提取过（见 onAvatarFile），同一个 data URL 不再跑异步。
   useEffect(() => {
     if (!open) return;
     const src = avatar;
     if (!src) {
       setAccentCandidates([]);
+      lastExtractedAvatarRef.current = null;
       return;
     }
+    if (src === lastExtractedAvatarRef.current) return;
     let cancelled = false;
-    void extractAvatarAccents(src)
+    // 头像本体就是 96×96，maxSide 传 96 不再降采样，与上传路径同一份像素
+    void extractAvatarAccents(src, 96)
       .then((cs) => {
         if (!cancelled) setAccentCandidates(cs);
       })
@@ -403,21 +419,31 @@ export function AddBotDialog({
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      const side = Math.min(img.naturalWidth, img.naturalHeight);
-      const canvas = document.createElement("canvas");
-      canvas.width = 96;
-      canvas.height = 96;
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      if (ctx) {
-        ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 96, 96);
-        const dataUrl = canvas.toDataURL("image/webp", 0.9);
-        setAvatar(dataUrl);
-        // 换头像即换签名色：画布现成，同步提取候选并自动顶上最优一个
-        //（候选行随后展示，用户可再改；提不到鲜明色则保持原值不动）
-        const candidates = accentCandidatesFromImageData(ctx.getImageData(0, 0, 96, 96));
-        if (candidates.length > 0) setThemeAccent(candidates[0]!);
+      // SVG 无固有尺寸（naturalWidth=0）或外链污染画布都会在 drawImage/toDataURL
+      // 抛异常：revoke 必须走 finally 兜底（否则每次尝试漏一个 blob URL），失败
+      // 静默——用户重选一张即可，不该为一张坏图弹错误
+      try {
+        const side = Math.min(img.naturalWidth, img.naturalHeight);
+        if (side <= 0) return;
+        const canvas = document.createElement("canvas");
+        canvas.width = 96;
+        canvas.height = 96;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (ctx) {
+          ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 96, 96);
+          const dataUrl = canvas.toDataURL("image/webp", 0.9);
+          setAvatar(dataUrl);
+          // 换头像即换签名色：画布现成，同步提取候选并自动顶上最优一个
+          //（候选行随后展示，用户可再改；提不到鲜明色则保持原值不动）。
+          // 结果直接进候选状态并记下 data URL——下方 effect 对它跳过重复提取
+          const candidates = accentCandidatesFromImageData(ctx.getImageData(0, 0, 96, 96));
+          setAccentCandidates(candidates);
+          lastExtractedAvatarRef.current = dataUrl;
+          if (candidates.length > 0) setThemeAccent(candidates[0]!);
+        }
+      } finally {
+        URL.revokeObjectURL(url);
       }
-      URL.revokeObjectURL(url);
     };
     img.onerror = () => URL.revokeObjectURL(url);
     img.src = url;
@@ -726,8 +752,8 @@ export function AddBotDialog({
                         className={cn(
                           "h-8 w-8 shrink-0 rounded-btn border transition active:scale-95",
                           themeAccent === c
-                            ? "border-teal ring-2 ring-teal/30"
-                            : "border-line hover:border-teal/60",
+                            ? "border-ink/70 ring-2 ring-ink/25"
+                            : "border-line hover:border-ink/50",
                         )}
                         style={{ backgroundColor: c }}
                       />

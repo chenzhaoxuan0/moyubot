@@ -81,8 +81,14 @@ const CANDIDATE_HUE_GAP = 30;
 /** 归一化目标域：饱和度与明度的可用区间（见文件头第 4 条） */
 const SAT_RANGE = [0.55, 0.92] as const;
 const LIGHT_RANGE = [0.46, 0.66] as const;
+/** 无彩色剔除阈值：低于此饱和度 / 超出此明度区间的像素视为底色或噪点 */
+const ACHROMATIC_SAT = 0.28;
+const LIGHT_FLOOR = 0.14;
+const LIGHT_CEIL = 0.93;
+/** 半透明像素的参与门槛（圆角 / PNG 透明区不参与统计） */
+const ALPHA_THRESHOLD = 128;
 
-const clamp01 = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
+const clampRange = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
 interface Bucket {
   readonly hueIdx: number;
@@ -100,17 +106,15 @@ interface Bucket {
 export function accentCandidatesFromImageData(data: ImageData): string[] {
   const { data: px } = data;
   const buckets = new Map<string, Bucket>();
-  let sampled = 0;
 
   for (let i = 0; i < px.length; i += 4) {
-    if (px[i + 3]! < 128) continue; // 透明区（圆角/PNG）不参与
+    if (px[i + 3]! < ALPHA_THRESHOLD) continue; // 透明区（圆角/PNG）不参与
     const r = px[i]!;
     const g = px[i + 1]!;
     const b = px[i + 2]!;
     const { h, s, l } = rgbToHsl(r, g, b);
-    sampled += 1;
     // 无彩色整批剔除：黑底/白底/灰阶都不是签名色
-    if (s < 0.28 || l < 0.14 || l > 0.93) continue;
+    if (s < ACHROMATIC_SAT || l < LIGHT_FLOOR || l > LIGHT_CEIL) continue;
     const hueIdx = Math.floor(h / (360 / HUE_BUCKETS)) % HUE_BUCKETS;
     const bright = l >= 0.5;
     const key = `${hueIdx}:${bright ? 1 : 0}`;
@@ -132,17 +136,33 @@ export function accentCandidatesFromImageData(data: ImageData): string[] {
     }
   }
 
-  if (buckets.size === 0 || sampled === 0) return [];
+  if (buckets.size === 0) return [];
 
   // 相邻色相桶（同明暗半区）合并成簇：签名色常横跨两三个桶，不合并会被自己稀释
   const ordered = [...buckets.values()].sort((a, b) => b.weight - a.weight);
   const claimed = new Set<Bucket>();
-  const clusters: { weight: number; rSum: number; gSum: number; bSum: number; hueDeg: number }[] = [];
+  const clusters: {
+    weight: number;
+    rSum: number;
+    gSum: number;
+    bSum: number;
+    sinSum: number;
+    cosSum: number;
+  }[] = [];
   for (const seed of ordered) {
     if (claimed.has(seed)) continue;
     claimed.add(seed);
     let { weight, rSum, gSum, bSum } = seed;
-    let hueAcc = (seed.hueIdx + 0.5) * (360 / HUE_BUCKETS) * seed.weight;
+    // 簇色相用环上的加权圆均值（sin/cos 分量和）：色相环首尾相接，线性平均会让
+    // 跨 0° 的红簇算出 ~180° 的假青色，去重时误杀自己
+    let sinSum = 0;
+    let cosSum = 0;
+    const addBucket = (b: Bucket): void => {
+      const rad = (((b.hueIdx + 0.5) * (360 / HUE_BUCKETS)) * Math.PI) / 180;
+      sinSum += Math.sin(rad) * b.weight;
+      cosSum += Math.cos(rad) * b.weight;
+    };
+    addBucket(seed);
     for (const other of ordered) {
       if (claimed.has(other) || other.bright !== seed.bright) continue;
       // 色相环距离 ≤ 1 桶即并入（含 0↔23 的首尾相接）
@@ -153,30 +173,30 @@ export function accentCandidatesFromImageData(data: ImageData): string[] {
         rSum += other.rSum;
         gSum += other.gSum;
         bSum += other.bSum;
-        hueAcc += (other.hueIdx + 0.5) * (360 / HUE_BUCKETS) * other.weight;
+        addBucket(other);
       }
     }
-    clusters.push({ weight, rSum, gSum, bSum, hueDeg: hueAcc / weight });
+    clusters.push({ weight, rSum, gSum, bSum, sinSum, cosSum });
   }
   clusters.sort((a, b) => b.weight - a.weight);
 
   // 逐簇归一化输出；与已入选候选色相过近（含明暗镜像）的跳过
-  const out: string[] = [];
+  const picked: { hex: string; hueDeg: number }[] = [];
   for (const c of clusters) {
-    if (out.length >= MAX_CANDIDATES) break;
-    if (out.some((hex) => hueDistance(c.hueDeg, rgbToHsl(parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)).h) < CANDIDATE_HUE_GAP)) {
-      continue;
-    }
+    if (picked.length >= MAX_CANDIDATES) break;
+    const hueDeg = ((Math.atan2(c.sinSum, c.cosSum) * 180) / Math.PI + 360) % 360;
+    if (picked.some((p) => hueDistance(p.hueDeg, hueDeg) < CANDIDATE_HUE_GAP)) continue;
     const avg = rgbToHsl(c.rSum / c.weight, c.gSum / c.weight, c.bSum / c.weight);
-    out.push(
-      hslToHex(
+    picked.push({
+      hueDeg,
+      hex: hslToHex(
         avg.h,
-        clamp01(avg.s, SAT_RANGE[0], SAT_RANGE[1]),
-        clamp01(avg.l, LIGHT_RANGE[0], LIGHT_RANGE[1]),
+        clampRange(avg.s, SAT_RANGE[0], SAT_RANGE[1]),
+        clampRange(avg.l, LIGHT_RANGE[0], LIGHT_RANGE[1]),
       ),
-    );
+    });
   }
-  return out;
+  return picked.map((p) => p.hex);
 }
 
 /**
