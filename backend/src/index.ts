@@ -108,6 +108,9 @@ import {
   readLogoDataUrl,
   saveLogo,
   deleteLogo,
+  listThemes,
+  saveTheme,
+  deleteTheme,
 } from "./appearance/store.ts";
 import { DailyDigest } from "./memory/dailyDigest.ts";
 import { stewardSearch, stewardRecent, ensureSteward, stewardRoot, stewardDefinition, STEWARD_ID } from "./memory/steward.ts";
@@ -2944,14 +2947,15 @@ registerMethod("bot.initWorkspace", async (params) => {
 // ---- 外观（appearance）—— <homeDir>/appearance.json，用户可让 agent 直接改这个文件 ----
 registerMethod("appearance.read", async () => {
   const meta = await readAppearance(config.homeDir);
-  // 壁纸 / logo 单独带回来：图不进 JSON，否则那个文件会大到没法手改
-  const [wallpaperDataUrl, logoDataUrl] = meta.exists
+  // 壁纸 / logo / 自定义预设主题 单独带回来：图不进 JSON，主题独立存储在 themes/ 目录
+  const [wallpaperDataUrl, logoDataUrl, themes] = meta.exists
     ? await Promise.all([
         readWallpaperDataUrl(config.homeDir, meta.wallpaperRel),
         readLogoDataUrl(config.homeDir, meta.logoRel),
+        listThemes(config.homeDir),
       ])
-    : [null, null];
-  return { ...meta, wallpaperDataUrl, logoDataUrl };
+    : [null, null, await listThemes(config.homeDir)];
+  return { ...meta, wallpaperDataUrl, logoDataUrl, themes };
 });
 registerMethod("appearance.write", async (params) => {
   const p = (params ?? {}) as { content?: string; expectedHash?: string | null };
@@ -2983,6 +2987,22 @@ registerMethod("appearance.logo.save", async (params) => {
 registerMethod("appearance.logo.delete", async (params) => {
   const p = (params ?? {}) as { path?: string };
   return { deleted: await deleteLogo(config.homeDir, p.path ?? null) };
+});
+// 预设主题列表与新建保存：文件落到 <homeDir>/themes/*.json，agent 可直接改
+registerMethod("appearance.theme.list", async () => {
+  return listThemes(config.homeDir);
+});
+registerMethod("appearance.theme.save", async (params) => {
+  const p = (params ?? {}) as { preset?: any };
+  const preset = p.preset ?? p;
+  return saveTheme(config.homeDir, preset);
+});
+registerMethod("appearance.theme.delete", async (params) => {
+  const p = (params ?? {}) as { id?: string };
+  if (typeof p.id !== "string" || !p.id) {
+    throw Object.assign(new Error("id is required"), { code: "bad_params" });
+  }
+  return { deleted: await deleteTheme(config.homeDir, p.id) };
 });
 // ---- 出图供应商 profile —— <homeDir>/image-profiles.json，密钥永不下发浏览器 ----
 registerMethod("image.profiles.list", () => {

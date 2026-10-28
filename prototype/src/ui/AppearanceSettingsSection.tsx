@@ -15,6 +15,7 @@ import {
   Upload,
   Download,
   Trash2,
+  Plus,
   Smartphone,
   Laptop,
   PanelBottom,
@@ -250,6 +251,11 @@ export function AppearanceSettingsSection() {
   const [logoError, setLogoError] = useState<string | null>(null);
   /** 待裁剪的候选图：选图先进 LogoCropDialog 定位方框，确认后才真正导入 */
   const [cropFile, setCropFile] = useState<File | null>(null);
+  const [newThemeOpen, setNewThemeOpen] = useState(false);
+  const [newThemeName, setNewThemeName] = useState("");
+  const [newThemeDesc, setNewThemeDesc] = useState("");
+  const [newThemeError, setNewThemeError] = useState<string | null>(null);
+  const [savingTheme, setSavingTheme] = useState(false);
 
   const layoutPref = useLayoutStore((s) => s.preference);
   const setLayoutPref = useLayoutStore((s) => s.setPreference);
@@ -314,23 +320,115 @@ export function AppearanceSettingsSection() {
       <SectionCard
         icon={<Palette size={16} />}
         title="预设主题"
-        desc="一键换十组配色。透明度、表面、壁纸等你的自定义设置在切换时原样保留；之后再微调会变成「自定义」。"
+        desc="一键换十组配色。所有自定义预设均以独立 JSON 文件存放在 ~/.agent-workbench/themes/ 目录下，方便 Agent 随时直接读取或修改定制。"
+        action={
+          <button
+            type="button"
+            onClick={() => {
+              setNewThemeName("");
+              setNewThemeDesc("");
+              setNewThemeError(null);
+              setNewThemeOpen(true);
+            }}
+            className="flex shrink-0 items-center gap-1.5 rounded-btn bg-teal px-2.5 py-1 text-caption font-medium text-canvas hover:bg-teal-hover transition cursor-pointer"
+          >
+            <Plus size={13} strokeWidth={2.5} />
+            <span>保存当前为新预设</span>
+          </button>
+        }
       >
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {APPEARANCE_PRESETS.map((preset) => {
-            const active = preset.id === presetId;
-            // 预览用「该预设自己会切过去的档案」，不是当前正在编辑的档案。
-            // 否则 DS 那两个深色预设（哥特/暮色）在浅色模式下会借用浅色档案，
-            // 四张卡片看上去一模一样 —— 选哪张都看不出区别。
-            const swatchProfile = preset.mode === "auto" ? preset.light : preset[preset.mode];
-            const swatches = swatchProfile.palette;
-            return (
+        {/* 新建保存主题卡片 */}
+        {newThemeOpen && (
+          <div className="mb-4 rounded-card border border-teal-edge/60 bg-teal-tint/15 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
+                <Palette size={14} className="text-teal" />
+                保存当前调色与设置为独立预设主题
+              </span>
               <button
-                key={preset.id}
                 type="button"
+                onClick={() => setNewThemeOpen(false)}
+                className="text-caption text-ash hover:text-ink cursor-pointer"
+              >
+                取消
+              </button>
+            </div>
+            <p className="text-caption text-graphite">
+              主题将保存为独立 JSON 配置文件存放在 <code className="font-mono bg-canvas px-1.5 py-0.5 rounded border border-line">~/.agent-workbench/themes/&lt;id&gt;.json</code>。保存后方便让 Agent 直接阅读或批量微调。
+            </p>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <label className="block text-caption text-ink font-medium mb-1">预设名称 *</label>
+                <input
+                  type="text"
+                  value={newThemeName}
+                  onChange={(e) => {
+                    setNewThemeName(e.target.value);
+                    setNewThemeError(null);
+                  }}
+                  placeholder="例如：赛博深蓝、薄暮森林..."
+                  className="w-full rounded-input border border-line bg-canvas px-3 py-1.5 text-body-sm text-ink outline-none focus:border-teal"
+                />
+              </div>
+              <div>
+                <label className="block text-caption text-ink font-medium mb-1">主题说明（可选）</label>
+                <input
+                  type="text"
+                  value={newThemeDesc}
+                  onChange={(e) => setNewThemeDesc(e.target.value)}
+                  placeholder="例如：高对比深色、带柔光绿高亮..."
+                  className="w-full rounded-input border border-line bg-canvas px-3 py-1.5 text-body-sm text-ink outline-none focus:border-teal"
+                />
+              </div>
+            </div>
+            {newThemeError && (
+              <p className="text-caption text-loss">{newThemeError}</p>
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setNewThemeOpen(false)}
+                className="rounded-btn border border-line px-3 py-1 text-body-sm text-graphite hover:bg-surface-hover hover:text-ink cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={savingTheme}
+                onClick={async () => {
+                  if (!newThemeName.trim()) {
+                    setNewThemeError("请填写预设名称");
+                    return;
+                  }
+                  setSavingTheme(true);
+                  try {
+                    await store.saveAsPreset(newThemeName.trim(), newThemeDesc.trim());
+                    setNewThemeOpen(false);
+                  } catch (err) {
+                    setNewThemeError(err instanceof Error ? err.message : "保存预设失败");
+                  } finally {
+                    setSavingTheme(false);
+                  }
+                }}
+                className="rounded-btn bg-teal px-3 py-1 text-body-sm font-medium text-canvas hover:bg-teal-hover transition cursor-pointer disabled:opacity-50"
+              >
+                {savingTheme ? "正在保存..." : "确认保存主题"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {[...APPEARANCE_PRESETS, ...(store.customPresets ?? [])].map((preset) => {
+            const active = preset.id === presetId;
+            const swatchProfile = preset.mode === "auto" ? preset.light : preset[preset.mode];
+            const swatches = swatchProfile?.palette ?? activeProfile.palette;
+            return (
+              <div
+                key={preset.id}
                 onClick={() => store.applyPreset(preset)}
                 className={cn(
-                  "group relative rounded-card border p-3 text-left transition",
+                  "group relative rounded-card border p-3 text-left transition cursor-pointer",
                   active
                     ? "border-teal bg-teal-tint/20 ring-1 ring-teal"
                     : "border-line bg-canvas hover:border-line-soft hover:bg-surface-hover",
@@ -344,16 +442,44 @@ export function AppearanceSettingsSection() {
                   )}
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-body-sm font-medium text-ink" title={preset.desc}>
-                    {preset.name}
-                  </span>
-                  {active && (
-                    <span className="flex h-4 w-4 items-center justify-center rounded-full bg-teal text-canvas">
-                      <Check size={11} strokeWidth={3} />
+                  <div className="min-w-0 pr-1">
+                    <span
+                      className="block truncate text-body-sm font-medium text-ink"
+                      title={`${preset.desc || preset.name}${preset.filePath ? ` · ${preset.filePath}` : ""}`}
+                    >
+                      {preset.name}
                     </span>
-                  )}
+                    {!preset.builtin && (
+                      <span className="inline-block text-[10px] text-teal font-medium">
+                        自定义
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {!preset.builtin && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm(`确认从磁盘删除预设「${preset.name}」吗？`)) {
+                            void store.deleteCustomPreset(preset.id);
+                          }
+                        }}
+                        title="删除该自定义预设文件"
+                        aria-label={`删除预设 ${preset.name}`}
+                        className="rounded p-1 text-ash opacity-0 group-hover:opacity-100 hover:bg-loss/15 hover:text-loss transition cursor-pointer"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    )}
+                    {active && (
+                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-teal text-canvas">
+                        <Check size={11} strokeWidth={3} />
+                      </span>
+                    )}
+                  </div>
                 </div>
-              </button>
+              </div>
             );
           })}
         </div>

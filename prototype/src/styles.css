@@ -513,18 +513,18 @@ html[data-chat-style="glass"][data-aw-wallpaper] footer {
   border-top: 1px solid var(--color-line) !important;
 }
 
-/* 主对话列背景遮罩（包含消息流与底部对话框容器）：由设置中的 chatBgOpacity 动态控制，上下整体统一，杜绝明暗断层 */
-html[data-chat-style="glass"][data-aw-wallpaper] body,
-html[data-chat-style="glass"][data-aw-wallpaper] #root {
+/* 主对话列背景遮罩（包含消息流与底部对话框容器）：由设置中的 chatBgOpacity 动态控制，对 classic 和 glass 均统一生效，杜绝明暗断层 */
+html[data-aw-wallpaper] body,
+html[data-aw-wallpaper] #root {
   background-color: transparent !important;
 }
 
-html[data-chat-style="glass"][data-aw-wallpaper] .chat-conversation-root {
+html[data-aw-wallpaper] .chat-conversation-root {
   background-color: color-mix(in srgb, var(--color-canvas) var(--aw-chat-bg-opacity, 35%), transparent) !important;
   transition: background-color 0.2s ease;
 }
 
-html[data-chat-style="glass"][data-aw-wallpaper] .chat-viewport-root {
+html[data-aw-wallpaper] .chat-viewport-root {
   background-color: transparent !important;
 }
 

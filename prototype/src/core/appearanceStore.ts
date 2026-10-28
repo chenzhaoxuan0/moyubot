@@ -17,6 +17,7 @@ import {
   defaultAppearanceState,
   sanitizeAppearanceState,
   toDreamSkinTheme,
+  type AppearancePreset,
   type AppearanceState,
   type ResolvedAppearance,
 } from "../core/appearance.ts";
@@ -41,6 +42,8 @@ export interface AppearanceFileSnapshot {
   readonly wallpaperDataUrl: string | null;
   /** daemon 把自定义 logo 读成 data URL 一起带回来（图不进 JSON） */
   readonly logoDataUrl: string | null;
+  /** daemon 从 themes/ 目录读出的所有自定义预设主题 */
+  readonly themes?: AppearancePreset[];
 }
 
 export type AppearanceLoadSource = "file" | "fallback" | "defaults";
@@ -51,6 +54,7 @@ export interface AppearanceLoadResult {
   /** 文件的绝对路径，设置页要显示它，用户才知道该让 agent 改哪个文件 */
   readonly path: string | null;
   readonly hash: string;
+  readonly customThemes?: AppearancePreset[];
 }
 
 async function call<T>(
@@ -173,7 +177,7 @@ export async function loadAppearance(): Promise<AppearanceLoadResult> {
         snapshot.logoDataUrl,
       );
       // 文件里没有 wallpaper.path 但历史上走过兜底 —— 以文件为准，别把两处状态混起来
-      return { state, source: "file", path: snapshot.path, hash: snapshot.hash };
+      return { state, source: "file", path: snapshot.path, hash: snapshot.hash, customThemes: snapshot.themes ?? [] };
     }
 
     // 文件还没有（首次启动）：把兜底里那份迁上去，之后文件就是唯一真相
@@ -271,3 +275,30 @@ function toBase64(buffer: ArrayBuffer): string {
 
 export { toDreamSkinTheme };
 export type { ResolvedAppearance };
+/* --------------------------------------------------------------------------- 主题预设 RPC */
+
+export async function listThemesRpc(): Promise<AppearancePreset[]> {
+  try {
+    return await call<AppearancePreset[]>("appearance.theme.list");
+  } catch {
+    return [];
+  }
+}
+
+export async function saveThemeRpc(
+  preset: AppearancePreset,
+): Promise<{ id: string; path: string; preset: AppearancePreset }> {
+  return await call<{ id: string; path: string; preset: AppearancePreset }>(
+    "appearance.theme.save",
+    { preset },
+  );
+}
+
+export async function deleteThemeRpc(id: string): Promise<boolean> {
+  try {
+    const res = await call<{ deleted: boolean }>("appearance.theme.delete", { id });
+    return Boolean(res?.deleted);
+  } catch {
+    return false;
+  }
+}

@@ -332,11 +332,38 @@ export interface AppearancePreset {
   readonly dark: AppearanceProfile;
   /** 预设推荐对话风格（如有，切换预设时自动启用） */
   readonly defaultChatStyle?: ChatStyle;
+  /** 是否为内置预设（内置不可删除） */
+  readonly builtin?: boolean;
+  /** 磁盘保存路径（仅自定义预设拥有） */
+  readonly filePath?: string;
+}
+
+/**
+ * 根据当前工作台状态创建一份可落盘保存的自定义主题预设。
+ */
+export function createPresetFromState(
+  state: AppearanceState,
+  name: string,
+  desc = "",
+  id?: string,
+): AppearancePreset {
+  const cleanId = id?.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-") || `theme-${Date.now().toString(36)}`;
+  return {
+    id: cleanId,
+    name: name.trim() || cleanId,
+    desc: desc.trim(),
+    mode: state.mode,
+    light: cloneProfile(state.profiles.light),
+    dark: cloneProfile(state.profiles.dark),
+    defaultChatStyle: state.chatStyle ?? "classic",
+    builtin: false,
+  };
 }
 
 /** 本项目现有的两套配色，原样搬过来，保证升级后视觉零变化 */
 export const PRESET_PARCHMENT: AppearancePreset = {
   id: "parchment",
+  builtin: true,
   name: "温润羊皮纸",
   desc: "Cursor 暖白奶油画布、纸阶平坦分层与 Ember 炽橙高亮",
   mode: "light",
@@ -380,6 +407,7 @@ export const PRESET_PARCHMENT: AppearancePreset = {
 
 export const PRESET_OBSIDIAN: AppearancePreset = {
   id: "obsidian",
+  builtin: true,
   name: "深邃黑曜石",
   desc: "纯黑终端虚空底色、平坦炭黑面板与荧光紫光标强调",
   mode: "dark",
@@ -389,6 +417,7 @@ export const PRESET_OBSIDIAN: AppearancePreset = {
 
 export const PRESET_TWILIGHT: AppearancePreset = {
   id: "twilight-mirror",
+  builtin: true,
   name: "暮色镜湖",
   desc: "DS 内置预设 · 蓝紫暮光与静水倒影",
   mode: "dark",

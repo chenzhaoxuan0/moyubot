@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import {
   APPEARANCE_PRESETS,
+  createPresetFromState,
   clamp,
   defaultAppearanceState,
   deriveCssVariables,
@@ -25,6 +26,9 @@ import {
   writeAppearance,
   saveWallpaperFile,
   saveLogoFile,
+  saveThemeRpc,
+  deleteThemeRpc,
+  listThemesRpc,
   type AppearanceLoadSource,
 } from "../core/appearanceStore.ts";
 
@@ -287,7 +291,14 @@ export interface AppearanceStore extends AppearanceState {
   setChatBgOpacity: (opacity: number) => void;
   /** bot 头像框形态（全局设置，不分亮暗档案） */
   setAvatarFrame: (frame: AvatarFrame) => void;
+  /** 用户或 agent 保存的所有自定义主题预设 */
+  customPresets: AppearancePreset[];
+  allPresets: () => AppearancePreset[];
   applyPreset: (preset: AppearancePreset) => void;
+  /** 保存当前主题为新的独立预设文件（~/.agent-workbench/themes/<id>.json） */
+  saveAsPreset: (name: string, desc?: string, id?: string) => Promise<AppearancePreset>;
+  /** 删除指定的自定义预设主题 */
+  deleteCustomPreset: (id: string) => Promise<void>;
   setPaletteColor: (key: PaletteKey, value: string) => void;
   resetPaletteColor: (key: PaletteKey) => void;
   resetPalette: () => void;
@@ -350,6 +361,28 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
   filePath: null,
   source: "defaults",
   lastError: null,
+  customPresets: [],
+
+  allPresets: () => [...APPEARANCE_PRESETS, ...get().customPresets],
+
+  saveAsPreset: async (name: string, desc = "", id?: string) => {
+    const cur = get();
+    const preset = createPresetFromState(cur, name, desc, id);
+    const res = await saveThemeRpc(preset);
+    const saved = res.preset ?? preset;
+    const nextCustom = [...get().customPresets.filter((p) => p.id !== saved.id), saved];
+    set({ customPresets: nextCustom, presetId: saved.id });
+    persist({ ...get(), presetId: saved.id });
+    return saved;
+  },
+
+  deleteCustomPreset: async (id: string) => {
+    await deleteThemeRpc(id);
+    const nextCustom = get().customPresets.filter((p) => p.id !== id);
+    const nextPresetId = get().presetId === id ? "__custom__" : get().presetId;
+    set({ customPresets: nextCustom, presetId: nextPresetId });
+    persist({ ...get(), presetId: nextPresetId });
+  },
 
   reload: async () => {
     await hydrate();
@@ -456,7 +489,7 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
 
   resetPaletteColor: (key) => {
     const resolved = resolveAppearance(get());
-    const preset = APPEARANCE_PRESETS.find((item) => item.id === get().presetId);
+    const preset = [...APPEARANCE_PRESETS, ...get().customPresets].find((item) => item.id === get().presetId);
     const base = preset
       ? preset[resolved].palette[key]
       : defaultAppearanceState().profiles[resolved].palette[key];
@@ -465,7 +498,7 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
 
   resetPalette: () => {
     const resolved = resolveAppearance(get());
-    const preset = APPEARANCE_PRESETS.find((item) => item.id === get().presetId);
+    const preset = [...APPEARANCE_PRESETS, ...get().customPresets].find((item) => item.id === get().presetId);
     const base = preset ? preset[resolved] : defaultAppearanceState().profiles[resolved];
     const next = withProfile(get(), resolved, () => cloneProfile(base));
     set(publish(next));
@@ -579,6 +612,7 @@ async function hydrate(): Promise<void> {
     activeProfile: activeProfileOf(result.state),
     filePath: result.path,
     source: result.source,
+    customPresets: result.customThemes ?? useAppearance.getState().customPresets,
   } as Partial<AppearanceStore>);
 }
 
@@ -625,6 +659,7 @@ async function pollExternalChanges(): Promise<void> {
     activeProfile: activeProfileOf(result.state),
     filePath: result.path,
     source: result.source,
+    customPresets: result.customThemes ?? useAppearance.getState().customPresets,
   } as Partial<AppearanceStore>);
 }
 

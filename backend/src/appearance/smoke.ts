@@ -25,6 +25,9 @@ import {
   saveLogo,
   readLogoDataUrl,
   AppearanceConflictError,
+  listThemes,
+  saveTheme,
+  deleteTheme,
 } from "./store.ts";
 
 let failed = 0;
@@ -159,6 +162,31 @@ try {
   check("readAppearance 解析 logo.path", logoRead.logoRel === savedLogo.relPath && logoRead.logoPath === path.join(home, "logos", "___.svg"));
   check("logo 越界被挡", resolveWallpaper(home, "../secrets.png") === null);
   check("指向缺失文件的 logo 读不到字节", (await readLogoDataUrl(home, "logos/nope.png")) === null);
+
+  // 7. 自定义预设主题：saveTheme 落盘 + listThemes 列出 + deleteTheme 移除
+  const emptyThemes = await listThemes(home);
+  check("初始状态无自定义主题", emptyThemes.length === 0);
+
+  const customPreset = {
+    id: "neon-cyber",
+    name: "赛博霓虹",
+    desc: "高对比暗夜荧光",
+    mode: "dark" as const,
+    light: {},
+    dark: {},
+    defaultChatStyle: "glass",
+  };
+  const savedTheme = await saveTheme(home, customPreset);
+  check("主题保存到 themes/ 目录", savedTheme.id === "neon-cyber" && savedTheme.path.includes("themes"));
+
+  const listed = await listThemes(home);
+  check("listThemes 能读出保存的主题", listed.length === 1 && listed[0]?.name === "赛博霓虹");
+
+  const deleted = await deleteTheme(home, "neon-cyber");
+  check("deleteTheme 成功删除主题", deleted === true);
+
+  const afterDelete = await listThemes(home);
+  check("删除后主题列表归零", afterDelete.length === 0);
 } finally {
   await rm(home, { recursive: true, force: true });
 }

@@ -279,6 +279,9 @@ export const METHOD_META: Record<string, MethodMeta> = {
   "appearance.wallpaper.delete": { description: "删 wallpapers 目录下的壁纸文件", paramsHint: "{path?}" },
   "appearance.logo.save": { description: "落一张 base64 自定义 logo 到 logos 目录", paramsHint: "{name, base64}" },
   "appearance.logo.delete": { description: "删 logos 目录下的 logo 文件", paramsHint: "{path?}" },
+  "appearance.theme.list": { description: "列出 themes 目录下的所有预设主题", paramsHint: "null" },
+  "appearance.theme.save": { description: "保存自定义预设主题到 themes 目录，方便 agent 直接改", paramsHint: "{preset}" },
+  "appearance.theme.delete": { description: "删除 themes 目录下的预设主题", paramsHint: "{id}" },
 
   // ---- 终端 / 工作区 / 网络 ---------------------------------------------------------
   "terminal.create": { description: "新建 PTY 终端会话，数据经 terminal 帧推送", paramsHint: "{cwd?, shell?, cols?, rows?}" },

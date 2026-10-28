@@ -16,7 +16,7 @@
  *     （多半就是 agent 改的）就抛 conflict，绝不静默覆盖掉对方的编辑。
  */
 
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile, readdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -406,5 +406,140 @@ export async function deleteLogo(homeDir: string, rel: string | null): Promise<b
   const { rm } = await import("node:fs/promises");
   await rm(abs, { force: true });
   log.info("logo deleted", { path: abs });
+  return true;
+}
+
+
+/* --------------------------------------------------------------------------- 自定义预设主题 */
+
+const THEMES_DIR = "themes";
+
+export function themesDir(homeDir: string): string {
+  return path.join(homeDir, THEMES_DIR);
+}
+
+export interface StoredThemePreset {
+  id: string;
+  name: string;
+  desc?: string;
+  mode?: string;
+  light?: unknown;
+  dark?: unknown;
+  defaultChatStyle?: string;
+  filePath?: string;
+  builtin?: boolean;
+}
+
+/**
+ * 列出所有存放在 <homeDir>/themes/*.json 中的预设主题文件。
+ * 每个文件都可由用户或 agent 直接用 read/write 工具读取或编辑。
+ */
+export async function listThemes(homeDir: string): Promise<StoredThemePreset[]> {
+  const dir = themesDir(homeDir);
+  if (!existsSync(dir)) return [];
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const presets: StoredThemePreset[] = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const absPath = path.join(dir, entry.name);
+      try {
+        const raw = await readFile(absPath, "utf8");
+        const parsed = JSON.parse(raw) as Partial<StoredThemePreset>;
+        const id =
+          typeof parsed.id === "string" && parsed.id.trim()
+            ? parsed.id.trim()
+            : path.basename(entry.name, ".json");
+        presets.push({
+          id,
+          name: typeof parsed.name === "string" && parsed.name.trim() ? parsed.name.trim() : id,
+          desc: typeof parsed.desc === "string" ? parsed.desc : "",
+          mode: parsed.mode === "light" ? "light" : parsed.mode === "auto" ? "auto" : "dark",
+          light: parsed.light ?? null,
+          dark: parsed.dark ?? null,
+          defaultChatStyle: parsed.defaultChatStyle === "classic" ? "classic" : "glass",
+          filePath: absPath,
+          builtin: false,
+        });
+      } catch (err) {
+        log.warn("failed to read theme file", { path: absPath, error: String(err) });
+      }
+    }
+    return presets;
+  } catch (error) {
+    log.warn("failed to list themes", { dir, error: String(error) });
+    return [];
+  }
+}
+
+/**
+ * 保存一份自定义主题预设到 <homeDir>/themes/<id>.json。
+ */
+export async function saveTheme(
+  homeDir: string,
+  preset: {
+    id?: string;
+    name: string;
+    desc?: string;
+    mode?: string;
+    light?: unknown;
+    dark?: unknown;
+    defaultChatStyle?: string;
+  },
+): Promise<{ id: string; path: string; preset: StoredThemePreset }> {
+  if (!preset || typeof preset !== "object") {
+    throw Object.assign(new Error("preset is required"), { code: "bad_params" });
+  }
+  const name = typeof preset.name === "string" ? preset.name.trim() : "";
+  if (!name) {
+    throw Object.assign(new Error("theme name is required"), { code: "bad_params" });
+  }
+
+  // 消毒 ID：如未指定则根据时间戳生成
+  let id = typeof preset.id === "string" ? preset.id.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "-") : "";
+  if (!id) {
+    id = `theme-${Date.now().toString(36)}`;
+  }
+
+  const dir = themesDir(homeDir);
+  await mkdir(dir, { recursive: true });
+  const absPath = path.join(dir, `${id}.json`);
+
+  const doc = {
+    $meta: {
+      schemaVersion: 1,
+      generator: "agent-workbench",
+      note: "预设主题配置文件。agent 可直接阅读并编辑此文件中的 palette / surface / transparency。",
+    },
+    id,
+    name,
+    desc: typeof preset.desc === "string" ? preset.desc.trim() : "",
+    mode: preset.mode === "light" ? "light" : preset.mode === "auto" ? "auto" : "dark",
+    light: preset.light ?? {},
+    dark: preset.dark ?? {},
+    defaultChatStyle: preset.defaultChatStyle === "classic" ? "classic" : "glass",
+  };
+
+  await atomicWrite(absPath, `${JSON.stringify(doc, null, 2)}\n`);
+  log.info("theme saved", { path: absPath, id });
+
+  const resultPreset: StoredThemePreset = {
+    ...doc,
+    filePath: absPath,
+    builtin: false,
+  };
+  return { id, path: absPath, preset: resultPreset };
+}
+
+/**
+ * 删除一份自定义主题预设。
+ */
+export async function deleteTheme(homeDir: string, id: string): Promise<boolean> {
+  if (typeof id !== "string" || !id.trim()) return false;
+  const cleanId = path.basename(id.trim()).replace(/[^a-z0-9_-]/gi, "-");
+  const absPath = path.join(themesDir(homeDir), `${cleanId}.json`);
+  if (!existsSync(absPath)) return false;
+  await rm(absPath, { force: true });
+  log.info("theme deleted", { path: absPath, id: cleanId });
   return true;
 }
