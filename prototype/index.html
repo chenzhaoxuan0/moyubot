@@ -12,21 +12,39 @@
     <title>MoyuBot</title>
     <script>
       (function() {
+        // 首屏主题：优先读外观缓存（agent-workbench:appearance:fallback —— 上次应用过的
+        // 外观；Electron 下 preload 已把 appearance.json 的 mode 合并进去，读到的就是
+        // 「上次关闭时的主题」），回落旧版三档键，都没有才跟随系统（与默认态的 auto 一致）。
+        var mode = null;
         try {
-          var m = localStorage.getItem('agent-workbench:theme-mode');
-          var d = m === 'dark' || (m === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-          if (d) {
-            document.documentElement.classList.add('dark');
-            document.documentElement.setAttribute('data-theme', 'dark');
-          } else {
-            document.documentElement.classList.remove('dark');
-            document.documentElement.setAttribute('data-theme', 'light');
+          var raw = localStorage.getItem('agent-workbench:appearance:fallback');
+          var cached = raw ? JSON.parse(raw) : null;
+          if (cached && (cached.mode === 'light' || cached.mode === 'dark' || cached.mode === 'auto')) {
+            mode = cached.mode;
           }
-          // favicon 与主题同源：亮白底 / 暗黑底。这里只是首屏近似（读旧键），
-          // appearance.json 加载完成后由 useAppearance.applyToDom 修正。
-          var fav = document.querySelector('link[rel="icon"]');
-          if (fav) fav.href = d ? '/moyu-logo-dark-64.png' : '/moyu-logo-light-64.png';
         } catch (e) {}
+        if (!mode) {
+          var legacy = null;
+          try { legacy = localStorage.getItem('agent-workbench:theme-mode'); } catch (e) {}
+          mode = legacy === 'light' || legacy === 'dark' || legacy === 'system' ? legacy : 'auto';
+        }
+        var d = mode === 'dark' ||
+          ((mode === 'auto' || mode === 'system') &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches);
+        if (d) {
+          document.documentElement.classList.add('dark');
+          document.documentElement.setAttribute('data-theme', 'dark');
+        } else {
+          document.documentElement.classList.remove('dark');
+          document.documentElement.setAttribute('data-theme', 'light');
+        }
+        // favicon 与主题同源：亮白底 / 暗黑底。这里只是首屏近似，
+        // appearance.json 加载完成后由 useAppearance.applyToDom 修正。
+        var fav = document.querySelector('link[rel="icon"]');
+        if (fav) fav.href = d ? '/moyu-logo-dark-64.png' : '/moyu-logo-light-64.png';
+        // theme-color（浏览器标题栏 / PWA 环境的窗口着色）跟主题同底色，避免白标题栏配黑页面
+        var themeColor = document.querySelector('meta[name="theme-color"]');
+        if (themeColor) themeColor.setAttribute('content', d ? '#000000' : '#f7f7f4');
 
         window.addEventListener('error', function(event) {
           var root = document.getElementById('root');

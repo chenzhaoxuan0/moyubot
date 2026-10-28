@@ -155,10 +155,37 @@ function readFallbackState(): AppearanceState | null {
 function writeFallbackState(state: AppearanceState): void {
   if (typeof localStorage === "undefined") return;
   try {
-    localStorage.setItem(FALLBACK_STORAGE_KEY, JSON.stringify(state));
+    // source 是运行时 data URL（壁纸 / 自定义 logo，可能几 MB），读回时 sanitize
+    // 也会把它清掉 —— 落缓存前先剥掉，别让一张图占满 localStorage 配额
+    const lean = {
+      ...state,
+      wallpaper: { ...state.wallpaper, source: null },
+      logo: { ...state.logo, source: null },
+    };
+    localStorage.setItem(FALLBACK_STORAGE_KEY, JSON.stringify(lean));
   } catch {
     // 配额超限时静默失败：设置仍在内存里生效，只是这次没能兜底存下来
   }
+}
+
+/**
+ * 同步读「上次记住的外观」（localStorage 快路径），不碰 daemon、不等网络。
+ * 给首屏两处用：index.html 的内联脚本（裸读裸解析）与 useAppearance 的模块
+ * 初始态 —— 让第一帧就按上次主题上色，而不是等 appearance.read 往返后再纠正。
+ * 返回 null = 没有任何缓存（首启 / 隐私模式），调用方回落内置默认。
+ */
+export function readCachedAppearance(): AppearanceState | null {
+  return readFallbackState();
+}
+
+/**
+ * 把一份可信的外观刷进 localStorage 快路径缓存。采纳文件态时调用
+ * （hydrate / 轮询发现外部改动）；UI 自己改设置的路径 writeAppearance 已自带。
+ * 不刷的话缓存只反映「用户上次在界面上动了什么」，agent 直接改 appearance.json
+ * 的场景它永远是旧的，下次启动首帧还是会用错主题。
+ */
+export function cacheAppearanceState(state: AppearanceState): void {
+  writeFallbackState(state);
 }
 
 /* --------------------------------------------------------------------------- 公开接口 */

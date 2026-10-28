@@ -29,6 +29,8 @@ import {
   saveThemeRpc,
   deleteThemeRpc,
   listThemesRpc,
+  readCachedAppearance,
+  cacheAppearanceState,
   type AppearanceLoadSource,
 } from "../core/appearanceStore.ts";
 
@@ -229,10 +231,12 @@ export function resolveAppearance(state: AppearanceState): ResolvedAppearance {
 }
 
 /**
- * 首屏先用内置默认立即上色，避免等 daemon 往返时闪一帧白；
- * 真正的外观随后由 hydrateFromFile() 换上。
+ * 首屏先用「上次记住的外观」（localStorage 快路径，Electron 下 preload 已把
+ * appearance.json 的 mode 合并进去）立即上色。之前这里盲用默认态（mode=auto
+ * 跟随系统）：系统深色 + 应用钉浅色的用户每次启动都要先黑几秒，等 hydrate
+ * 读回文件才被纠正。真正的外观随后仍由 hydrateFromFile() 换上。
  */
-const initialState: AppearanceState = defaultAppearanceState();
+const initialState: AppearanceState = readCachedAppearance() ?? defaultAppearanceState();
 applyToDom(initialState);
 
 /**
@@ -605,6 +609,9 @@ async function hydrate(): Promise<void> {
   lastKnownHash = result.hash;
   lastPath = result.path;
   lastSource = result.source;
+  // 采纳文件态后同步刷 localStorage 快路径：下次启动的首帧（index.html 内联
+  // 脚本 / 本模块初始态）才能按这份最新真相上色，而不是按旧的 UI 兜底
+  cacheAppearanceState(result.state);
   applyToDom(result.state);
   useAppearance.setState({
     ...result.state,
@@ -652,6 +659,8 @@ async function pollExternalChanges(): Promise<void> {
   lastKnownHash = result.hash;
   lastPath = result.path;
   lastSource = result.source;
+  // 外部（agent）改了文件：连 localStorage 快路径一起刷，下次启动首帧即新主题
+  cacheAppearanceState(result.state);
   applyToDom(result.state);
   useAppearance.setState({
     ...result.state,
@@ -663,7 +672,7 @@ async function pollExternalChanges(): Promise<void> {
   } as Partial<AppearanceStore>);
 }
 
-/* 首屏立即从文件取真实外观（此时界面已经用默认配色上色，不会闪） */
+/* 首屏立即从文件取真实外观（此时界面已经用缓存/默认配色上色，不会闪） */
 void hydrate();
 
 if (typeof window !== "undefined") {
