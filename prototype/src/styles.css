@@ -513,15 +513,19 @@ html[data-chat-style="glass"][data-aw-wallpaper] footer {
   border-top: 1px solid var(--color-line) !important;
 }
 
-/* 主画布与对话区域背景透明度：由设置中的 chatBgOpacity 动态控制（默认 35% 柔和遮罩，防止文字对比度不足） */
+/* 主对话列背景遮罩（包含消息流与底部对话框容器）：由设置中的 chatBgOpacity 动态控制，上下整体统一，杜绝明暗断层 */
 html[data-chat-style="glass"][data-aw-wallpaper] body,
 html[data-chat-style="glass"][data-aw-wallpaper] #root {
   background-color: transparent !important;
 }
 
-html[data-chat-style="glass"][data-aw-wallpaper] .chat-viewport-root {
+html[data-chat-style="glass"][data-aw-wallpaper] .chat-conversation-root {
   background-color: color-mix(in srgb, var(--color-canvas) var(--aw-chat-bg-opacity, 35%), transparent) !important;
   transition: background-color 0.2s ease;
+}
+
+html[data-chat-style="glass"][data-aw-wallpaper] .chat-viewport-root {
+  background-color: transparent !important;
 }
 
 /* 助手回复卡片：纯净薄玻璃卡片，完全对齐前情摘要 */
@@ -589,8 +593,8 @@ html[data-chat-style="glass"] .chat-status-pill {
 /* 底部输入框：薄玻璃浮岛 Dock */
 html[data-chat-style="glass"] .chat-composer-box {
   background: color-mix(in srgb, var(--color-canvas) 75%, transparent) !important;
-  backdrop-filter: blur(20px) !important;
-  -webkit-backdrop-filter: blur(20px) !important;
+  backdrop-filter: blur(var(--aw-glass-blur, 14px)) !important;
+  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px)) !important;
   border: 1px solid var(--aw-glass-border) !important;
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25) !important;
   border-radius: var(--aw-glass-radius) !important;

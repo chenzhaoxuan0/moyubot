@@ -272,7 +272,7 @@ export interface AppearanceState {
   presetId: string | null;
   /** 对话视图形态：classic=经典无气泡平铺，glass=液态毛玻璃卡片（特别适合带壁纸） */
   chatStyle: ChatStyle;
-  /** 薄玻璃模糊度 4..32px，默认 14px */
+  /** 薄玻璃模糊度 0..32px，默认 14px */
   glassBlur: number;
   /** 对话区画布遮罩不透明度 0..100%，默认 35%（开壁纸时压暗背景，提高正文对比度） */
   chatBgOpacity: number;
@@ -756,7 +756,7 @@ export function sanitizeAppearanceState(raw: unknown): AppearanceState {
     avatarFrame: input.avatarFrame === "square" ? "square" : "rounded",
     presetId: typeof input.presetId === "string" ? input.presetId : null,
     chatStyle: input.chatStyle === "glass" ? "glass" : "classic",
-    glassBlur: typeof input.glassBlur === "number" && Number.isFinite(input.glassBlur) ? clamp(Math.round(input.glassBlur), 4, 32) : 14,
+    glassBlur: typeof input.glassBlur === "number" && Number.isFinite(input.glassBlur) ? clamp(Math.round(input.glassBlur), 0, 32) : 14,
     chatBgOpacity: typeof input.chatBgOpacity === "number" && Number.isFinite(input.chatBgOpacity) ? clamp(Math.round(input.chatBgOpacity), 0, 100) : 35,
   };
 }

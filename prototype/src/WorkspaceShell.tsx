@@ -319,7 +319,7 @@ function ConversationSlot() {
 
           {/* 结构化对话视图（docs/13：默认形态）—— 归一化事件流渲染 */}
           {conversationView === "chat" && (
-            <div className="relative flex min-h-0 flex-1 flex-col">
+            <div className="chat-conversation-root relative flex min-h-0 flex-1 flex-col">
               <Timeline />
               <PermissionDialog />
               <Composer />

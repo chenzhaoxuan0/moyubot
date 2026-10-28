@@ -281,7 +281,7 @@ export interface AppearanceStore extends AppearanceState {
   setMode: (mode: AppearanceMode) => void;
   /** 对话视图形态：classic=经典无气泡平铺，glass=液态毛玻璃卡片（特别适合带壁纸） */
   setChatStyle: (style: ChatStyle) => void;
-  /** 薄玻璃模糊度 4..32px */
+  /** 薄玻璃模糊度 0..32px */
   setGlassBlur: (blur: number) => void;
   /** 对话区画布遮罩不透明度 0..100% */
   setChatBgOpacity: (opacity: number) => void;
@@ -414,7 +414,7 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
   },
 
   setGlassBlur: (blur) => {
-    set(publish({ ...get(), glassBlur: clamp(Math.round(blur), 4, 32) }));
+    set(publish({ ...get(), glassBlur: clamp(Math.round(blur), 0, 32) }));
   },
 
   setChatBgOpacity: (opacity) => {

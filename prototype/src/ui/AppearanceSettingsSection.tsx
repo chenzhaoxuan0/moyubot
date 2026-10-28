@@ -413,70 +413,14 @@ export function AppearanceSettingsSection() {
           </button>
         </div>
 
-        {/* 薄玻璃细节与对比度调控（当选用玻璃模式时展开） */}
+        {/* 薄玻璃提示（当选用玻璃模式时） */}
         {store.chatStyle === "glass" && (
-          <div className="mt-4 rounded-card border border-teal-edge/60 bg-teal-tint/10 p-4 space-y-4">
-            {/* 对话区画布遮罩不透明度滑块 */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-body-sm font-medium text-ink flex items-center gap-1.5">
-                    <Sparkles size={14} className="text-teal" />
-                    对话区画布遮罩强度 (Chat Background Opacity)
-                  </p>
-                  <p className="text-caption text-graphite">
-                    在壁纸模式下为中间对话列铺设一层微透画布底色，压制壁纸高反差处，解决纯透明时文字对比度不足的问题。
-                  </p>
-                </div>
-                <span className="font-mono text-body-sm font-semibold text-teal px-2 py-0.5 rounded-btn bg-teal-tint/30">
-                  {store.chatBgOpacity ?? 35}%
-                </span>
-              </div>
-              <div className="flex items-center gap-3 pt-1">
-                <span className="text-caption text-ash shrink-0">全透 0%</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={90}
-                  step={5}
-                  value={store.chatBgOpacity ?? 35}
-                  onChange={(e) => store.setChatBgOpacity(Number(e.target.value))}
-                  className="flex-1 accent-teal cursor-pointer"
-                  aria-label="对话区画布遮罩不透明度"
-                />
-                <span className="text-caption text-ash shrink-0">厚底 90%</span>
-              </div>
-            </div>
-
-            {/* 薄玻璃模糊度 */}
-            <div className="space-y-1.5 pt-2 border-t border-line-soft/60">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-body-sm font-medium text-ink">
-                    薄玻璃模糊度 (Glass Blur)
-                  </p>
-                  <p className="text-caption text-graphite">
-                    控制卡片底色的柔和漫反射程度，默认 14px 对齐前情摘要质感。
-                  </p>
-                </div>
-                <span className="font-mono text-body-sm font-semibold text-teal px-2 py-0.5 rounded-btn bg-teal-tint/30">
-                  {store.glassBlur ?? 14}px
-                </span>
-              </div>
-              <div className="flex items-center gap-3 pt-1">
-                <span className="text-caption text-ash shrink-0">轻微 4px</span>
-                <input
-                  type="range"
-                  min={4}
-                  max={32}
-                  step={1}
-                  value={store.glassBlur ?? 14}
-                  onChange={(e) => store.setGlassBlur(Number(e.target.value))}
-                  className="flex-1 accent-teal cursor-pointer"
-                  aria-label="薄玻璃模糊度（像素）"
-                />
-                <span className="text-caption text-ash shrink-0">朦胧 32px</span>
-              </div>
+          <div className="mt-4 flex items-center justify-between rounded-card border border-teal-edge/60 bg-teal-tint/10 px-4 py-3 text-caption text-graphite">
+            <div className="flex items-center gap-2">
+              <Sparkles size={15} className="text-teal shrink-0" />
+              <span>
+                已启用薄玻璃效果。模糊度、对话区整体画布遮罩等参数已汇集于下方「<strong>面板透明度</strong>」分区统筹设置。
+              </span>
             </div>
           </div>
         )}
@@ -637,7 +581,7 @@ export function AppearanceSettingsSection() {
       <SectionCard
         icon={<Frame size={16} />}
         title="面板透明度"
-        desc="只改背景底色的通透度，文字与图标始终完全不透明 —— 这条与 DS 的行为一致，并有测试钉死。"
+        desc="控制全局底色、对话画布遮罩与各层级通透度，文字与图标始终保持清晰不透明。"
       >
         <div className="space-y-4">
           <div className="flex items-center justify-between">
@@ -672,23 +616,115 @@ export function AppearanceSettingsSection() {
             <button
               type="button"
               onClick={() => store.setTransparency(null)}
-              className="rounded-btn border border-line px-2.5 py-1 text-body-sm text-graphite hover:bg-surface-hover hover:text-ink"
+              className="rounded-btn border border-line px-2.5 py-1 text-body-sm text-graphite hover:bg-surface-hover hover:text-ink cursor-pointer"
             >
               跟随主题（清除覆盖）
             </button>
           )}
 
+          {/* 对话区画布遮罩不透明度滑块 */}
           <div className="space-y-3 border-t border-line-soft pt-4">
             <div className="flex items-center justify-between">
-              <span
-                className="text-body-sm text-ink"
-                title="只作用于设置页整页底色，与上面的背景透明度相互独立。默认 0% 完全不透明，叠在主界面上时不透出下层文字；调高后壁纸会透进设置页，但下层内容也会跟着显形。"
-              >
-                设置页透明度
+              <div>
+                <span
+                  className="text-body-sm font-medium text-ink flex items-center gap-1.5"
+                  title="控制对话消息流与底部输入框整列的画布底色遮罩。开壁纸时适度压暗底色（推荐 35%），确保上下亮度一致，消除文字阅读时的对比度干扰。"
+                >
+                  <Sparkles size={14} className="text-teal" />
+                  对话区画布遮罩强度 (Chat Background Opacity)
+                </span>
+                <p className="text-caption text-graphite">
+                  对话列表与底部对话框容器共享此遮罩，上下整体贯通，压制高反差壁纸并保证正文对比度。
+                </p>
+              </div>
+              <span className="font-mono text-body-sm font-semibold text-teal px-2 py-0.5 rounded-btn bg-teal-tint/30">
+                {store.chatBgOpacity ?? 35}%
               </span>
+            </div>
+            <div className="flex items-center gap-3 pt-1">
+              <span className="text-caption text-ash shrink-0">全透 0%</span>
+              <input
+                type="range"
+                min={0}
+                max={90}
+                step={5}
+                value={store.chatBgOpacity ?? 35}
+                onChange={(e) => store.setChatBgOpacity(Number(e.target.value))}
+                className="flex-1 accent-teal cursor-pointer"
+                aria-label="对话区画布遮罩不透明度"
+              />
+              <span className="text-caption text-ash shrink-0">厚底 90%</span>
+            </div>
+            {(store.chatBgOpacity ?? 35) !== 35 && (
+              <button
+                type="button"
+                onClick={() => store.setChatBgOpacity(35)}
+                className="rounded-btn border border-line px-2.5 py-1 text-caption text-graphite hover:bg-surface-hover hover:text-ink cursor-pointer"
+              >
+                恢复推荐（35% 柔和遮罩）
+              </button>
+            )}
+          </div>
+
+          {/* 薄玻璃模糊度 */}
+          <div className="space-y-3 border-t border-line-soft pt-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <span
+                  className="text-body-sm font-medium text-ink"
+                  title="控制气泡与输入卡片的背景漫反射模糊。支持最小拉到 0（无模糊），默认 14px 对齐素雅薄玻璃质感。"
+                >
+                  薄玻璃模糊度 (Glass Blur)
+                </span>
+                <p className="text-caption text-graphite">
+                  卡片底色的柔和漫反射程度。最小可拉至 0（完全无模糊），上限 32px 柔光。
+                </p>
+              </div>
+              <span className="font-mono text-body-sm font-semibold text-teal px-2 py-0.5 rounded-btn bg-teal-tint/30">
+                {store.glassBlur ?? 14}px {(store.glassBlur ?? 14) === 0 ? "· 无模糊" : ""}
+              </span>
+            </div>
+            <div className="flex items-center gap-3 pt-1">
+              <span className="text-caption text-ash shrink-0">0px (无模糊)</span>
+              <input
+                type="range"
+                min={0}
+                max={32}
+                step={1}
+                value={store.glassBlur ?? 14}
+                onChange={(e) => store.setGlassBlur(Number(e.target.value))}
+                className="flex-1 accent-teal cursor-pointer"
+                aria-label="薄玻璃模糊度（像素）"
+              />
+              <span className="text-caption text-ash shrink-0">朦胧 32px</span>
+            </div>
+            {(store.glassBlur ?? 14) !== 14 && (
+              <button
+                type="button"
+                onClick={() => store.setGlassBlur(14)}
+                className="rounded-btn border border-line px-2.5 py-1 text-caption text-graphite hover:bg-surface-hover hover:text-ink cursor-pointer"
+              >
+                恢复推荐（14px 薄玻璃）
+              </button>
+            )}
+          </div>
+
+          <div className="space-y-3 border-t border-line-soft pt-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <span
+                  className="text-body-sm text-ink font-medium"
+                  title="只作用于设置页整页底色，与上面的背景透明度相互独立。默认 0% 完全不透明，叠在主界面上时不透出下层文字；调高后壁纸会透进设置页，但下层内容也会跟着显形。"
+                >
+                  设置页透明度
+                </span>
+                <p className="text-caption text-graphite">
+                  设置页底色通透度，默认 0% 完全不透明（遮挡下层界面文字）。
+                </p>
+              </div>
               <span className="rounded-chip bg-surface-hover px-2 py-0.5 text-caption font-mono text-graphite">
                 {activeProfile.overlayTransparency}%
-                {activeProfile.overlayTransparency === 0 ? "不透明" : activeProfile.overlayTransparency === 100 ? "全透" : ""}
+                {activeProfile.overlayTransparency === 0 ? "（默认不透明）" : activeProfile.overlayTransparency === 100 ? "全透" : ""}
               </span>
             </div>
             <input
@@ -701,6 +737,15 @@ export function AppearanceSettingsSection() {
               aria-label="设置页透明度"
               className="w-full accent-teal"
             />
+            {activeProfile.overlayTransparency !== 0 && (
+              <button
+                type="button"
+                onClick={() => store.setOverlayTransparency(0)}
+                className="rounded-btn border border-line px-2.5 py-1 text-caption text-graphite hover:bg-surface-hover hover:text-ink cursor-pointer"
+              >
+                恢复默认（0% 完全不透明）
+              </button>
+            )}
           </div>
 
           <div className="space-y-3 border-t border-line-soft pt-4">
