@@ -414,13 +414,13 @@ void ensureSteward(config.homeDir)
     // 白写盘，还会和别处的乐观锁打架。
     return botRegistry.getBot(STEWARD_ID).then(async (existing) => {
       const want = stewardDefinition(rootPath);
-      // 用户在设置页能改的都属于**用户数据**（执行器/模型/头像/渠道/记忆策略/
-      // 名称/角色人设），启动引导只补结构，绝不覆盖 —— 否则每次重启都会把
+      // 用户在设置页能改的都属于**用户数据**（执行器/模型/头像/对话主题色/渠道/
+      // 记忆策略/名称/角色人设），启动引导只补结构，绝不覆盖 —— 否则每次重启都会把
       // 用户配置打回硬编码初始值（实测复现：改成非 mcode 的执行器后重启必被
       // 回写）。比对与写盘都用 merged。
       const prev = (existing ?? {}) as Record<string, unknown>;
       const userOwned: Record<string, unknown> = {};
-      for (const k of ["name", "bindings", "avatar", "channels", "memory"] as const) {
+      for (const k of ["name", "bindings", "avatar", "themeAccent", "channels", "memory"] as const) {
         if (prev[k] !== undefined) userOwned[k] = prev[k];
       }
       // identity 里 sourcePath 是结构指针（跟 want），role/persona 是用户数据
@@ -449,12 +449,12 @@ void ensureHeartbeatBot(config.homeDir)
   .then(({ rootPath }) => {
     botRegistry.addRoot(rootPath);
     // 幂等 + 用户数据不覆盖：与 steward 同一套口径（结构补齐，name/bindings/
-    // avatar/channels/memory/identity.role/persona 归用户）
+    // avatar/themeAccent/channels/memory/identity.role/persona 归用户）
     return botRegistry.getBot(HEARTBEAT_BOT_ID).then(async (existing) => {
       const want = heartbeatBotDefinition(rootPath, HEARTBEAT_DEFAULT_RUNTIME_ID);
       const prev = (existing ?? {}) as Record<string, unknown>;
       const userOwned: Record<string, unknown> = {};
-      for (const k of ["name", "bindings", "avatar", "channels", "memory", "tags"] as const) {
+      for (const k of ["name", "bindings", "avatar", "themeAccent", "channels", "memory", "tags"] as const) {
         if (prev[k] !== undefined) userOwned[k] = prev[k];
       }
       const prevIdentity = (prev.identity ?? {}) as Record<string, unknown>;

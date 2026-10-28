@@ -397,6 +397,13 @@ export interface WorkUnit {
   readonly identity?: WorkspaceIdentity;
   /** 自定义头像（data URL，上传时已居中裁成 96×96）。缺省 = 按名字生成的彩色头像 */
   readonly avatar?: string;
+  /**
+   * 本 bot 对话列的强调色（#rrggbb，2026-10-28）：可从头像提取（黑底头像取
+   * 小面积签名色，见 core/avatarAccent.ts）也可手动指定；只覆盖对话区子树的
+   * --color-teal* 系变量（气泡/输入框/工具卡），全局主题不动。缺省 = 跟随
+   * 全局主题 accent。写穿 bot.json。
+   */
+  readonly themeAccent?: string;
   readonly schedule?: UnitSchedule;
   readonly bindings: readonly RuntimeBinding[];
   /**

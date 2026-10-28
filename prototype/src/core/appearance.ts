@@ -705,6 +705,26 @@ export function deriveCssVariables(
   return vars;
 }
 
+/**
+ * 单 bot 对话列强调色（2026-10-28）：把一个 hex 摊成 accent 系变量，由对话列
+ * 容器（.chat-conversation-root）以内联 style 注入——CSS 变量沿子树继承，只
+ * 影响该列（气泡/输入框/工具卡），<html> 上的全局主题同名变量不动。
+ * 与 deriveCssVariables 的强调色层同构；hover 按明暗向白/黑偏移一档。
+ */
+export function deriveChatAccentVariables(accent: string, dark: boolean): Record<string, string> {
+  const base = toHex(accent);
+  const hover = mixColor(base, dark ? "#ffffff" : "#000000", 0.16);
+  return {
+    "--color-teal": base,
+    "--color-teal-hover": hover,
+    "--color-teal-tint": withAlpha(base, 0.1),
+    "--color-teal-edge": withAlpha(base, 0.32),
+    "--color-on-accent": readableInk(base),
+    "--ds-theme-color-accent": base,
+    "--ds-theme-color-accent-alt": hover,
+  };
+}
+
 function rgbTriple(color: string): string {
   const parsed = parseColor(color) ?? { r: 0, g: 0, b: 0 };
   return `${Math.round(parsed.r)} ${Math.round(parsed.g)} ${Math.round(parsed.b)}`;

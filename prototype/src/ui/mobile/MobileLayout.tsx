@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Menu } from "lucide-react";
 import { useWorkbench, selectActiveUnit } from "../../store/useWorkbench.ts";
+import { useAppearance } from "../../store/useAppearance.ts";
+import { deriveChatAccentVariables, isValidColor } from "../../core/appearance.ts";
 import { useShell } from "../../store/useShell.ts";
 import { Timeline } from "../Timeline.tsx";
 import { Composer } from "../Composer.tsx";
@@ -29,6 +31,13 @@ export function MobileLayout({
   const busy = useWorkbench((s) => s.busy);
   const conversationView = useShell((s) => s.conversationView);
   const settingsOpen = useShell((s) => s.settingsOpen);
+  // 本 bot 对话强调色：与桌面 ConversationSlot 同款（内联覆盖对话子树的 accent 变量）
+  const resolvedTheme = useAppearance((s) => s.resolvedAppearance);
+  const chatAccentStyle = useMemo(() => {
+    const accent = unit?.themeAccent;
+    if (!accent || !isValidColor(accent)) return undefined;
+    return deriveChatAccentVariables(accent, resolvedTheme === "dark");
+  }, [unit?.themeAccent, resolvedTheme]);
 
   return (
     <div className="relative flex h-[100dvh] max-h-[100dvh] w-full flex-col overflow-hidden bg-canvas text-ink select-none">
@@ -68,6 +77,7 @@ export function MobileLayout({
       <main className="relative flex flex-1 min-h-0 flex-col overflow-hidden">
         {/* 对话视图 */}
         <div
+          style={chatAccentStyle}
           className={cn(
             "flex h-full min-h-0 flex-1 flex-col",
             conversationView === "chat" ? "flex" : "hidden",
