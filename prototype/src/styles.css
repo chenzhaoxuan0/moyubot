@@ -101,11 +101,11 @@ html.aw-wco-hidden {
      口感调宽（原 1.4375rem ≈ 1.64 倍）。跟随外观设置的字号缩放，缩放后
      行高等比放大，节奏不变。 */
   /* ---- Thread prose：对话正文的专属排版档 ----
-     字号来自 Codex 桌面版拆解（.875rem = 14px）；行高 2 倍（28px）按用户
-     口感调宽（原 1.4375rem ≈ 1.64 倍）。跟随外观设置的字号缩放，缩放后
+     字号来自 Codex 桌面版拆解（.875rem = 14px）；行高 1.625 倍（22.75px，
+     实测 1.43 偏紧、2 偏松后的手感值）。跟随外观设置的字号缩放，缩放后
      行高等比放大，节奏不变。 */
   --text-thread: calc(0.875rem * var(--aw-font-scale, 1));
-  --text-thread--line-height: calc(2 * 0.875rem * var(--aw-font-scale, 1));
+  --text-thread--line-height: calc(1.625 * 0.875rem * var(--aw-font-scale, 1));
 
   /* ---- Spacing：保持原有基准与间距完全不变 ---- */
   --spacing: 0.25rem;

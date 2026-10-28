@@ -737,15 +737,17 @@ function NativeTranscript({ executorId, sessionId }: { executorId: string; sessi
             >
               {label}
             </span>
-            {/* 助手行走 markdown 富渲染（docs/17）；用户/系统行保持纯文本 */}
+            {/* 助手行走 markdown 富渲染（docs/17）；用户/系统行保持纯文本。
+                行距用 leading-[1.625] 与主对话时间线的正文排版 token 同节奏——
+                此前硬编码 leading-relaxed 时正文行距调档对这里无效 */}
             {e.kind === "assistant" && e.text !== "" ? (
               <div className="min-w-0 flex-1 text-graphite">
-                <MarkdownContent content={e.text} className="text-caption leading-relaxed" />
+                <MarkdownContent content={e.text} className="text-caption leading-[1.625]" />
               </div>
             ) : (
               <p
                 className={cn(
-                  "min-w-0 flex-1 whitespace-pre-wrap break-words text-caption leading-relaxed",
+                  "min-w-0 flex-1 whitespace-pre-wrap break-words text-caption leading-[1.625]",
                   e.kind === "user" ? "text-ink" : e.kind === "assistant" ? "text-graphite" : "text-ash/70",
                 )}
               >

@@ -46,7 +46,7 @@ class MarkdownBoundary extends Component<
 
   render() {
     if (this.state.failed) {
-      return <p className="whitespace-pre-wrap leading-[2] text-ink">{this.props.content}</p>;
+      return <p className="whitespace-pre-wrap leading-[1.625] text-ink">{this.props.content}</p>;
     }
     return this.props.children;
   }
@@ -78,16 +78,16 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 /**
  * 标题阶梯 —— 单色纪律（Codex 桌面版取向）：
  * 不用颜色区分层级，只用字号 + 字重；所有标题都是正文同色（ink），
- * 颜色留给链接与行内代码底色。段间距节奏对齐 Codex 真值
- * （段落 11px / 列表项 4px），标题上间距放大做分节呼吸感。
+ * 颜色留给链接与行内代码底色。间距节奏对齐 ZCode 桌面版（2026-10-28
+ * 从其产物包的 Streamdown 组件表提取）：各级统一 mt-6(24px) / mb-4(16px)。
  */
 const headingCls = [
-  "mt-6 mb-2.5 text-[1.25em] font-semibold tracking-[-0.01em] text-ink", // h1
-  "mt-[22px] mb-2 text-[1.1em] font-semibold tracking-[-0.01em] text-ink", // h2
-  "mt-[18px] mb-1.5 text-[1em] font-semibold text-ink", // h3
-  "mt-3.5 mb-1 text-[0.95em] font-semibold text-ink", // h4
-  "mt-3 mb-1 text-[0.9em] font-medium text-graphite", // h5
-  "mt-3 mb-1 text-[0.9em] font-medium text-ash", // h6
+  "mt-6 mb-4 text-[1.25em] font-semibold tracking-[-0.01em] text-ink", // h1
+  "mt-6 mb-4 text-[1.1em] font-semibold tracking-[-0.01em] text-ink", // h2
+  "mt-6 mb-4 text-[1em] font-semibold text-ink", // h3
+  "mt-6 mb-4 text-[0.95em] font-semibold text-ink", // h4
+  "mt-6 mb-4 text-[0.9em] font-medium text-graphite", // h5
+  "mt-6 mb-4 text-[0.9em] font-normal text-ash", // h6
 ] as const;
 
 const components: Components = {
@@ -98,20 +98,22 @@ const components: Components = {
   h5: ({ children }) => <h5 className={headingCls[4]}>{children}</h5>,
   h6: ({ children }) => <h6 className={headingCls[5]}>{children}</h6>,
 
-  // 段落 11px 下间距（Codex .assistant p 的 0 0 11px），首尾贴边
-  p: ({ children }) => <p className="mb-[11px] leading-[inherit] text-ink last:mb-0">{children}</p>,
+  // 段落自身零 margin（ZCode 口径）：块间距统一由 Streamdown 根容器的
+  // space-y-4(16px) 提供，首尾贴边由容器的 first:mt-0 / last:mb-0 兜底
+  p: ({ children }) => <p className="leading-[inherit] text-ink">{children}</p>,
 
-  // 有序列表用 list-inside：两位/三位编号在 overflow 容器里会被截断（ZCode 教训）
+  // 列表对齐 ZCode：my-3(12px)、列表项间 space-y-1.5(6px)、嵌套列表 my-1.5(6px)；
+  // ol 用 list-inside + pl-0（两位/三位编号在 overflow 容器里不会被截断，ZCode 教训）
   ul: ({ children }) => (
-    <ul className="my-[11px] list-outside list-disc space-y-1 pl-5 marker:text-ash">{children}</ul>
+    <ul className="my-3 list-outside list-disc space-y-1.5 pl-5 marker:text-ash [&_ul]:my-1.5 [&_ol]:my-1.5">{children}</ul>
   ),
   ol: ({ children }) => (
-    <ol className="my-[11px] list-inside list-decimal space-y-1 marker:text-ash">{children}</ol>
+    <ol className="my-3 list-inside list-decimal space-y-1.5 pl-0 marker:text-ash [&_ul]:my-1.5 [&_ol]:my-1.5">{children}</ol>
   ),
-  li: ({ children }) => <li className="pl-0.5 text-ink [&>p]:my-0">{children}</li>,
+  li: ({ children }) => <li className="pl-1 text-ink [&>p]:my-0 [&>p]:inline">{children}</li>,
 
   blockquote: ({ children }) => (
-    <blockquote className="my-[11px] border-l-2 border-line pl-3.5 text-graphite">{children}</blockquote>
+    <blockquote className="my-4 border-l-2 border-line pl-3 text-graphite">{children}</blockquote>
   ),
   hr: () => <hr className="my-5 border-0 border-t border-line" />,
   strong: ({ children }) => <strong className="font-semibold text-ink">{children}</strong>,
@@ -274,17 +276,21 @@ export function MarkdownContent({
 }) {
   return (
     <MarkdownBoundary content={content}>
-      <Streamdown
-        mode={streaming ? "streaming" : "static"}
-        parseIncompleteMarkdown={streaming}
-        animated={false}
-        isAnimating={false}
-        lineNumbers={false}
-        components={components}
-        className={cn("text-thread text-ink", className)}
-      >
-        {content}
-      </Streamdown>
+      {/* 排版类挂在自己的包装层上：Streamdown 2.7.0 实测不把 className 落到
+          渲染树（此前正文行距因此一路回落到 body 的 1.43，行距 token 从未生效
+          —— 2026-10-28 探针实测修正） */}
+      <div className={cn("text-thread text-ink", className)}>
+        <Streamdown
+          mode={streaming ? "streaming" : "static"}
+          parseIncompleteMarkdown={streaming}
+          animated={false}
+          isAnimating={false}
+          lineNumbers={false}
+          components={components}
+        >
+          {content}
+        </Streamdown>
+      </div>
     </MarkdownBoundary>
   );
 }
