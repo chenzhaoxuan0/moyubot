@@ -29,6 +29,7 @@ import {
   saveThemeRpc,
   deleteThemeRpc,
   listThemesRpc,
+  sanitizePresetProfile,
   type AppearanceLoadSource,
 } from "../core/appearanceStore.ts";
 
@@ -153,7 +154,12 @@ function applyToDom(state: AppearanceState): void {
   root.classList.toggle("dark", resolved === "dark");
   root.setAttribute("data-theme", resolved);
   root.setAttribute("data-chat-style", state.chatStyle ?? "classic");
-  root.style.setProperty("--aw-glass-blur", `${state.glassBlur ?? 14}px`);
+  // blur 归零必须输出 none 而不是 blur(0px)：后者仍会为每个玻璃区块建合成层、
+  // 采样背后内容，长会话上百个 backdrop 区域白付性能。styles.css 里消费模糊的
+  // glass 规则统一读 --aw-glass-blur-filter（none 或 blur(Npx)）
+  const glassBlur = clamp(Math.round(state.glassBlur ?? 14), 0, 32);
+  root.style.setProperty("--aw-glass-blur", `${glassBlur}px`);
+  root.style.setProperty("--aw-glass-blur-filter", glassBlur > 0 ? `blur(${glassBlur}px)` : "none");
   root.style.setProperty("--aw-chat-bg-opacity", `${state.chatBgOpacity ?? 35}%`);
 
   const electronBridge = (
@@ -377,7 +383,14 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
   },
 
   deleteCustomPreset: async (id: string) => {
-    await deleteThemeRpc(id);
+    const deleted = await deleteThemeRpc(id);
+    if (!deleted) {
+      // daemon 删盘失败（文件不在位 / daemon 没起 / RPC 断了）：本地列表不动、不 persist，
+      // 否则 4 秒后 poll 会把磁盘上的主题又读回来，界面与盘上打架。
+      // 口径照抄 importWallpaper 的失败提示（lastError，设置页「上次写入失败」条展示）
+      set({ lastError: `预设「${id}」删除失败：后台 daemon 未删除对应主题文件` });
+      return;
+    }
     const nextCustom = get().customPresets.filter((p) => p.id !== id);
     const nextPresetId = get().presetId === id ? "__custom__" : get().presetId;
     set({ customPresets: nextCustom, presetId: nextPresetId });
@@ -458,6 +471,20 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
     // 预设 = 配色。只换十组色；用户调过的透明度/表面设置按亮暗档案各自保留，
     // 壁纸/艺术/头像框等全局项更不动 —— 否则切一次主题自定义就被清零（实测）。
     const cur = get();
+    // 消毒闸门（必须有，后端 listThemes 的形状兜底只是双保险）：themes/*.json 由
+    // 用户/agent 手写，preset.light/dark 可能是 null、空对象或字段残缺 —— 类型断言
+    // 挡不住运行时。先过 appearance.json 同款消毒器：坏侧回落当前对应侧档案
+    //（外观不变），绝不 null 进 cloneProfile，也绝不把空 palette persist 进 appearance.json
+    const presetLight = sanitizePresetProfile(preset?.light, cur.profiles.light);
+    const presetDark = sanitizePresetProfile(preset?.dark, cur.profiles.dark);
+    const presetMode: AppearanceMode =
+      preset?.mode === "light" || preset?.mode === "dark" || preset?.mode === "auto"
+        ? preset.mode
+        : cur.mode;
+    const presetChatStyle: ChatStyle =
+      preset?.defaultChatStyle === "glass" || preset?.defaultChatStyle === "classic"
+        ? preset.defaultChatStyle
+        : cur.chatStyle ?? "classic";
     const merge = (resolved: ResolvedAppearance, from: AppearanceProfile): AppearanceProfile => ({
       ...cloneProfile(from),
       surface: { ...cur.profiles[resolved].surface },
@@ -467,13 +494,13 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
     });
     const next: AppearanceState = {
       ...cur,
-      mode: preset.mode,
+      mode: presetMode,
       profiles: {
-        light: merge("light", preset.light),
-        dark: merge("dark", preset.dark),
+        light: merge("light", presetLight),
+        dark: merge("dark", presetDark),
       },
       presetId: preset.id,
-      chatStyle: preset.defaultChatStyle ?? cur.chatStyle ?? "classic",
+      chatStyle: presetChatStyle,
     };
     set(publish(next));
   },

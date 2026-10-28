@@ -97,8 +97,8 @@ html.aw-wco-hidden {
   --text-body-lg: 16px;
 
   /* ---- Thread prose：对话正文的专属排版档 ----
-     数值来自 Codex 桌面版拆解真值（codex-clone/tokens.css）：
-     --conversation-thread-font-size .875rem / -line-height 1.375rem。
+     数值来自 Codex 桌面版拆解（codex-clone/tokens.css）的字号 .875rem（14px）；
+     行高取本项目实装值 1.4375rem（23px，比 Codex 的 1.375rem 略松一档）。
      跟随外观设置的字号缩放，缩放后行高等比放大，节奏不变。 */
   --text-thread: calc(0.875rem * var(--aw-font-scale, 1));
   --text-thread--line-height: calc(1.4375rem * var(--aw-font-scale, 1));
@@ -482,6 +482,9 @@ textarea {
    ========================================================================== */
 html[data-chat-style="glass"] {
   --aw-glass-blur: 14px;
+  /* 消费模糊的 glass 规则统一读这个：blur=0 时 applyToDom 写 none（不建合成层），
+     非 0 时写 blur(Npx)。这里的 blur(14px) 只是 JS 起来前的首屏兜底 */
+  --aw-glass-blur-filter: blur(14px);
   --aw-glass-card-bg: color-mix(in srgb, var(--color-line-soft) 60%, transparent);
   --aw-glass-rail-bg: color-mix(in srgb, var(--color-canvas) 65%, transparent);
   --aw-glass-border: var(--color-line);
@@ -489,27 +492,33 @@ html[data-chat-style="glass"] {
   --aw-glass-radius: 14px;
 }
 
-/* 在薄玻璃模式下，左侧栏、顶栏、底栏整体呈现统一纯粹的薄玻璃质感 */
-html[data-chat-style="glass"][data-aw-wallpaper] .bg-rail {
-  background-color: color-mix(in srgb, var(--color-canvas) 65%, transparent) !important;
-  backdrop-filter: blur(16px) !important;
-  -webkit-backdrop-filter: blur(16px) !important;
+/* 在薄玻璃模式下，左侧栏、顶栏、底栏整体呈现统一纯粹的薄玻璃质感。
+   ⚠ 锚点是主壳三栏的专用类（.aw-rail = Sidebar 根 / .aw-topbar = WorkspaceHeader /
+   .aw-statusbar = GlobalStatusBar），不许回落裸 header/footer/.bg-rail —— 那会波及
+   全应用所有页头、分节头与提示块（Backlog/Automations/SourceControl/Settings 页头、
+   DiffPane/CommitDialog 分节头、各对话框 bg-rail 输入框的透明边框都会被 !important 破坏）。
+   三栏与气泡同读 --aw-glass-blur-filter（滑杆拉 0 时同步归零）；底色用
+   --aw-glass-rail-bg 承载（比气泡更实的一档，65% 画布色） */
+html[data-chat-style="glass"][data-aw-wallpaper] .aw-rail {
+  background-color: var(--aw-glass-rail-bg) !important;
+  backdrop-filter: var(--aw-glass-blur-filter, blur(14px)) !important;
+  -webkit-backdrop-filter: var(--aw-glass-blur-filter, blur(14px)) !important;
   border-color: var(--color-line) !important;
 }
 
 /* 顶部工作区头部 (WorkspaceHeader) */
-html[data-chat-style="glass"][data-aw-wallpaper] header {
-  background-color: color-mix(in srgb, var(--color-canvas) 65%, transparent) !important;
-  backdrop-filter: blur(16px) !important;
-  -webkit-backdrop-filter: blur(16px) !important;
+html[data-chat-style="glass"][data-aw-wallpaper] .aw-topbar {
+  background-color: var(--aw-glass-rail-bg) !important;
+  backdrop-filter: var(--aw-glass-blur-filter, blur(14px)) !important;
+  -webkit-backdrop-filter: var(--aw-glass-blur-filter, blur(14px)) !important;
   border-bottom: 1px solid var(--color-line) !important;
 }
 
 /* 全局底栏 (GlobalStatusBar) */
-html[data-chat-style="glass"][data-aw-wallpaper] footer {
-  background-color: color-mix(in srgb, var(--color-canvas) 65%, transparent) !important;
-  backdrop-filter: blur(16px) !important;
-  -webkit-backdrop-filter: blur(16px) !important;
+html[data-chat-style="glass"][data-aw-wallpaper] .aw-statusbar {
+  background-color: var(--aw-glass-rail-bg) !important;
+  backdrop-filter: var(--aw-glass-blur-filter, blur(14px)) !important;
+  -webkit-backdrop-filter: var(--aw-glass-blur-filter, blur(14px)) !important;
   border-top: 1px solid var(--color-line) !important;
 }
 
@@ -521,7 +530,7 @@ html[data-aw-wallpaper] #root {
 
 html[data-aw-wallpaper] .chat-conversation-root {
   background-color: color-mix(in srgb, var(--color-canvas) var(--aw-chat-bg-opacity, 35%), transparent) !important;
-  transition: background-color 0.2s ease;
+  transition: background-color var(--aw-motion-duration, 120ms) ease;
 }
 
 html[data-aw-wallpaper] .chat-viewport-root {
@@ -531,15 +540,15 @@ html[data-aw-wallpaper] .chat-viewport-root {
 /* 助手回复卡片：纯净薄玻璃卡片，完全对齐前情摘要 */
 html[data-chat-style="glass"] .chat-assistant-bubble {
   background: var(--aw-glass-card-bg);
-  backdrop-filter: blur(var(--aw-glass-blur, 14px));
-  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px));
+  backdrop-filter: var(--aw-glass-blur-filter, blur(14px));
+  -webkit-backdrop-filter: var(--aw-glass-blur-filter, blur(14px));
   border: 1px solid var(--aw-glass-border);
   box-shadow: var(--aw-glass-shadow);
   border-radius: var(--aw-glass-radius);
   padding: 14px 18px;
   margin-top: 8px;
   margin-bottom: 8px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color var(--aw-motion-duration, 120ms) ease, box-shadow var(--aw-motion-duration, 120ms) ease;
 }
 html[data-chat-style="glass"] .chat-assistant-bubble:hover {
   border-color: color-mix(in srgb, var(--color-ink) 25%, var(--color-line));
@@ -548,8 +557,8 @@ html[data-chat-style="glass"] .chat-assistant-bubble:hover {
 /* 用户提问气泡：同样轻盈优雅的薄玻璃卡片，不再刺眼抢戏 */
 html[data-chat-style="glass"] .chat-user-bubble {
   background: color-mix(in srgb, var(--color-teal-tint) 35%, var(--aw-glass-card-bg)) !important;
-  backdrop-filter: blur(var(--aw-glass-blur, 14px)) !important;
-  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px)) !important;
+  backdrop-filter: var(--aw-glass-blur-filter, blur(14px)) !important;
+  -webkit-backdrop-filter: var(--aw-glass-blur-filter, blur(14px)) !important;
   border: 1px solid color-mix(in srgb, var(--color-teal-edge) 40%, var(--color-line)) !important;
   box-shadow: var(--aw-glass-shadow) !important;
   border-radius: var(--aw-glass-radius) !important;
@@ -558,8 +567,8 @@ html[data-chat-style="glass"] .chat-user-bubble {
 /* 思考与执行工作组 */
 html[data-chat-style="glass"] .chat-work-group {
   background: var(--aw-glass-card-bg);
-  backdrop-filter: blur(var(--aw-glass-blur, 14px));
-  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px));
+  backdrop-filter: var(--aw-glass-blur-filter, blur(14px));
+  -webkit-backdrop-filter: var(--aw-glass-blur-filter, blur(14px));
   border: 1px solid var(--aw-glass-border);
   border-radius: 12px;
   padding: 6px 12px;
@@ -571,8 +580,8 @@ html[data-chat-style="glass"] .chat-work-group {
 /* 工具执行卡片 / 连续工具行 */
 html[data-chat-style="glass"] .chat-tool-card {
   background: var(--aw-glass-card-bg);
-  backdrop-filter: blur(var(--aw-glass-blur, 14px));
-  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px));
+  backdrop-filter: var(--aw-glass-blur-filter, blur(14px));
+  -webkit-backdrop-filter: var(--aw-glass-blur-filter, blur(14px));
   border: 1px solid var(--aw-glass-border);
   border-radius: 12px;
   padding: 6px 12px;
@@ -580,11 +589,17 @@ html[data-chat-style="glass"] .chat-tool-card {
   margin-bottom: 4px;
   box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.08);
 }
+/* 上面这条 glass 规则（0,2,1）会压过工具行的 Tailwind hover:bg-line-soft/40（0,2,0），
+   悬停反馈随之消失 —— 同区补一条 :hover 变体把反馈找回来（混入 40% line-soft，
+   与气泡底色叠加的口径和用户气泡一致） */
+html[data-chat-style="glass"] .chat-tool-card:hover {
+  background: color-mix(in srgb, var(--color-line-soft) 40%, var(--aw-glass-card-bg));
+}
 
 /* 底部状态胶囊 */
 html[data-chat-style="glass"] .chat-status-pill {
-  backdrop-filter: blur(var(--aw-glass-blur, 14px));
-  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px));
+  backdrop-filter: var(--aw-glass-blur-filter, blur(14px));
+  -webkit-backdrop-filter: var(--aw-glass-blur-filter, blur(14px));
   background: color-mix(in srgb, var(--color-teal-tint) 50%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-teal-edge) 60%, transparent);
   box-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.14);
@@ -593,19 +608,40 @@ html[data-chat-style="glass"] .chat-status-pill {
 /* 底部输入框：薄玻璃浮岛 Dock */
 html[data-chat-style="glass"] .chat-composer-box {
   background: color-mix(in srgb, var(--color-canvas) 75%, transparent) !important;
-  backdrop-filter: blur(var(--aw-glass-blur, 14px)) !important;
-  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px)) !important;
+  backdrop-filter: var(--aw-glass-blur-filter, blur(14px)) !important;
+  -webkit-backdrop-filter: var(--aw-glass-blur-filter, blur(14px)) !important;
   border: 1px solid var(--aw-glass-border) !important;
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25) !important;
   border-radius: var(--aw-glass-radius) !important;
 }
 
-/* Markdown 代码块在薄玻璃模式下的质感 */
-html[data-chat-style="glass"] pre {
+/* Markdown 代码块在薄玻璃模式下的质感。
+   底色按亮暗档案分别取值：暗档案保持既有的 35% 黑（浅色 shiki 高亮在它上面对比度才够）；
+   亮档案换 6% 墨色 —— 亮色主题的浅色高亮压在黑底上对比度只有约 2:1，不可读。
+   --color-ink 亮暗档案都有定义（deriveCssVariables 按当前档案写 p.text） */
+html[data-chat-style="glass"][data-theme="dark"] pre {
   background: rgba(0, 0, 0, 0.35) !important;
-  backdrop-filter: blur(10px) !important;
-  -webkit-backdrop-filter: blur(10px) !important;
+  backdrop-filter: var(--aw-glass-blur-filter, blur(10px)) !important;
+  -webkit-backdrop-filter: var(--aw-glass-blur-filter, blur(10px)) !important;
   border: 1px solid rgba(255, 255, 255, 0.10) !important;
   box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.08);
   border-radius: 12px;
+}
+html[data-chat-style="glass"][data-theme="light"] pre {
+  background: color-mix(in srgb, var(--color-ink) 6%, transparent) !important;
+  backdrop-filter: var(--aw-glass-blur-filter, blur(10px)) !important;
+  -webkit-backdrop-filter: var(--aw-glass-blur-filter, blur(10px)) !important;
+  border: 1px solid rgba(255, 255, 255, 0.10) !important;
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+}
+
+/* 玻璃区块的过渡时长并入「全场唯一动效承诺」（--aw-motion-duration，off=0 /
+   reduced=60 / standard=120）。下面这段是承诺的另一半：系统级减弱动效时归零 ——
+   上面的 :root 规则只覆盖 button/a/input/textarea，玻璃区块（div/pre）必须单独关停 */
+@media (prefers-reduced-motion: reduce) {
+  html[data-aw-wallpaper] .chat-conversation-root,
+  html[data-chat-style="glass"] .chat-assistant-bubble {
+    transition-duration: 0ms;
+  }
 }

@@ -1364,7 +1364,7 @@ export function AppearanceSettingsSection() {
 
           {store.lastError && (
             <p className="rounded-btn border border-loss/40 bg-loss/10 px-3 py-2 text-caption text-loss">
-              上次写入失败：{store.lastError}
+              上次操作失败：{store.lastError}
             </p>
           )}
 

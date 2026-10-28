@@ -238,7 +238,7 @@ export function Sidebar() {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-rail">
+    <div className="aw-rail flex h-full min-h-0 flex-col bg-rail">
       {/* 顶部 48px 区域：在出图/自动化时顶掉 A 标渲染返回工作台；在正常对话时渲染 A 图标与全局独立动作。
           桌面端无边框窗口：这一行同时是左列的窗口拖拽热区（titlebar-drag） */}
       {mainView !== "chat" ? (

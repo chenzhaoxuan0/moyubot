@@ -18,6 +18,7 @@ import {
   sanitizeAppearanceState,
   toDreamSkinTheme,
   type AppearancePreset,
+  type AppearanceProfile,
   type AppearanceState,
   type ResolvedAppearance,
 } from "../core/appearance.ts";
@@ -276,6 +277,40 @@ function toBase64(buffer: ArrayBuffer): string {
 export { toDreamSkinTheme };
 export type { ResolvedAppearance };
 /* --------------------------------------------------------------------------- 主题预设 RPC */
+
+/**
+ * 预设档案的消毒闸门：themes/*.json 由用户或 agent 手写，缺 light/dark、写空对象、
+ * 字段类型不对都是常态而非异常（RPC 拿回来只是过了类型断言，运行时形状没人保证）。
+ * - 整体形状不合格（null / 非对象 / 缺 palette / 空 palette）→ 该侧回落调用方给的
+ *   fallback（当前对应侧档案），绝不把 null 或空 palette 交给 applyPreset 的 cloneProfile；
+ * - 形状合格 → 塞进一份假 state 走 appearance.json 读回路径的同款消毒器
+ *   （sanitizeProfile），逐字段回落内置默认档案，产出一份完整可信的档案。
+ */
+export function sanitizePresetProfile(raw: unknown, fallback: AppearanceProfile): AppearanceProfile {
+  const shapedOk =
+    raw !== null &&
+    typeof raw === "object" &&
+    !Array.isArray(raw) &&
+    typeof (raw as { palette?: unknown }).palette === "object" &&
+    (raw as { palette: unknown }).palette !== null &&
+    Object.keys((raw as { palette: object }).palette).length > 0;
+  if (!shapedOk) {
+    // 深拷贝再返回：fallback 多半是当前 state 的档案，共享引用会让后续编辑互相污染
+    const source = fallback;
+    return {
+      palette: { ...source.palette },
+      surface: { ...source.surface },
+      transparency: source.transparency,
+      overlayTransparency: source.overlayTransparency,
+      terminalTransparency: source.terminalTransparency,
+    };
+  }
+  const sanitized = sanitizeAppearanceState({
+    $meta: { schemaVersion: 1 },
+    profiles: { light: raw, dark: raw },
+  });
+  return sanitized.profiles.light;
+}
 
 export async function listThemesRpc(): Promise<AppearancePreset[]> {
   try {

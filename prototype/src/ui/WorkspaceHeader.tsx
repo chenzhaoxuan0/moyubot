@@ -49,7 +49,7 @@ export function WorkspaceHeader() {
     <header
       onContextMenu={onTitleBarContextMenu}
       className={cn(
-        "titlebar-drag @container flex h-12 shrink-0 items-center gap-2 border-b border-line/60 bg-rail transition-[padding] duration-300",
+        "aw-topbar titlebar-drag @container flex h-12 shrink-0 items-center gap-2 border-b border-line/60 bg-rail transition-[padding] duration-300",
         "pl-4",
         paneOpen ? "pr-4" : "pr-0",
       )}

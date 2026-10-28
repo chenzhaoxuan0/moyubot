@@ -71,7 +71,7 @@ export function GlobalStatusBar() {
   return (
     <footer
       aria-label="全局状态栏"
-      className="relative flex shrink-0 items-stretch border-t border-line/60 bg-rail"
+      className="aw-statusbar relative flex shrink-0 items-stretch border-t border-line/60 bg-rail"
       style={{ height }}
     >
       {/* 上缘拖拽热区：贴住顶边的细条，悬停亮起；双击复位最薄档。

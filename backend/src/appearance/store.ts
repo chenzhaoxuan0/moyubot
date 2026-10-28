@@ -18,7 +18,7 @@
 
 import { mkdir, readFile, rename, stat, writeFile, readdir, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 
 import { log } from "../log.ts";
@@ -245,7 +245,9 @@ export async function readLogoDataUrl(homeDir: string, rel: string | null): Prom
 /** 原子写：先写临时文件再 rename，避免半截文件被 agent 或前端读到。 */
 async function atomicWrite(file: string, data: string | Buffer): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
+  // tmp 名带随机后缀：只有 pid 的话，同进程并发写同一目标会共用 tmp 路径，
+  // 两边先后 rename 各自内容时产生竞态（后写的 tmp 被先 rename 掉就 ENOENT）
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
   await writeFile(tmp, data);
   await rename(tmp, file);
 }
@@ -431,6 +433,26 @@ export interface StoredThemePreset {
 }
 
 /**
+ * 内置预设的保留字 id —— 与 prototype/src/core/appearance.ts 的 APPEARANCE_PRESETS
+ * （parchment / obsidian / twilight-mirror）保持同步。自定义主题撞车保存会把
+ * 内置预设的卡片顶掉（前端按 id 合并去重），这里直接拒绝。
+ */
+const BUILTIN_PRESET_IDS = new Set(["parchment", "obsidian", "twilight-mirror"]);
+
+/**
+ * light/dark 侧的最小形状：非空对象、带非空 palette 对象。
+ * themes/*.json 由用户或 agent 手写，缺侧/空对象是常态而非异常 ——
+ * 这个检查只拦「两侧都不合格」的空壳文件，单侧缺失的主题照常下发，
+ * 由前端 applyPreset 的消毒闸门负责让缺的那一侧回落当前档案。
+ */
+function looksLikeProfileSide(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const palette = (value as { palette?: unknown }).palette;
+  if (!palette || typeof palette !== "object" || Array.isArray(palette)) return false;
+  return Object.keys(palette).length > 0;
+}
+
+/**
  * 列出所有存放在 <homeDir>/themes/*.json 中的预设主题文件。
  * 每个文件都可由用户或 agent 直接用 read/write 工具读取或编辑。
  */
@@ -444,8 +466,21 @@ export async function listThemes(homeDir: string): Promise<StoredThemePreset[]> 
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       const absPath = path.join(dir, entry.name);
       try {
+        // 与 readAppearance 同款上限：一个坏循环塞进来的超大文件不许拖垮每次 4 秒的轮询读
+        const s = await stat(absPath);
+        if (!s.isFile() || s.size > MAX_APPEARANCE_BYTES) {
+          log.warn("theme file skipped (not a regular file or too large)", {
+            path: absPath,
+            bytes: s.size,
+          });
+          continue;
+        }
         const raw = await readFile(absPath, "utf8");
         const parsed = JSON.parse(raw) as Partial<StoredThemePreset>;
+        if (!looksLikeProfileSide(parsed.light) && !looksLikeProfileSide(parsed.dark)) {
+          log.warn("theme file skipped (no usable light/dark profile)", { path: absPath });
+          continue;
+        }
         const id =
           typeof parsed.id === "string" && parsed.id.trim()
             ? parsed.id.trim()
@@ -500,6 +535,12 @@ export async function saveTheme(
   if (!id) {
     id = `theme-${Date.now().toString(36)}`;
   }
+  // 保留字：撞内置预设 id 的保存会顶掉内置卡片（前端按 id 合并），直接拒绝
+  if (BUILTIN_PRESET_IDS.has(id)) {
+    throw Object.assign(new Error(`theme id "${id}" is reserved by a builtin preset`), {
+      code: "bad_params",
+    });
+  }
 
   const dir = themesDir(homeDir);
   await mkdir(dir, { recursive: true });
@@ -520,7 +561,14 @@ export async function saveTheme(
     defaultChatStyle: preset.defaultChatStyle === "classic" ? "classic" : "glass",
   };
 
-  await atomicWrite(absPath, `${JSON.stringify(doc, null, 2)}\n`);
+  // 与 writeAppearance 同款上限：主题文件走的是同一条 4 秒轮询读取链路，坏循环同样能把它撑爆
+  const serialized = `${JSON.stringify(doc, null, 2)}\n`;
+  if (Buffer.byteLength(serialized, "utf8") > MAX_APPEARANCE_BYTES) {
+    throw Object.assign(new Error(`theme file exceeds ${MAX_APPEARANCE_BYTES} bytes`), {
+      code: "bad_params",
+    });
+  }
+  await atomicWrite(absPath, serialized);
   log.info("theme saved", { path: absPath, id });
 
   const resultPreset: StoredThemePreset = {
