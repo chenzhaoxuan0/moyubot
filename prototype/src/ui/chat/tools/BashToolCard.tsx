@@ -22,7 +22,7 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
         className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-line-soft/50 cursor-pointer transition select-none"
       >
         <Terminal size={13} className="shrink-0 text-teal" />
-        <span className="text-body-sm font-medium text-ink">终端命令</span>
+        <span className="text-body-sm font-medium text-ink">执行</span>
 
         {command && (
           <span className="min-w-0 max-w-[400px] truncate font-mono text-body-sm text-ash">
@@ -32,18 +32,18 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {isRunning ? (
-            <span className="flex items-center gap-1 text-[11px] text-teal">
+            <span className="flex items-center gap-1.5 text-[11px] text-ash">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal" />
               <span>运行中</span>
             </span>
           ) : isFailed ? (
-            <span className="flex items-center gap-1 text-[11px] text-loss">
-              <AlertTriangle size={12} />
+            <span className="flex items-center gap-1.5 text-[11px] text-ash">
+              <AlertTriangle size={12} className="text-loss" />
               <span>失败</span>
             </span>
           ) : (
-            <span className="flex items-center gap-1 text-[11px] text-gain">
-              <Check size={12} />
+            <span className="flex items-center gap-1.5 text-[11px] text-ash">
+              <Check size={12} className="text-gain" />
               <span>exit 0</span>
             </span>
           )}

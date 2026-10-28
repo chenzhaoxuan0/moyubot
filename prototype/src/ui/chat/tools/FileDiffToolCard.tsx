@@ -66,8 +66,17 @@ export function FileDiffToolCard({ data }: { data: ToolExecutionData }) {
       >
         <FileCode size={13} className="shrink-0 text-teal" />
         <span className="font-mono text-body-sm font-medium text-ink truncate max-w-[420px]" title={filePath}>
-          {filePath || data.title || "文件编辑"}
+          编辑
         </span>
+
+        {(filePath || data.title) && (
+          <span
+            className="min-w-0 max-w-[420px] truncate font-mono text-body-sm text-ash"
+            title={filePath || data.title}
+          >
+            {filePath || data.title}
+          </span>
+        )}
 
         {(additions > 0 || deletions > 0) && (
           <span className="font-mono text-[11px] tnum flex items-center gap-1.5 ml-1">

@@ -24,18 +24,18 @@ export function GenericToolCard({ data }: { data: ToolExecutionData }) {
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {data.completed ? (
             data.ok !== false ? (
-              <span className="flex items-center gap-1 text-[11px] text-gain">
-                <Check size={12} />
+              <span className="flex items-center gap-1.5 text-[11px] text-ash">
+                <Check size={12} className="text-gain" />
                 <span>完成</span>
               </span>
             ) : (
-              <span className="flex items-center gap-1 text-[11px] text-loss">
-                <AlertTriangle size={12} />
+              <span className="flex items-center gap-1.5 text-[11px] text-ash">
+                <AlertTriangle size={12} className="text-loss" />
                 <span>失败</span>
               </span>
             )
           ) : (
-            <span className="flex items-center gap-1 text-[11px] text-teal">
+            <span className="flex items-center gap-1.5 text-[11px] text-ash">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal" />
               <span>执行中</span>
             </span>

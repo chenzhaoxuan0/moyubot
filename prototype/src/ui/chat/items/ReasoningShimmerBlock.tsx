@@ -76,7 +76,7 @@ export function ReasoningShimmerBlock({
       </div>
 
       {expanded && (
-        <div className="mt-1 ml-[13px] border-l border-line/70 pl-3 max-h-96 overflow-y-auto font-mono text-[12px] leading-[1.65] text-graphite whitespace-pre-wrap select-text">
+        <div className="mt-1 ml-[13px] border-l border-line/70 pl-3 max-h-96 overflow-y-auto font-mono text-[12px] leading-[1.65] text-ash whitespace-pre-wrap select-text">
           {text}
         </div>
       )}

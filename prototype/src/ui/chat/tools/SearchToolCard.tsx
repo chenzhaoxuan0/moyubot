@@ -28,11 +28,12 @@ export function SearchToolCard({ data }: { data: ToolExecutionData }) {
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {data.completed ? (
-            <span className="text-[11px] text-gain">
-              {results.length > 0 ? `${results.length} 条结果` : "已完成"}
+            <span className="flex items-center gap-1.5 text-[11px] text-ash">
+              <span className="h-1.5 w-1.5 rounded-full bg-gain" />
+              <span>{results.length > 0 ? `${results.length} 条结果` : "已完成"}</span>
             </span>
           ) : (
-            <span className="flex items-center gap-1 text-[11px] text-teal">
+            <span className="flex items-center gap-1.5 text-[11px] text-ash">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal" />
               <span>搜索中</span>
             </span>
