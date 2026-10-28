@@ -149,7 +149,8 @@ function applyToDom(state: AppearanceState): void {
   root.classList.toggle("dark", resolved === "dark");
   root.setAttribute("data-theme", resolved);
   root.setAttribute("data-chat-style", state.chatStyle ?? "classic");
-  root.style.setProperty("--aw-glass-blur", `${state.glassBlur ?? 8}px`);
+  root.style.setProperty("--aw-glass-blur", `${state.glassBlur ?? 14}px`);
+  root.style.setProperty("--aw-chat-bg-opacity", `${state.chatBgOpacity ?? 35}%`);
 
   const electronBridge = (
     window as unknown as {
@@ -280,8 +281,10 @@ export interface AppearanceStore extends AppearanceState {
   setMode: (mode: AppearanceMode) => void;
   /** 对话视图形态：classic=经典无气泡平铺，glass=液态毛玻璃卡片（特别适合带壁纸） */
   setChatStyle: (style: ChatStyle) => void;
-  /** 液态玻璃模糊度 4..48px */
+  /** 薄玻璃模糊度 4..32px */
   setGlassBlur: (blur: number) => void;
+  /** 对话区画布遮罩不透明度 0..100% */
+  setChatBgOpacity: (opacity: number) => void;
   /** bot 头像框形态（全局设置，不分亮暗档案） */
   setAvatarFrame: (frame: AvatarFrame) => void;
   applyPreset: (preset: AppearancePreset) => void;
@@ -411,7 +414,11 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
   },
 
   setGlassBlur: (blur) => {
-    set(publish({ ...get(), glassBlur: clamp(Math.round(blur), 2, 40) }));
+    set(publish({ ...get(), glassBlur: clamp(Math.round(blur), 4, 32) }));
+  },
+
+  setChatBgOpacity: (opacity) => {
+    set(publish({ ...get(), chatBgOpacity: clamp(Math.round(opacity), 0, 100) }));
   },
 
   applyPreset: (preset) => {

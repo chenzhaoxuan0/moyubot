@@ -473,210 +473,135 @@ textarea {
 }
 
 /* ==========================================================================
-   Chat View Style — 经典效果 (Classic) vs 苹果液态玻璃效果 (Apple Liquid Glass)
-   完全按照苹果 Liquid Glass 规范设计（参考 macOS Tahoe / visionOS / iOS 18）：
-   - 水滴级光学透射：极低漫反射、去浑浊、极高通透率，底壁纸纹理清晰透射
-   - 动态超饱和色彩活化：backdrop-filter: blur(8px) saturate(200%) contrast(104%) brightness(...)
-   - 顶部物理发丝反射高光（1px Specular Lip）：::before 线性渐变光斑
-   - 弧形穹顶聚光（Curved Luminous Sheen）：双层 radial-gradient 光圈
-   - 物理厚度倒角阴影（Multi-stop Bevel）：顶高光 + 内发丝 + 底厚度阴影 + 柔和空间景深
+   Chat View Style — 经典效果 (Classic) vs 薄玻璃效果 (Thin Glass)
+   统一对齐全页面最满意的「前情摘要」卡片质感：
+   - 清雅薄透：发丝线边框 (var(--color-line)) + 微透底色 (var(--color-line-soft) 60%)
+   - 彻底去花哨：去除强烈径向高光 (radial-gradient)、顶部反光发丝线与刺眼饱和度
+   - 保证对比度：对 Chat 区域提供可控画布底色遮罩 (--aw-chat-bg-opacity) 避免高亮壁纸冲淡文字
+   - 统一全场视觉：左侧栏、顶栏 (Header)、底栏 (Status bar)、输入框与对话气泡整体同源
    ========================================================================== */
 html[data-chat-style="glass"] {
-  --aw-glass-blur: 8px;
-  --aw-glass-brightness: 106%;
-  --aw-glass-saturation: 200%;
-  --aw-glass-contrast: 104%;
-  --aw-glass-filter: blur(var(--aw-glass-blur, 8px)) saturate(var(--aw-glass-saturation)) contrast(var(--aw-glass-contrast)) brightness(var(--aw-glass-brightness));
-
-  /* Light Mode：通透晶莹纯流水，高反差白色镜面聚光 */
-  --aw-glass-card-bg:
-    radial-gradient(130% 80% at 50% 0%, rgba(255, 255, 255, 0.90) 0%, rgba(255, 255, 255, 0.35) 45%, transparent 85%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.45) 0%, rgba(255, 255, 255, 0.18) 100%),
-    rgba(255, 255, 255, 0.35);
-  --aw-glass-rail-bg:
-    radial-gradient(130% 80% at 50% 0%, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.42) 50%, transparent 90%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.55) 0%, rgba(255, 255, 255, 0.25) 100%),
-    rgba(255, 255, 255, 0.45);
-  --aw-glass-border: rgba(255, 255, 255, 0.65);
-  --aw-glass-border-specular: rgba(255, 255, 255, 0.98);
-  --aw-glass-shadow:
-    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.95),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.50),
-    inset 0 -1px 1px 0 rgba(0, 0, 0, 0.05),
-    0 12px 32px -4px rgba(0, 0, 0, 0.10),
-    0 4px 12px 0 rgba(0, 0, 0, 0.04);
-  --aw-glass-shadow-hover:
-    inset 0 2px 2px 0 rgba(255, 255, 255, 1),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.70),
-    0 18px 44px -4px rgba(0, 0, 0, 0.15),
-    0 6px 16px 0 rgba(0, 0, 0, 0.06);
+  --aw-glass-blur: 14px;
+  --aw-glass-card-bg: color-mix(in srgb, var(--color-line-soft) 60%, transparent);
+  --aw-glass-rail-bg: color-mix(in srgb, var(--color-canvas) 65%, transparent);
+  --aw-glass-border: var(--color-line);
+  --aw-glass-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.12);
+  --aw-glass-radius: 14px;
 }
 
-html[data-chat-style="glass"].dark,
-html[data-chat-style="glass"][data-theme="dark"] {
-  --aw-glass-brightness: 106%;
-  --aw-glass-filter: blur(var(--aw-glass-blur, 8px)) saturate(var(--aw-glass-saturation)) contrast(var(--aw-glass-contrast)) brightness(var(--aw-glass-brightness));
-
-  /* Dark Mode：苹果黑水晶纯净液态，极低雾度，底壁纸晶莹透出，顶部光晕流淌 */
-  --aw-glass-card-bg:
-    radial-gradient(130% 75% at 50% 0%, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.03) 40%, transparent 80%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.07) 0%, rgba(255, 255, 255, 0.01) 100%),
-    rgba(12, 16, 22, 0.28);
-  --aw-glass-rail-bg:
-    radial-gradient(130% 75% at 50% 0%, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.04) 40%, transparent 80%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.09) 0%, rgba(255, 255, 255, 0.02) 100%),
-    rgba(12, 16, 22, 0.35);
-  --aw-glass-border: rgba(255, 255, 255, 0.16);
-  --aw-glass-border-specular: rgba(255, 255, 255, 0.48);
-  --aw-glass-shadow:
-    inset 0 1px 1px 0 rgba(255, 255, 255, 0.45),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
-    inset 0 -1px 1.5px 0 rgba(0, 0, 0, 0.40),
-    0 14px 36px -4px rgba(0, 0, 0, 0.40),
-    0 4px 14px 0 rgba(0, 0, 0, 0.22);
-  --aw-glass-shadow-hover:
-    inset 0 1.5px 2px 0 rgba(255, 255, 255, 0.65),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
-    0 18px 48px -4px rgba(0, 0, 0, 0.48),
-    0 6px 18px 0 rgba(0, 0, 0, 0.28);
+/* 在薄玻璃模式下，左侧栏、顶栏、底栏整体呈现统一纯粹的薄玻璃质感 */
+html[data-chat-style="glass"][data-aw-wallpaper] .bg-rail {
+  background-color: color-mix(in srgb, var(--color-canvas) 65%, transparent) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border-color: var(--color-line) !important;
 }
 
-/* 在液态玻璃模式且开启壁纸时，主画布与对话区域背景透明以透出壁纸 */
+/* 顶部工作区头部 (WorkspaceHeader) */
+html[data-chat-style="glass"][data-aw-wallpaper] header {
+  background-color: color-mix(in srgb, var(--color-canvas) 65%, transparent) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border-bottom: 1px solid var(--color-line) !important;
+}
+
+/* 全局底栏 (GlobalStatusBar) */
+html[data-chat-style="glass"][data-aw-wallpaper] footer {
+  background-color: color-mix(in srgb, var(--color-canvas) 65%, transparent) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border-top: 1px solid var(--color-line) !important;
+}
+
+/* 主画布与对话区域背景透明度：由设置中的 chatBgOpacity 动态控制（默认 35% 柔和遮罩，防止文字对比度不足） */
 html[data-chat-style="glass"][data-aw-wallpaper] body,
-html[data-chat-style="glass"][data-aw-wallpaper] #root,
-html[data-chat-style="glass"][data-aw-wallpaper] .chat-viewport-root {
+html[data-chat-style="glass"][data-aw-wallpaper] #root {
   background-color: transparent !important;
 }
 
-/* 苹果液态玻璃顶端物理镜面发丝高光线 (1px Specular Lip) */
-html[data-chat-style="glass"] .chat-assistant-bubble,
-html[data-chat-style="glass"] .chat-user-bubble,
-html[data-chat-style="glass"] .chat-work-group,
-html[data-chat-style="glass"] .chat-tool-card,
-html[data-chat-style="glass"] .chat-composer-box {
-  position: relative;
-  overflow: hidden;
+html[data-chat-style="glass"][data-aw-wallpaper] .chat-viewport-root {
+  background-color: color-mix(in srgb, var(--color-canvas) var(--aw-chat-bg-opacity, 35%), transparent) !important;
+  transition: background-color 0.2s ease;
 }
 
-html[data-chat-style="glass"] .chat-assistant-bubble::before,
-html[data-chat-style="glass"] .chat-user-bubble::before,
-html[data-chat-style="glass"] .chat-work-group::before,
-html[data-chat-style="glass"] .chat-tool-card::before,
-html[data-chat-style="glass"] .chat-composer-box::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent 4%, rgba(255, 255, 255, 0.65) 25%, rgba(255, 255, 255, 0.95) 50%, rgba(255, 255, 255, 0.65) 75%, transparent 96%);
-  border-radius: inherit;
-  pointer-events: none;
-  z-index: 2;
-  opacity: 0.85;
-  transition: opacity 0.3s ease, background 0.3s ease;
-}
-
-html[data-chat-style="glass"] .chat-assistant-bubble:hover::before,
-html[data-chat-style="glass"] .chat-user-bubble:hover::before,
-html[data-chat-style="glass"] .chat-work-group:hover::before,
-html[data-chat-style="glass"] .chat-tool-card:hover::before,
-html[data-chat-style="glass"] .chat-composer-box:hover::before {
-  opacity: 1;
-  background: linear-gradient(90deg, transparent 2%, rgba(255, 255, 255, 0.85) 20%, #ffffff 50%, rgba(255, 255, 255, 0.85) 80%, transparent 98%);
-}
-
-/* 助手回复卡片：液态晶莹卡片 */
+/* 助手回复卡片：纯净薄玻璃卡片，完全对齐前情摘要 */
 html[data-chat-style="glass"] .chat-assistant-bubble {
   background: var(--aw-glass-card-bg);
-  backdrop-filter: var(--aw-glass-filter);
-  -webkit-backdrop-filter: var(--aw-glass-filter);
+  backdrop-filter: blur(var(--aw-glass-blur, 14px));
+  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px));
   border: 1px solid var(--aw-glass-border);
   box-shadow: var(--aw-glass-shadow);
-  border-radius: 18px;
-  padding: 16px 20px;
-  margin-top: 10px;
-  margin-bottom: 10px;
-  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+  border-radius: var(--aw-glass-radius);
+  padding: 14px 18px;
+  margin-top: 8px;
+  margin-bottom: 8px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 html[data-chat-style="glass"] .chat-assistant-bubble:hover {
-  border-color: var(--aw-glass-border-specular);
-  box-shadow: var(--aw-glass-shadow-hover);
+  border-color: color-mix(in srgb, var(--color-ink) 25%, var(--color-line));
 }
 
-/* 用户提问气泡：液态水滴晶体 */
+/* 用户提问气泡：同样轻盈优雅的薄玻璃卡片，不再刺眼抢戏 */
 html[data-chat-style="glass"] .chat-user-bubble {
-  background: var(--aw-glass-rail-bg) !important;
-  backdrop-filter: var(--aw-glass-filter) !important;
-  -webkit-backdrop-filter: var(--aw-glass-filter) !important;
-  border: 1px solid var(--aw-glass-border) !important;
+  background: color-mix(in srgb, var(--color-teal-tint) 35%, var(--aw-glass-card-bg)) !important;
+  backdrop-filter: blur(var(--aw-glass-blur, 14px)) !important;
+  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px)) !important;
+  border: 1px solid color-mix(in srgb, var(--color-teal-edge) 40%, var(--color-line)) !important;
   box-shadow: var(--aw-glass-shadow) !important;
-  border-radius: 18px !important;
+  border-radius: var(--aw-glass-radius) !important;
 }
 
 /* 思考与执行工作组 */
 html[data-chat-style="glass"] .chat-work-group {
   background: var(--aw-glass-card-bg);
-  backdrop-filter: var(--aw-glass-filter);
-  -webkit-backdrop-filter: var(--aw-glass-filter);
+  backdrop-filter: blur(var(--aw-glass-blur, 14px));
+  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px));
   border: 1px solid var(--aw-glass-border);
-  border-radius: 14px;
+  border-radius: 12px;
   padding: 6px 12px;
   margin-top: 6px;
   margin-bottom: 6px;
-  box-shadow: var(--aw-glass-shadow);
+  box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.08);
 }
 
 /* 工具执行卡片 / 连续工具行 */
 html[data-chat-style="glass"] .chat-tool-card {
   background: var(--aw-glass-card-bg);
-  backdrop-filter: var(--aw-glass-filter);
-  -webkit-backdrop-filter: var(--aw-glass-filter);
+  backdrop-filter: blur(var(--aw-glass-blur, 14px));
+  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px));
   border: 1px solid var(--aw-glass-border);
-  border-radius: 13px;
+  border-radius: 12px;
   padding: 6px 12px;
   margin-top: 4px;
   margin-bottom: 4px;
-  box-shadow: var(--aw-glass-shadow);
+  box-shadow: 0 2px 8px 0 rgba(0, 0, 0, 0.08);
 }
 
 /* 底部状态胶囊 */
 html[data-chat-style="glass"] .chat-status-pill {
-  backdrop-filter: var(--aw-glass-filter);
-  -webkit-backdrop-filter: var(--aw-glass-filter);
+  backdrop-filter: blur(var(--aw-glass-blur, 14px));
+  -webkit-backdrop-filter: blur(var(--aw-glass-blur, 14px));
   background: color-mix(in srgb, var(--color-teal-tint) 50%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-teal-edge) 60%, transparent);
-  box-shadow: 
-    inset 0 1px 1px 0 rgba(255, 255, 255, 0.40),
-    0 4px 16px 0 rgba(0, 0, 0, 0.18);
+  box-shadow: 0 4px 16px 0 rgba(0, 0, 0, 0.14);
 }
 
-/* 底部输入框：液态浮岛 Dock */
+/* 底部输入框：薄玻璃浮岛 Dock */
 html[data-chat-style="glass"] .chat-composer-box {
-  background: var(--aw-glass-rail-bg) !important;
-  backdrop-filter: blur(calc(var(--aw-glass-blur, 8px) * 1.5)) saturate(var(--aw-glass-saturation)) contrast(var(--aw-glass-contrast)) brightness(var(--aw-glass-brightness)) !important;
-  -webkit-backdrop-filter: blur(calc(var(--aw-glass-blur, 8px) * 1.5)) saturate(var(--aw-glass-saturation)) contrast(var(--aw-glass-contrast)) brightness(var(--aw-glass-brightness)) !important;
+  background: color-mix(in srgb, var(--color-canvas) 75%, transparent) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
   border: 1px solid var(--aw-glass-border) !important;
-  box-shadow:
-    inset 0 1.5px 1.5px 0 rgba(255, 255, 255, 0.65),
-    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
-    inset 0 -1px 2px 0 rgba(0, 0, 0, 0.35),
-    0 20px 56px -4px rgba(0, 0, 0, 0.45),
-    0 6px 18px 0 rgba(0, 0, 0, 0.22) !important;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.25) !important;
+  border-radius: var(--aw-glass-radius) !important;
 }
 
-/* 侧栏在液态玻璃模式下的通透感 */
-html[data-chat-style="glass"][data-aw-wallpaper] .bg-rail {
-  background-color: var(--aw-glass-rail-bg) !important;
-  backdrop-filter: blur(calc(var(--aw-glass-blur, 8px) * 1.5)) saturate(180%) !important;
-  -webkit-backdrop-filter: blur(calc(var(--aw-glass-blur, 8px) * 1.5)) saturate(180%) !important;
-}
-
-/* Markdown 代码块在液态玻璃模式下的半透明磨砂质感 */
+/* Markdown 代码块在薄玻璃模式下的质感 */
 html[data-chat-style="glass"] pre {
-  background: rgba(0, 0, 0, 0.32) !important;
-  backdrop-filter: blur(6px) saturate(160%) !important;
-  -webkit-backdrop-filter: blur(6px) saturate(160%) !important;
+  background: rgba(0, 0, 0, 0.35) !important;
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
   border: 1px solid rgba(255, 255, 255, 0.10) !important;
-  border-top: 1px solid rgba(255, 255, 255, 0.22) !important;
-  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.15);
+  box-shadow: inset 0 1px 1px 0 rgba(255, 255, 255, 0.08);
   border-radius: 12px;
 }

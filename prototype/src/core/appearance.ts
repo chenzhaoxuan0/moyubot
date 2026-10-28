@@ -272,8 +272,10 @@ export interface AppearanceState {
   presetId: string | null;
   /** 对话视图形态：classic=经典无气泡平铺，glass=液态毛玻璃卡片（特别适合带壁纸） */
   chatStyle: ChatStyle;
-  /** 液态玻璃模糊度 2..32px，默认 8px（对齐 Apple Liquid 晶润水感标准） */
+  /** 薄玻璃模糊度 4..32px，默认 14px */
   glassBlur: number;
+  /** 对话区画布遮罩不透明度 0..100%，默认 35%（开壁纸时压暗背景，提高正文对比度） */
+  chatBgOpacity: number;
 }
 
 /* --------------------------------------------------------------------------- 默认值 */
@@ -434,7 +436,8 @@ export function defaultAppearanceState(): AppearanceState {
     avatarFrame: "rounded",
     presetId: PRESET_PARCHMENT.id,
     chatStyle: "classic",
-    glassBlur: 8,
+    glassBlur: 14,
+    chatBgOpacity: 35,
   };
 }
 
@@ -753,7 +756,8 @@ export function sanitizeAppearanceState(raw: unknown): AppearanceState {
     avatarFrame: input.avatarFrame === "square" ? "square" : "rounded",
     presetId: typeof input.presetId === "string" ? input.presetId : null,
     chatStyle: input.chatStyle === "glass" ? "glass" : "classic",
-    glassBlur: typeof input.glassBlur === "number" && Number.isFinite(input.glassBlur) ? clamp(Math.round(input.glassBlur), 2, 40) : 8,
+    glassBlur: typeof input.glassBlur === "number" && Number.isFinite(input.glassBlur) ? clamp(Math.round(input.glassBlur), 4, 32) : 14,
+    chatBgOpacity: typeof input.chatBgOpacity === "number" && Number.isFinite(input.chatBgOpacity) ? clamp(Math.round(input.chatBgOpacity), 0, 100) : 35,
   };
 }
 
@@ -856,6 +860,7 @@ export function toDreamSkinTheme(
     },
     colors: { ...profile.palette },
     chatStyle: state.chatStyle ?? "classic",
-    glassBlur: state.glassBlur ?? 8,
+    glassBlur: state.glassBlur ?? 14,
+    chatBgOpacity: state.chatBgOpacity ?? 35,
   };
 }

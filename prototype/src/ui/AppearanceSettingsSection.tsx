@@ -413,71 +413,70 @@ export function AppearanceSettingsSection() {
           </button>
         </div>
 
-        {/* 液态玻璃细节微调（当选用液态玻璃模式时展开） */}
+        {/* 薄玻璃细节与对比度调控（当选用玻璃模式时展开） */}
         {store.chatStyle === "glass" && (
           <div className="mt-4 rounded-card border border-teal-edge/60 bg-teal-tint/10 p-4 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-body-sm font-medium text-ink flex items-center gap-1.5">
-                  <Sparkles size={14} className="text-teal" />
-                  液态玻璃模糊度 / 晶莹水感 (Apple Material)
-                </p>
-                <p className="text-caption text-graphite">
-                  依 Apple SwiftUI 规范分级：折射光斑与文字可读性黄金调校，壁纸细节自然透出且不浑浊。
-                </p>
+            {/* 对话区画布遮罩不透明度滑块 */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-body-sm font-medium text-ink flex items-center gap-1.5">
+                    <Sparkles size={14} className="text-teal" />
+                    对话区画布遮罩强度 (Chat Background Opacity)
+                  </p>
+                  <p className="text-caption text-graphite">
+                    在壁纸模式下为中间对话列铺设一层微透画布底色，压制壁纸高反差处，解决纯透明时文字对比度不足的问题。
+                  </p>
+                </div>
+                <span className="font-mono text-body-sm font-semibold text-teal px-2 py-0.5 rounded-btn bg-teal-tint/30">
+                  {store.chatBgOpacity ?? 35}%
+                </span>
               </div>
-              <span className="font-mono text-body-sm font-semibold text-teal px-2 py-0.5 rounded-btn bg-teal-tint/30">
-                {store.glassBlur ?? 8}px
-              </span>
-            </div>
-
-            {/* Apple Material 4 档标准分级快捷键 */}
-            <div>
-              <p className="mb-1.5 text-caption text-ash">推荐标准档位（Apple Material 分级）</p>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                {[
-                  { id: 4, label: "超透极净", desc: "4px · 极薄透明光膜" },
-                  { id: 8, label: "晶润液态", desc: "8px · 苹果官方推荐" },
-                  { id: 14, label: "柔光水感", desc: "14px · 柔和聚光" },
-                  { id: 22, label: "经典磨砂", desc: "22px · 传统雾面备选" },
-                ].map((tier) => {
-                  const active = (store.glassBlur ?? 8) === tier.id;
-                  return (
-                    <button
-                      key={tier.id}
-                      type="button"
-                      onClick={() => store.setGlassBlur(tier.id)}
-                      className={cn(
-                        "rounded-btn border p-2 text-left transition cursor-pointer",
-                        active
-                          ? "border-teal-edge bg-teal-tint text-teal font-medium"
-                          : "border-line bg-canvas/80 text-graphite hover:bg-surface-hover hover:text-ink",
-                      )}
-                    >
-                      <div className="text-body-sm font-medium">{tier.label}</div>
-                      <div className="text-[10px] opacity-75">{tier.desc}</div>
-                    </button>
-                  );
-                })}
+              <div className="flex items-center gap-3 pt-1">
+                <span className="text-caption text-ash shrink-0">全透 0%</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={90}
+                  step={5}
+                  value={store.chatBgOpacity ?? 35}
+                  onChange={(e) => store.setChatBgOpacity(Number(e.target.value))}
+                  className="flex-1 accent-teal cursor-pointer"
+                  aria-label="对话区画布遮罩不透明度"
+                />
+                <span className="text-caption text-ash shrink-0">厚底 90%</span>
               </div>
             </div>
 
-            {/* 连续滑块微调 */}
-            <div className="space-y-1.5 pt-1">
-              <div className="flex items-center justify-between text-caption text-ash">
-                <span>连续滑块微调</span>
-                <span>2px — 32px</span>
+            {/* 薄玻璃模糊度 */}
+            <div className="space-y-1.5 pt-2 border-t border-line-soft/60">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-body-sm font-medium text-ink">
+                    薄玻璃模糊度 (Glass Blur)
+                  </p>
+                  <p className="text-caption text-graphite">
+                    控制卡片底色的柔和漫反射程度，默认 14px 对齐前情摘要质感。
+                  </p>
+                </div>
+                <span className="font-mono text-body-sm font-semibold text-teal px-2 py-0.5 rounded-btn bg-teal-tint/30">
+                  {store.glassBlur ?? 14}px
+                </span>
               </div>
-              <input
-                type="range"
-                min={2}
-                max={32}
-                step={1}
-                value={store.glassBlur ?? 8}
-                onChange={(e) => store.setGlassBlur(Number(e.target.value))}
-                className="w-full accent-teal cursor-pointer"
-                aria-label="液态玻璃模糊度（像素）"
-              />
+              <div className="flex items-center gap-3 pt-1">
+                <span className="text-caption text-ash shrink-0">轻微 4px</span>
+                <input
+                  type="range"
+                  min={4}
+                  max={32}
+                  step={1}
+                  value={store.glassBlur ?? 14}
+                  onChange={(e) => store.setGlassBlur(Number(e.target.value))}
+                  className="flex-1 accent-teal cursor-pointer"
+                  aria-label="薄玻璃模糊度（像素）"
+                />
+                <span className="text-caption text-ash shrink-0">朦胧 32px</span>
+              </div>
             </div>
           </div>
         )}
