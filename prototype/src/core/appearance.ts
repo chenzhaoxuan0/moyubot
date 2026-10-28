@@ -718,14 +718,17 @@ const CHAT_ACCENT_HOVER_MIX = 0.12;
  */
 const CHAT_ACCENT_LIGHT_MAX_LUMA = 0.28;
 const CHAT_ACCENT_DARK_MIN_LUMA = 0.18;
+/** 护栏迭代的单步混合比与步数上限（与 CHAT_ACCENT_HOVER_MIX 数值相同但语义独立，勿合并） */
+const CHAT_ACCENT_LUMA_STEP = 0.12;
+const CHAT_ACCENT_LUMA_MAX_STEPS = 12;
 
 /** 沿黑/白方向小步迭代，把 hex 夹进当前主题的可读亮度域（色相不变） */
 function enforceChatAccentLuma(hex: string, dark: boolean): string {
   let out = hex;
-  for (let i = 0; i < 12; i += 1) {
+  for (let i = 0; i < CHAT_ACCENT_LUMA_MAX_STEPS; i += 1) {
     const lum = relativeLuminance(out);
     if (dark ? lum >= CHAT_ACCENT_DARK_MIN_LUMA : lum <= CHAT_ACCENT_LIGHT_MAX_LUMA) return out;
-    out = mixColor(out, dark ? "#ffffff" : "#000000", 0.12);
+    out = mixColor(out, dark ? "#ffffff" : "#000000", CHAT_ACCENT_LUMA_STEP);
   }
   return out;
 }

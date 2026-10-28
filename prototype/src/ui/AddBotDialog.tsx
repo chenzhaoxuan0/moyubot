@@ -22,7 +22,7 @@ import {
 import { useWorkbench, selectVisibleModels, BOT_CONFLICT, type BotWriteGuards } from "../store/useWorkbench.ts";
 import { type WorkUnit, type UnitKind, type BotChannel } from "../core/units.ts";
 import { toHex, isValidColor } from "../core/appearance.ts";
-import { accentCandidatesFromImageData, extractAvatarAccents } from "../core/avatarAccent.ts";
+import { accentCandidatesFromImageData, extractAvatarAccents, AVATAR_SIZE } from "../core/avatarAccent.ts";
 import { type SearchProviderId } from "../core/search.ts";
 import { fetchBotDefaultRoot, inspectBotFolder, openFolder } from "../adapters/daemon/client.ts";
 import { ChannelSection } from "./ChannelSection.tsx";
@@ -333,8 +333,8 @@ export function AddBotDialog({
     }
     if (src === lastExtractedAvatarRef.current) return;
     let cancelled = false;
-    // 头像本体就是 96×96，maxSide 传 96 不再降采样，与上传路径同一份像素
-    void extractAvatarAccents(src, 96)
+    // 头像本体就是 AVATAR_SIZE 见方，不再降采样，与上传路径同一份像素
+    void extractAvatarAccents(src, AVATAR_SIZE)
       .then((cs) => {
         if (!cancelled) setAccentCandidates(cs);
       })
@@ -426,17 +426,17 @@ export function AddBotDialog({
         const side = Math.min(img.naturalWidth, img.naturalHeight);
         if (side <= 0) return;
         const canvas = document.createElement("canvas");
-        canvas.width = 96;
-        canvas.height = 96;
+        canvas.width = AVATAR_SIZE;
+        canvas.height = AVATAR_SIZE;
         const ctx = canvas.getContext("2d", { willReadFrequently: true });
         if (ctx) {
-          ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 96, 96);
+          ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, AVATAR_SIZE, AVATAR_SIZE);
           const dataUrl = canvas.toDataURL("image/webp", 0.9);
           setAvatar(dataUrl);
           // 换头像即换签名色：画布现成，同步提取候选并自动顶上最优一个
           //（候选行随后展示，用户可再改；提不到鲜明色则保持原值不动）。
           // 结果直接进候选状态并记下 data URL——下方 effect 对它跳过重复提取
-          const candidates = accentCandidatesFromImageData(ctx.getImageData(0, 0, 96, 96));
+          const candidates = accentCandidatesFromImageData(ctx.getImageData(0, 0, AVATAR_SIZE, AVATAR_SIZE));
           setAccentCandidates(candidates);
           lastExtractedAvatarRef.current = dataUrl;
           if (candidates.length > 0) setThemeAccent(candidates[0]!);

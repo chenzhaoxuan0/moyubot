@@ -12,7 +12,8 @@
     "check:models": "node --experimental-strip-types scripts/check-models.ts",
     "check:sidepane": "node --experimental-strip-types scripts/check-sidepane.ts",
     "check:avatar-accent": "node --experimental-strip-types scripts/check-avatar-accent.ts",
-    "check": "pnpm check:models && pnpm check:sidepane && pnpm check:avatar-accent && pnpm check:git-names",
+    "check:firstpaint": "node --experimental-strip-types scripts/check-firstpaint.ts",
+    "check": "pnpm check:models && pnpm check:sidepane && pnpm check:avatar-accent && pnpm check:firstpaint && pnpm check:git-names",
     "check:bridge": "node --experimental-strip-types scripts/check-daemon-bridge.ts",
     "check:git-names": "node --experimental-strip-types scripts/check-git-names.ts"
   },

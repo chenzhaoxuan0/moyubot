@@ -23,7 +23,7 @@ import type {
   StartRequest,
 } from "./adapters/types.ts";
 import { adapterError } from "./adapters/types.ts";
-import { resetDiscoveryCaches } from "./adapters/discovery.ts";
+import { resetDiscoveryCaches, commandCacheRootKey } from "./adapters/discovery.ts";
 import type {
   ModelId,
   ContextManifest,
@@ -67,24 +67,18 @@ const FRONTEND_NS_PREFIX = "daemon:";
 const LIST_COMMANDS_HARD_TIMEOUT_MS = 20_000;
 /** 命令清单磁盘缓存的新鲜期（毫秒）—— 与适配器内存缓存同口径；过期触发后台刷新 */
 const LIST_COMMANDS_DISK_TTL_MS = 10 * 60 * 1000;
+/** commands-cache.json 落盘防抖窗口：预热一口气几十个 job 的连续变更合并成一次写 */
+const COMMANDS_PERSIST_DEBOUNCE_MS = 1_000;
 
-/**
- * 缓存 key 的 rootPath 段：统一成正斜杠。bot.json 的 rootPath 正反斜杠混用
- * （用户手填路径），不归一会让同一目录以两条 key 各自缓存/重扫/落盘。
- */
-function commandCacheRootKey(rootPath: string): string {
-  return rootPath.replaceAll("\\", "/");
-}
-
-/** 载盘时把旧格式 key（原始 rootPath）归一成新格式；id 段原样保留 */
-function normalizeCommandCacheKey(key: string): string {
+/** 载盘时把旧格式 key（原始 rootPath）归一成新格式；id 段原样保留（helper 见 discovery.ts）。导出供 check-commands-cache 回归检查 */
+export function normalizeCommandCacheKey(key: string): string {
   const sep = key.indexOf("|");
   if (sep === -1) return key;
   return `${key.slice(0, sep)}|${commandCacheRootKey(key.slice(sep + 1))}`;
 }
 
-/** 两份清单内容是否一致（顺序也一致 —— 同一发现路径产出稳定） */
-function commandsEqual(a: readonly NativeCommandInfo[], b: readonly NativeCommandInfo[]): boolean {
+/** 两份清单内容是否一致（顺序也一致 —— 同一发现路径产出稳定）。导出供 check-commands-cache 回归检查 */
+export function commandsEqual(a: readonly NativeCommandInfo[], b: readonly NativeCommandInfo[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
@@ -1196,7 +1190,7 @@ export class RuntimeHost {
     this.commandsPersistTimer = setTimeout(() => {
       this.commandsPersistTimer = null;
       this.writeCommandsDiskNow();
-    }, 1000);
+    }, COMMANDS_PERSIST_DEBOUNCE_MS);
     this.commandsPersistTimer.unref?.();
   }
 

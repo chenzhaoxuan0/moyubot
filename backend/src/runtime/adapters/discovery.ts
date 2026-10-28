@@ -32,16 +32,27 @@ const SCAN_CACHE_TTL_MS = 10 * 60 * 1000;
 const scanCache = new Map<string, { at: number; value: unknown }>();
 
 /**
- * 记忆化包装：key 唯一即命中（含函数名 + 参数）。返回值可能是共享引用 ——
- * 绝不能原地修改（排序/push 都要自己拷一份）。
+ * 缓存 key 的路径段归一：统一成正斜杠。bot.json 的 rootPath 正反斜杠混用
+ * （用户手填路径），不归一会让同一目录以两条 key 各自缓存/重扫（适配器的
+ * scan 缓存与 host.ts 的 commands-cache.json 同口径）。
+ */
+export function commandCacheRootKey(rootPath: string): string {
+  return rootPath.replaceAll("\\", "/");
+}
+
+/**
+ * 记忆化包装：key 唯一即命中（含函数名 + 参数）。返回值是共享引用且数组会被
+ * 冻结 —— 原地修改（排序/push）在严格模式下直接抛错，跨 root 共享的清单
+ * 不可能被某一方悄悄污染，要改请自己拷一份。
  */
 export function cachedScan<T>(key: string, scan: () => T): T {
   const hit = scanCache.get(key);
   const now = Date.now();
   if (hit !== undefined && now - hit.at < SCAN_CACHE_TTL_MS) return hit.value as T;
   const value = scan();
-  scanCache.set(key, { at: now, value });
-  return value;
+  const stored = Array.isArray(value) ? (Object.freeze(value) as unknown as T) : value;
+  scanCache.set(key, { at: now, value: stored });
+  return stored;
 }
 
 /** 清空扫描缓存：技能停用/复制/删除等改变磁盘事实的动作之后调用 */
@@ -113,7 +124,7 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
 export function discoverSkillsInDir(
   dir: string,
   source: "user" | "project" | "plugin",
-): NativeCommandInfo[] {
+): readonly NativeCommandInfo[] {
   return cachedScan(`skills|${source}|${dir}`, () => scanSkillsInDir(dir, source));
 }
 
@@ -244,7 +255,7 @@ function walkMarkdownPruned(dir: string, limit: number): string[] {
 export function discoverAgentsInDir(
   dir: string,
   source: "user" | "project" | "plugin",
-): NativeCommandInfo[] {
+): readonly NativeCommandInfo[] {
   return cachedScan(`agents|${source}|${dir}`, () => scanAgentsInDir(dir, source));
 }
 
@@ -291,7 +302,7 @@ function scanAgentsInDir(
 export function discoverCommandsInDir(
   dir: string,
   source: "user" | "project" | "plugin",
-): NativeCommandInfo[] {
+): readonly NativeCommandInfo[] {
   return cachedScan(`commands|${source}|${dir}`, () => scanCommandsInDir(dir, source));
 }
 

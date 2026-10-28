@@ -45,7 +45,7 @@ import type {
 } from "../../contract.ts";
 import { execLines, resolveCommand } from "../exec.ts";
 import { builtinCommandsFor } from "./builtin-catalogs.ts";
-import { readStandardAgentsWorkspace, listMarkdownFilesPruned, cachedScan } from "./discovery.ts";
+import { readStandardAgentsWorkspace, listMarkdownFilesPruned, cachedScan, commandCacheRootKey } from "./discovery.ts";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -637,7 +637,7 @@ function parseGrokFrontmatter(raw: string): Record<string, string> {
 /** 技能段：`<base>/.grok/skills/<name>/SKILL.md`（+ ~/.claude/skills 兼容源，官方 Claude Code compat 约定） */
 function readGrokSkills(rootPath: string): readonly NativeCommandInfo[] {
   // 每 root 记忆化（~/.claude/skills 数百条目会被笛卡尔积反复重扫，见 discovery.ts 头注释）
-  return cachedScan(`grok-skills|${rootPath}`, () => scanGrokSkills(rootPath));
+  return cachedScan(`grok-skills|${commandCacheRootKey(rootPath)}`, () => scanGrokSkills(rootPath));
 }
 
 function scanGrokSkills(rootPath: string): readonly NativeCommandInfo[] {
@@ -683,7 +683,7 @@ function scanGrokSkills(rootPath: string): readonly NativeCommandInfo[] {
 
 /** 子智能体段：`<base>/.grok/agents/*.md`（frontmatter name/description；缺 name 用文件名） */
 function readGrokAgents(rootPath: string): readonly NativeCommandInfo[] {
-  return cachedScan(`grok-agents|${rootPath}`, () => scanGrokAgents(rootPath));
+  return cachedScan(`grok-agents|${commandCacheRootKey(rootPath)}`, () => scanGrokAgents(rootPath));
 }
 
 function scanGrokAgents(rootPath: string): readonly NativeCommandInfo[] {

@@ -199,11 +199,14 @@ export function accentCandidatesFromImageData(data: ImageData): string[] {
   return picked.map((p) => p.hex);
 }
 
+/** 头像统一边长：上传时居中裁方落盘的目标尺寸，提取签名色按原像素不缩采样 */
+export const AVATAR_SIZE = 96;
+
 /**
  * 便捷入口：加载 data URL 头像 → 画布取像素 → 候选色。
  * data URL 同源无污染，getImageData 不会被 canvas taint 拦。
  */
-export function extractAvatarAccents(dataUrl: string, maxSide = 64): Promise<string[]> {
+export function extractAvatarAccents(dataUrl: string, maxSide = AVATAR_SIZE): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {

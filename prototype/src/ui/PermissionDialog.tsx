@@ -250,7 +250,7 @@ export function PermissionDialog() {
             </p>
             <button
               onClick={confirm}
-              className="rounded-input bg-teal px-4 py-2 text-body-sm font-medium text-on-accent hover:bg-teal/90"
+              className="rounded-input bg-teal px-4 py-2 text-body-sm font-medium text-on-accent hover:bg-teal-hover"
             >
               {confirmLabel}
             </button>

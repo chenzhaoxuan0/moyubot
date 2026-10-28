@@ -75,10 +75,15 @@ export const XTERM_DARK_THEME = {
   brightWhite: "#ffffff",
 };
 
-/** 读 <html> 上算出来的 CSS 变量，读不到就退回 fallback。 */
-function cssColor(name: string, fallback: string): string {
+/**
+ * 读算出来的 CSS 变量，读不到就退回 fallback。
+ * scope 给定且仍在 DOM 上时从该元素解析（继承链上的覆盖生效——如单 bot 对话
+ * 强调色注入的 --color-teal* 系），否则从 <html> 读全局主题。
+ */
+function cssColor(name: string, fallback: string, scope?: Element | null): string {
   if (typeof window === "undefined" || typeof document === "undefined") return fallback;
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const root = scope !== null && scope !== undefined && scope.isConnected ? scope : document.documentElement;
+  const value = getComputedStyle(root).getPropertyValue(name).trim();
   return value || fallback;
 }
 
@@ -119,28 +124,28 @@ export interface XtermTheme {
  * 次要色当蓝、高亮色当品红，语义色原样给红绿。这样「换一套配色」时
  * 终端里的 diff 绿/错误红也一起跟着变，不会出现界面变了、终端还是旧配色。
  */
-export function buildTerminalTheme(isDark: boolean): XtermTheme {
+export function buildTerminalTheme(isDark: boolean, scope?: Element | null): XtermTheme {
   const fallback = isDark ? XTERM_DARK_THEME : XTERM_LIGHT_THEME;
-  const canvas = cssColor("--color-canvas", fallback.background);
-  const panel = cssColor("--color-rail", fallback.black);
-  const card = cssColor("--color-card", fallback.white);
-  const ink = cssColor("--color-ink", fallback.foreground);
-  const muted = cssColor("--color-graphite", fallback.brightBlack);
-  const accent = cssColor("--color-teal", fallback.cursor);
-  const accentAlt = cssColor("--color-teal-hover", fallback.brightYellow);
-  const secondary = cssColor("--color-secondary", fallback.blue);
-  const highlight = cssColor("--color-highlight", fallback.magenta);
-  const gain = cssColor("--color-gain", fallback.green);
-  const loss = cssColor("--color-loss", fallback.red);
+  const canvas = cssColor("--color-canvas", fallback.background, scope);
+  const panel = cssColor("--color-rail", fallback.black, scope);
+  const card = cssColor("--color-card", fallback.white, scope);
+  const ink = cssColor("--color-ink", fallback.foreground, scope);
+  const muted = cssColor("--color-graphite", fallback.brightBlack, scope);
+  const accent = cssColor("--color-teal", fallback.cursor, scope);
+  const accentAlt = cssColor("--color-teal-hover", fallback.brightYellow, scope);
+  const secondary = cssColor("--color-secondary", fallback.blue, scope);
+  const highlight = cssColor("--color-highlight", fallback.magenta, scope);
+  const gain = cssColor("--color-gain", fallback.green, scope);
+  const loss = cssColor("--color-loss", fallback.red, scope);
   // 终端透明度：外观设置写进 --aw-terminal-bg-alpha（0..1）。文字永不透明，只有底色透
-  const alphaRaw = Number(cssColor("--aw-terminal-bg-alpha", "1"));
+  const alphaRaw = Number(cssColor("--aw-terminal-bg-alpha", "1", scope));
   const terminalAlpha = Number.isFinite(alphaRaw) ? Math.min(1, Math.max(0, alphaRaw)) : 1;
 
   return {
     background: withAlpha(canvas, terminalAlpha),
     foreground: toHex(ink, fallback.foreground),
     cursor: toHex(accent, fallback.cursor),
-    selectionBackground: cssColor("--color-selection", fallback.selectionBackground),
+    selectionBackground: cssColor("--color-selection", fallback.selectionBackground, scope),
     black: toHex(panel, fallback.black),
     red: toHex(loss, fallback.red),
     green: toHex(gain, fallback.green),
@@ -457,7 +462,10 @@ export class TerminalSession {
    * 动态切换终端配色主题（深色/浅色），立即穿透更新 DOM 与 xterm 内部渲染图层
    */
   applyTheme(isDark: boolean): void {
-    const theme = buildTerminalTheme(isDark);
+    // 从终端自身的 DOM 元素解析变量：终端挂在单 bot 对话列内时自动跟随该 bot
+    // 的对话强调色（与 dock 外观一致，见 useChatAccentStyle）；detach 态
+    // （不在 DOM 上）回落全局主题
+    const theme = buildTerminalTheme(isDark, this.element.isConnected ? this.element : null);
 
     // 1. 同步更新 xterm options 配置
     // ⚠ 注意：必须使用 options.theme = { ...theme }，切勿将整个包含 cols/rows 的 options 覆盖，避免 constructor 校验抛错

@@ -32,7 +32,7 @@ import {
   type ModelSyncOutcome,
   type StartRequest,
 } from "./types.ts";
-import { listMarkdownFilesPruned, cachedScan } from "./discovery.ts";
+import { listMarkdownFilesPruned, cachedScan, commandCacheRootKey } from "./discovery.ts";
 import type {
   ModelId,
   NativeCommandInfo,
@@ -704,7 +704,7 @@ class PrintTransport {
  * argument-hint 两键。只列自定义段（内置命令清单没有独立事实源，不猜）。
  */
 function readZcodeCustomCommands(rootPath: string): readonly NativeCommandInfo[] {
-  return cachedScan(`zcode-commands|${rootPath}`, () => scanZcodeCustomCommands(rootPath));
+  return cachedScan(`zcode-commands|${commandCacheRootKey(rootPath)}`, () => scanZcodeCustomCommands(rootPath));
 }
 
 function scanZcodeCustomCommands(rootPath: string): readonly NativeCommandInfo[] {
@@ -774,7 +774,7 @@ function parseZcodeCommandFile(name: string, raw: string): Omit<NativeCommandInf
  * 与 readZcodeCustomCommands 同款 base × ns 组合，项目级覆盖用户级。
  */
 function readZcodeSkills(rootPath: string): readonly NativeCommandInfo[] {
-  return cachedScan(`zcode-skills|${rootPath}`, () => scanZcodeSkills(rootPath));
+  return cachedScan(`zcode-skills|${commandCacheRootKey(rootPath)}`, () => scanZcodeSkills(rootPath));
 }
 
 function scanZcodeSkills(rootPath: string): readonly NativeCommandInfo[] {
@@ -821,7 +821,7 @@ function scanZcodeSkills(rootPath: string): readonly NativeCommandInfo[] {
  * 文件级是唯一无会话事实源。
  */
 function readZcodeAgents(rootPath: string): readonly NativeCommandInfo[] {
-  return cachedScan(`zcode-agents|${rootPath}`, () => scanZcodeAgents(rootPath));
+  return cachedScan(`zcode-agents|${commandCacheRootKey(rootPath)}`, () => scanZcodeAgents(rootPath));
 }
 
 function scanZcodeAgents(rootPath: string): readonly NativeCommandInfo[] {

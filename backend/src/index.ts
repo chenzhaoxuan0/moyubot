@@ -406,6 +406,9 @@ memoryScheduler?.start();
 // 想恢复启动预热，把下面这行加回来即可（宿主已从盘上载好缓存，不会再退回种子清单）：
 // void host.syncAllModels();
 
+/** 启动引导绝不覆盖的用户数据键 —— steward / heartbeat 同一套口径，加新键只改这里（tags 仅 heartbeat 拥有，调用处单独附加） */
+const USER_OWNED_BOT_KEYS = ["name", "bindings", "avatar", "themeAccent", "channels", "memory"] as const;
+
 // 总管 bot：初始化即就位（docs/10 §4.6）。失败不阻断启动 ——
 // 记忆是增强，不是前置条件。
 void ensureSteward(config.homeDir)
@@ -422,7 +425,7 @@ void ensureSteward(config.homeDir)
       // 回写）。比对与写盘都用 merged。
       const prev = (existing ?? {}) as Record<string, unknown>;
       const userOwned: Record<string, unknown> = {};
-      for (const k of ["name", "bindings", "avatar", "themeAccent", "channels", "memory"] as const) {
+      for (const k of USER_OWNED_BOT_KEYS) {
         if (prev[k] !== undefined) userOwned[k] = prev[k];
       }
       // identity 里 sourcePath 是结构指针（跟 want），role/persona 是用户数据
@@ -456,7 +459,7 @@ void ensureHeartbeatBot(config.homeDir)
       const want = heartbeatBotDefinition(rootPath, HEARTBEAT_DEFAULT_RUNTIME_ID);
       const prev = (existing ?? {}) as Record<string, unknown>;
       const userOwned: Record<string, unknown> = {};
-      for (const k of ["name", "bindings", "avatar", "themeAccent", "channels", "memory", "tags"] as const) {
+      for (const k of [...USER_OWNED_BOT_KEYS, "tags"]) {
         if (prev[k] !== undefined) userOwned[k] = prev[k];
       }
       const prevIdentity = (prev.identity ?? {}) as Record<string, unknown>;

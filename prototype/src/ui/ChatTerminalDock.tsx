@@ -13,6 +13,7 @@ import {
 } from "../store/useChatTerminal.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { useAppearance } from "../store/useAppearance.ts";
+import { useChatAccentStyle } from "./useChatAccentStyle.ts";
 import { useIsMobile } from "./mobile/useIsMobile.ts";
 import { MobileVirtualKeyBar } from "./mobile/MobileVirtualKeyBar.tsx";
 import { cn } from "./cn.ts";
@@ -56,6 +57,9 @@ export function ChatTerminalDock() {
    */
   const reclaimPendingRef = useRef(false);
   const [reclaimSeq, setReclaimSeq] = useState(0);
+  // 本 bot 对话强调色：终端画布色从自身 DOM 所在子树解析（TerminalSessionManager
+  // 的 applyTheme scope 机制），accent 变了要重应用一次主题让画布跟上
+  const chatAccentStyle = useChatAccentStyle();
 
   /** 当前工作区目录名（新标签标题主体） */
   const cwdLeaf = useCallback((): string => {
@@ -166,10 +170,12 @@ export function ChatTerminalDock() {
     session?.focus();
   }, [open, tabsKey, activeTabId, tabs, ensureSession, reclaimSeq]);
 
-  // 主题切换跟随（registry.updateAllThemes 只刷挂载中的画布，这里补 detach 态口径）
+  // 主题切换跟随（registry.updateAllThemes 只刷挂载中的画布，这里补 detach 态口径）；
+  // 强调色变化（切 bot / 改 themeAccent）也要重应用 —— applyTheme 会按终端自身
+  // DOM 所在子树重新解析 --color-teal* 系变量
   useEffect(() => {
     for (const t of tabs) terminalSessionRegistry.get(t.id)?.applyTheme(resolvedTheme === "dark");
-  }, [resolvedTheme, tabs]);
+  }, [resolvedTheme, tabs, chatAccentStyle]);
 
   // 顶部拖拽改高度（移动端固定 40vh，不出拖拽手柄）
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
