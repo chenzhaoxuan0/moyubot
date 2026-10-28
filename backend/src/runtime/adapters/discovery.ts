@@ -11,12 +11,42 @@
  * - 纯轻量文件系统探测（existsSync / readdirSync / readFileSync 仅首部），绝不派生 CLI 子进程；
  * - 错误全面容忍，目录不存在或损坏文件直接跳过，绝不抛出；
  * - 提供通用去重合并（重名时：项目级 > 用户级，技能/子智能体优先于宽泛命令分类）。
+ *
+ * 扫描缓存（2026-10-28 loop-stall 教训）：命令面板预热会把「有命令面的执行器 ×
+ * 全部 bot root」做笛卡尔积，本机 13 家 × 14 roots = 182 个 job，而每家扫的都是
+ * 同一批用户级目录（~/.agents/skills 等）。没有缓存时每 job 130–500ms 的同步 fs
+ * 连成 30s+ 的 loop-stall（预热号称后台，但 async 函数体在首个真 await 前是同步
+ * 跑的，微任务链根本不让出事件循环）。这里按「目录 × 种类」做 TTL 记忆化：
+ * 同一目录 10 分钟内只真扫一次，其余全走内存。返回数组是共享引用，调用方只读。
+ * 失效走 resetDiscoveryCaches()（host.invalidateCommandsFor 在技能停用/复制后调用），
+ * TTL 与适配器命令缓存（10 分钟）同口径，不改变菜单的新鲜度契约。
  */
 
 import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { NativeCommandInfo } from "../../contract.ts";
+
+const SCAN_CACHE_TTL_MS = 10 * 60 * 1000;
+const scanCache = new Map<string, { at: number; value: unknown }>();
+
+/**
+ * 记忆化包装：key 唯一即命中（含函数名 + 参数）。返回值可能是共享引用 ——
+ * 绝不能原地修改（排序/push 都要自己拷一份）。
+ */
+export function cachedScan<T>(key: string, scan: () => T): T {
+  const hit = scanCache.get(key);
+  const now = Date.now();
+  if (hit !== undefined && now - hit.at < SCAN_CACHE_TTL_MS) return hit.value as T;
+  const value = scan();
+  scanCache.set(key, { at: now, value });
+  return value;
+}
+
+/** 清空扫描缓存：技能停用/复制/删除等改变磁盘事实的动作之后调用 */
+export function resetDiscoveryCaches(): void {
+  scanCache.clear();
+}
 
 export interface FrontmatterResult {
   readonly name?: string;
@@ -80,6 +110,13 @@ export function parseFrontmatter(raw: string): FrontmatterResult {
  * 2. `<dir>/SKILL.md`（单技能根目录形态，如插件私有技能目录）
  */
 export function discoverSkillsInDir(
+  dir: string,
+  source: "user" | "project" | "plugin",
+): NativeCommandInfo[] {
+  return cachedScan(`skills|${source}|${dir}`, () => scanSkillsInDir(dir, source));
+}
+
+function scanSkillsInDir(
   dir: string,
   source: "user" | "project" | "plugin",
 ): NativeCommandInfo[] {
@@ -157,6 +194,10 @@ export function hasDotSegment(relPath: string): boolean {
  * 卡出 23 秒 loop-stall（实测 2026-10-27）。栈式遍历在进入前剪枝。
  */
 export function listMarkdownFilesPruned(dir: string, limit = 2000): string[] {
+  return cachedScan(`md|${limit}|${dir}`, () => walkMarkdownPruned(dir, limit));
+}
+
+function walkMarkdownPruned(dir: string, limit: number): string[] {
   const out: string[] = [];
   const skip = (name: string): boolean => name.startsWith(".") || name === "node_modules";
   const walk = (d: string, prefix: string): void => {
@@ -187,6 +228,13 @@ export function listMarkdownFilesPruned(dir: string, limit = 2000): string[] {
  * 过滤掉 primary 模式（主对话形态），只保留子智能体形态。
  */
 export function discoverAgentsInDir(
+  dir: string,
+  source: "user" | "project" | "plugin",
+): NativeCommandInfo[] {
+  return cachedScan(`agents|${source}|${dir}`, () => scanAgentsInDir(dir, source));
+}
+
+function scanAgentsInDir(
   dir: string,
   source: "user" | "project" | "plugin",
 ): NativeCommandInfo[] {
@@ -227,6 +275,13 @@ export function discoverAgentsInDir(
  * 扫描指定目录下的自定义斜杠命令（`*.md` 规范，如 `.claude/commands` 或 `.opencode/command`）。
  */
 export function discoverCommandsInDir(
+  dir: string,
+  source: "user" | "project" | "plugin",
+): NativeCommandInfo[] {
+  return cachedScan(`commands|${source}|${dir}`, () => scanCommandsInDir(dir, source));
+}
+
+function scanCommandsInDir(
   dir: string,
   source: "user" | "project" | "plugin",
 ): NativeCommandInfo[] {

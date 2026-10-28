@@ -42,7 +42,7 @@ import type {
 } from "../../contract.ts";
 import { execLines, resolveCommand } from "../exec.ts";
 import { builtinCommandsFor } from "./builtin-catalogs.ts";
-import { readStandardAgentsWorkspace, listMarkdownFilesPruned } from "./discovery.ts";
+import { readStandardAgentsWorkspace, listMarkdownFilesPruned, cachedScan } from "./discovery.ts";
 import { log } from "../../log.ts";
 
 // ---- SDK 消息宽松视图（顶层判别用 SDK 类型，字段按宽容记录取） -------------------
@@ -218,6 +218,12 @@ function readMarkdownDefs(dir: string): Array<{ name: string; description?: stri
  * 只列自定义段 —— 内置命令清单没有独立事实源，不猜。
  */
 function readClaudeFileLevel(rootPath: string): readonly NativeCommandInfo[] {
+  // 每 root 记忆化：预热的「执行器 × root」笛卡尔积里，用户级目录（~/.claude/skills
+  // 等数百条目）每次都是同一批文件 —— 见 discovery.ts 头注释的 loop-stall 教训
+  return cachedScan(`claude-file-level|${rootPath}`, () => scanClaudeFileLevel(rootPath));
+}
+
+function scanClaudeFileLevel(rootPath: string): readonly NativeCommandInfo[] {
   const bases: Array<{ base: string; source: "user" | "project" }> = [
     { base: join(homedir(), ".claude"), source: "user" },
     { base: join(rootPath, ".claude"), source: "project" },

@@ -23,6 +23,7 @@ import type {
   StartRequest,
 } from "./adapters/types.ts";
 import { adapterError } from "./adapters/types.ts";
+import { resetDiscoveryCaches } from "./adapters/discovery.ts";
 import type {
   ModelId,
   ContextManifest,
@@ -61,6 +62,34 @@ const FRONTEND_NS_PREFIX = "daemon:";
 const LIST_COMMANDS_HARD_TIMEOUT_MS = 20_000;
 /** 命令清单磁盘缓存的新鲜期（毫秒）—— 与适配器内存缓存同口径；过期触发后台刷新 */
 const LIST_COMMANDS_DISK_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * 缓存 key 的 rootPath 段：统一成正斜杠。bot.json 的 rootPath 正反斜杠混用
+ * （用户手填路径），不归一会让同一目录以两条 key 各自缓存/重扫/落盘。
+ */
+function commandCacheRootKey(rootPath: string): string {
+  return rootPath.replaceAll("\\", "/");
+}
+
+/** 载盘时把旧格式 key（原始 rootPath）归一成新格式；id 段原样保留 */
+function normalizeCommandCacheKey(key: string): string {
+  const sep = key.indexOf("|");
+  if (sep === -1) return key;
+  return `${key.slice(0, sep)}|${commandCacheRootKey(key.slice(sep + 1))}`;
+}
+
+/** 两份清单内容是否一致（顺序也一致 —— 同一发现路径产出稳定） */
+function commandsEqual(a: readonly NativeCommandInfo[], b: readonly NativeCommandInfo[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const x = a[i]!;
+    const y = b[i]!;
+    if (x.name !== y.name || x.description !== y.description || x.kind !== y.kind ||
+        x.source !== y.source || x.builtin !== y.builtin || x.argumentHint !== y.argumentHint) return false;
+  }
+  return true;
+}
 
 /** 计划模式（Plan Mode）系统指令：约束模型仅在只读边界探索并出具方案 */
 export const PLAN_MODE_INSTRUCTION = `[PLAN MODE ACTIVE]
@@ -953,7 +982,7 @@ export class RuntimeHost {
     const adapter = this.getAdapter(runtimeId);
     if (typeof adapter.listCommands !== "function") return [];
     this.loadCommandsDiskOnce();
-    const key = `${adapter.id}|${rootPath}`;
+    const key = `${adapter.id}|${commandCacheRootKey(rootPath)}`;
 
     // 命中磁盘缓存（不论新旧）：立即返回（菜单秒开），过期则后台刷新
     const disk = this.commandsDisk.get(key);
@@ -998,14 +1027,22 @@ export class RuntimeHost {
       while (i < jobs.length) {
         const job = jobs[i++]!;
         await job().catch(() => undefined);
+        // 每个job之后让一拍事件循环：发现层是同步 fs，async 函数体在首个真 await 前
+        // 不让出宏任务队列 —— 不让这一拍，预热 182 个 job 能把定时器与 HTTP 连续
+        // 饿死 30s+（2026-10-28 实测 loop-stall，healthz 无响应）
+        await new Promise<void>((resolve) => setImmediate(resolve));
       }
     });
     await Promise.all(workers);
   }
 
-  /** key = `${adapter.id}|${rootPath}` → 清单 + 拉取时间 */
+  /** key = `${adapter.id}|${commandCacheRootKey(rootPath)}` → 清单 + 拉取时间 */
   private readonly commandsDisk = new Map<string, { commands: readonly NativeCommandInfo[]; at: number }>();
   private commandsDiskLoaded = false;
+  /** 有未落盘变更（scheduleCommandsPersist 置位，writeCommandsDiskNow 清零） */
+  private commandsDirty = false;
+  /** 防抖写盘定时器（unref，shutdown 用 flushCommandsDisk 收尾） */
+  private commandsPersistTimer: NodeJS.Timeout | null = null;
   /** 命令缓存世代：invalidateCommandsFor 递增；在途后台刷新完成时校验，防止旧清单回写 */
   private commandsEpoch = 0;
   /** 在途后台刷新（同 key 只跑一个） */
@@ -1017,11 +1054,20 @@ export class RuntimeHost {
     try {
       const raw = readFileSync(join(this.homeDir, "commands-cache.json"), "utf8");
       const parsed = JSON.parse(raw) as Record<string, { commands?: unknown; at?: number }>;
+      // 路径分隔符归一：bot.json 里的 rootPath 正反斜杠混用（用户手填），不归一的
+      // 话 `C:/x/y` 与 `C:\x\y` 是两条缓存 → 同一目录扫两遍、文件翻倍（本机实测
+      // 344 条里近半是分隔符重复）。重名合并取 at 新的（= 最近一次成功拉取）。
+      let migrated = false;
       for (const [key, entry] of Object.entries(parsed)) {
-        if (Array.isArray(entry?.commands) && typeof entry.at === "number") {
-          this.commandsDisk.set(key, { commands: entry.commands as readonly NativeCommandInfo[], at: entry.at });
-        }
+        if (!Array.isArray(entry?.commands) || typeof entry.at !== "number") continue;
+        const norm = normalizeCommandCacheKey(key);
+        if (norm !== key) migrated = true;
+        const prev = this.commandsDisk.get(norm);
+        if (prev !== undefined && prev.at >= entry.at) continue;
+        if (prev !== undefined) migrated = true;
+        this.commandsDisk.set(norm, { commands: entry.commands as readonly NativeCommandInfo[], at: entry.at });
       }
+      if (migrated) this.writeCommandsDiskNow();
     } catch {
       /* 没有缓存文件/坏格式 = 全部按首次拉取走，不是错误 */
     }
@@ -1030,8 +1076,17 @@ export class RuntimeHost {
   private putCommandsDisk(key: string, commands: readonly NativeCommandInfo[]): void {
     // 瞬时失败常表现为空清单：非空旧缓存不该被一次空结果抹掉
     if (commands.length === 0 && this.commandsDisk.has(key)) return;
+    const prev = this.commandsDisk.get(key);
+    // 内容没变只续期内存里的 at：整份缓存是单个 30MB 级 JSON，内容不变也全量
+    // 重写的话，一次预热 182 个 job = 182 次无意义的 stringify+写盘（启动期
+    // ~13s 的同步开销）。盘上的旧 at 不动 —— 下次重启判定为过期、走一次便宜
+    // 的后台刷新即可，菜单零感知。
+    if (prev !== undefined && commandsEqual(prev.commands, commands)) {
+      prev.at = Date.now();
+      return;
+    }
     this.commandsDisk.set(key, { commands, at: Date.now() });
-    this.persistCommandsDisk();
+    this.scheduleCommandsPersist();
   }
 
   /**
@@ -1050,6 +1105,10 @@ export class RuntimeHost {
   invalidateCommandsFor(runtimeIds: readonly string[]): void {
     this.loadCommandsDiskOnce();
     this.commandsEpoch++;
+    // 发现层的 per-dir 记忆化一并作废（discovery.ts）：技能搬进/搬出 .disabled
+    // 改变的是磁盘事实，缓存里的旧清单会让"下一次 listCommands 自然重扫"
+    // 落空 —— 那是缓存，不是事实源
+    resetDiscoveryCaches();
     const ids = new Set(runtimeIds);
     let changed = false;
     for (const key of [...this.commandsDisk.keys()]) {
@@ -1059,13 +1118,37 @@ export class RuntimeHost {
         changed = true;
       }
     }
-    if (changed) this.persistCommandsDisk();
+    if (changed) this.writeCommandsDiskNow();
     for (const adapter of this.adapters.values()) {
       if (ids.has(adapter.id)) adapter.invalidateCommands?.();
     }
   }
 
-  private persistCommandsDisk(): void {
+  /**
+   * 防抖写盘：连续变更（预热一口气 182 个 job）合并成一次落盘，unref 定时器
+   * 不拖住进程退出。shutdown 前用 flushCommandsDisk() 收尾。
+   */
+  private scheduleCommandsPersist(): void {
+    this.commandsDirty = true;
+    if (this.commandsPersistTimer !== null) return;
+    this.commandsPersistTimer = setTimeout(() => {
+      this.commandsPersistTimer = null;
+      this.writeCommandsDiskNow();
+    }, 1000);
+    this.commandsPersistTimer.unref?.();
+  }
+
+  /** 退出/重启前把挂起的变更刷盘（shutdown 路径调用；没脏数据就零开销） */
+  flushCommandsDisk(): void {
+    if (this.commandsPersistTimer !== null) {
+      clearTimeout(this.commandsPersistTimer);
+      this.commandsPersistTimer = null;
+    }
+    if (this.commandsDirty) this.writeCommandsDiskNow();
+  }
+
+  private writeCommandsDiskNow(): void {
+    this.commandsDirty = false;
     try {
       const out: Record<string, { commands?: unknown; at?: number }> = {};
       for (const [k, v] of this.commandsDisk) out[k] = v;
@@ -2215,6 +2298,9 @@ export class RuntimeHost {
   }
 
   async shutdown(): Promise<void> {
+    // 防抖挂起的命令缓存变更先落盘（adapter 断连之后 store 还开着，顺序无关，
+    // 但必须赶在进程退出前 —— unref 定时器在 process.exit 面前不算数）
+    this.flushCommandsDisk();
     // WP-10：会话终结时仍在排队的插话如实宣告未投递（上游渠道据此重试或告知用户）
     for (const h of this.sessions.values()) {
       if (h.pendingSends.length === 0) continue;
