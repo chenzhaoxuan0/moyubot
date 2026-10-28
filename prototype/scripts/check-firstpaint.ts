@@ -69,6 +69,9 @@ function runPreload(argv: string[], store: StoreStub): { exposed: boolean } {
       };
     },
     process: { argv, platform: "win32", arch: "x64" },
+    // preload 顶层还有一段 Ctrl+滚轮缩放的 window.addEventListener（"wheel"），
+    // 不给 window 沙箱里整个脚本会 ReferenceError 崩掉
+    window: { addEventListener: () => {}, removeEventListener: () => {} },
     localStorage: {
       getItem: (k: string) => {
         if (store.broken) throw new Error("localStorage unavailable");
