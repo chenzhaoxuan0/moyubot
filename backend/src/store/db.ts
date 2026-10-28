@@ -122,6 +122,8 @@ export class Store {
         text TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
+      CREATE INDEX IF NOT EXISTS idx_sessions_unit ON sessions(unit_id, started_at);
+      CREATE INDEX IF NOT EXISTS idx_sessions_native_ref ON sessions(cli_ref) WHERE cli_ref IS NOT NULL AND cli_ref <> '';
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS permissions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -426,6 +428,22 @@ export class Store {
   listSessions(): SessionRow[] {
     const rows = this.db.prepare(`SELECT * FROM sessions ORDER BY started_at DESC`).all() as Array<Record<string, unknown>>;
     return rows.map((r) => this.toRow(r));
+  }
+
+  /** unit.history 专用：按单元在 SQL 层过滤（此前全表搬进 JS 再逐行丢，行多时纯浪费） */
+  listSessionsForUnit(unitId: string): SessionRow[] {
+    const rows = this.db
+      .prepare(`SELECT * FROM sessions WHERE unit_id = ? ORDER BY started_at DESC`)
+      .all(unitId) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.toRow(r));
+  }
+
+  /** 影子行判定集专用：非导入会话的原生引用轻量列（不搬整行做 Set） */
+  listSessionNativeRefs(): Array<{ runtimeId: string; cliRef: string }> {
+    const rows = this.db
+      .prepare(`SELECT runtime_id, cli_ref FROM sessions WHERE source <> 'imported' AND cli_ref IS NOT NULL AND cli_ref <> ''`)
+      .all() as Array<{ runtime_id: string; cli_ref: string }>;
+    return rows.map((r) => ({ runtimeId: String(r.runtime_id), cliRef: String(r.cli_ref) }));
   }
 
   /** 最后一条消息的时间戳（0 = 一条都没有）。curator 的 idle 闸要用真实的对话活动 */

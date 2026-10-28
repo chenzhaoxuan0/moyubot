@@ -7,7 +7,7 @@
  */
 
 import path from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type { NativeSessionDetail, NativeSessionSummary, NativeTranscriptEntry, SessionReader } from "../types.ts";
 import { collectFiles, homeDir, isRecord, num, samePath, str } from "../util.ts";
@@ -17,40 +17,81 @@ interface ZcodeScan {
   messages: unknown[];
 }
 
-function scanAll(limit: number): ZcodeScan[] {
-  const root = path.join(homeDir(), ".zcode", "v2", "sessions");
-  const out: ZcodeScan[] = [];
-  if (existsSync(root)) {
-    const files = collectFiles(root, (n) => n.endsWith(".json") && !n.includes("deleted"), 300);
-    for (const file of files.slice(0, limit)) {
-      let raw: unknown;
-      try {
-        raw = JSON.parse(readFileSync(file, "utf8"));
-      } catch {
-        continue;
-      }
-      if (!isRecord(raw)) continue;
-      const meta = raw["meta"];
-      if (!isRecord(meta)) continue;
-      const taskId = str(meta["taskId"]) ?? path.basename(file, ".json");
-      const messages = Array.isArray(raw["messages"]) ? raw["messages"] : [];
-      if (messages.length === 0) continue;
-      const startedAt = num(meta["createdAt"]) ?? 0;
-      out.push({
-        summary: {
-          executorId: "zcode",
-          sessionId: taskId,
-          rootPath: str(meta["workspacePath"]) ?? null,
-          title: (str(meta["title"]) ?? "").trim() || "zcode 会话",
-          startedAt,
-          updatedAt: num(meta["updatedAt"]) ?? startedAt,
-          messageCount: messages.length,
-          source: file,
-        },
-        messages,
-      });
+// ---- JSON 存档扫描的清单签名缓存（同 readers/claude.ts 的 list 缓存口径）----
+// v2/sessions 的 JSON 是落盘存档：安静时段清单不变，而此前每次 list 都全量
+// JSON.parse 最多 300 个含完整 messages 的文件 —— 自动收录 30s 一轮 × 每 bot
+// 一次，把这段同步读放大成事件循环上的周期性风暴（daemon 冷启动实测首个
+// unit.history 被拖到 15s）。清单 (path,mtime,size) 摘要不变 → 结果必然不变，
+// 直接回缓存，全量解析每进程只付一次。同秒同长度的内容篡改检测不到，只读
+// 列表缓存接受该残留风险。sqlite 兜底源是索引快查，不进缓存保持新鲜。
+
+let jsonArchivesSig: string | null = null;
+let jsonArchivesCache: ZcodeScan[] = [];
+
+/** 清单 → 32 位 FNV-1a 短签名（文件名排序折入，顺序稳定；带数量防撞） */
+function signatureOf(files: readonly { f: string; m: number; s: number }[]): string {
+  let h = 0x811c9dc5;
+  const sorted = [...files].sort((a, b) => (a.f < b.f ? -1 : a.f > b.f ? 1 : 0));
+  for (const e of sorted) {
+    const s = `${e.f}:${e.m}:${e.s};`;
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
     }
   }
+  return `${sorted.length.toString(16)}-${h.toString(16)}`;
+}
+
+function scanJsonArchives(): ZcodeScan[] {
+  const root = path.join(homeDir(), ".zcode", "v2", "sessions");
+  if (!existsSync(root)) return [];
+  const files = collectFiles(root, (n) => n.endsWith(".json") && !n.includes("deleted"), 300);
+  const stamped = files.map((f) => {
+    try {
+      const st = statSync(f);
+      return { f, m: st.mtimeMs, s: st.size };
+    } catch {
+      return { f, m: 0, s: 0 };
+    }
+  });
+  const sig = signatureOf(stamped);
+  if (sig === jsonArchivesSig) return jsonArchivesCache;
+  const out: ZcodeScan[] = [];
+  for (const { f } of stamped) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(f, "utf8"));
+    } catch {
+      continue;
+    }
+    if (!isRecord(raw)) continue;
+    const meta = raw["meta"];
+    if (!isRecord(meta)) continue;
+    const taskId = str(meta["taskId"]) ?? path.basename(f, ".json");
+    const messages = Array.isArray(raw["messages"]) ? raw["messages"] : [];
+    if (messages.length === 0) continue;
+    const startedAt = num(meta["createdAt"]) ?? 0;
+    out.push({
+      summary: {
+        executorId: "zcode",
+        sessionId: taskId,
+        rootPath: str(meta["workspacePath"]) ?? null,
+        title: (str(meta["title"]) ?? "").trim() || "zcode 会话",
+        startedAt,
+        updatedAt: num(meta["updatedAt"]) ?? startedAt,
+        messageCount: messages.length,
+        source: f,
+      },
+      messages,
+    });
+  }
+  jsonArchivesSig = sig;
+  jsonArchivesCache = out;
+  return out;
+}
+
+function scanAll(limit: number): ZcodeScan[] {
+  const out = scanJsonArchives();
   out.push(...scanSqlite(limit, new Set(out.map((s) => s.summary.sessionId))));
   return out;
 }

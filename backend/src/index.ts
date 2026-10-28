@@ -1951,19 +1951,26 @@ const TERMINAL_RESUME_RETRY_MS = 10_000;
 /**
  * 原生会话列表的短 TTL 缓存（执行器|工作区 → 列表）：同一 bot 的多行回溯、
  * 多路轮询、terminal/automation/backlog 三类终端行共享一次扫描。
+ * 2026-10-28 侧栏展开提速改造：过期命中改为**先回旧值 + 后台刷新**
+ * （stale-while-revalidate）——reader 内部是同步 fs，一次冷扫能连续阻塞事件
+ * 循环数秒，此前它发生在 unit.history 的请求路径上，侧栏展开「加载中」
+ * 秒级就是这么来的。真正从未见过的 key 仍需等待首扫（daemon 冷启动后的
+ * 第一轮，自动收录 30s 内会把全部 bot × 执行器焐热）。
  */
 const nativeListCache = new Map<string, { at: number; rows: readonly NativeSessionSummary[] }>();
 const nativeListInFlight = new Map<string, Promise<readonly NativeSessionSummary[]>>();
 const NATIVE_LIST_TTL_MS = 30_000;
 
-function cachedNativeList(executorId: string, rootPath: string | null): Promise<readonly NativeSessionSummary[]> {
-  const key = `${executorId}|${rootPath ?? ""}`;
-  const hit = nativeListCache.get(key);
-  if (hit !== undefined && Date.now() - hit.at < NATIVE_LIST_TTL_MS) return Promise.resolve(hit.rows);
+function nativeListKey(executorId: string, rootPath: string | null): string {
+  return `${executorId}|${rootPath ?? ""}`;
+}
+
+/** 后台刷新（单飞）：不进请求路径，扫完落缓存 */
+function refreshNativeList(executorId: string, rootPath: string | null, key: string): Promise<readonly NativeSessionSummary[]> {
   const flying = nativeListInFlight.get(key);
   if (flying !== undefined) return flying;
   const reader = readerOf(executorId);
-  const p = (reader !== null ? reader.list(rootPath, 50) : Promise.resolve([]))
+  const p = (reader !== null ? reader.list(rootPath, 50) : Promise.resolve([] as readonly NativeSessionSummary[]))
     .catch(() => [] as readonly NativeSessionSummary[])
     .then((rows) => {
       nativeListCache.set(key, { at: Date.now(), rows });
@@ -1972,6 +1979,43 @@ function cachedNativeList(executorId: string, rootPath: string | null): Promise<
     });
   nativeListInFlight.set(key, p);
   return p;
+}
+
+function cachedNativeList(executorId: string, rootPath: string | null): Promise<readonly NativeSessionSummary[]> {
+  const key = nativeListKey(executorId, rootPath);
+  const hit = nativeListCache.get(key);
+  if (hit !== undefined) {
+    if (Date.now() - hit.at < NATIVE_LIST_TTL_MS) return Promise.resolve(hit.rows);
+    // 过期：先回旧值，扫描放到后台 —— 请求方拿到的是 ≤ TTL+一轮 的数据，
+    // 对标题兜底/endedAt 修正/终端回溯这类展示级用途足够新鲜
+    void refreshNativeList(executorId, rootPath, key);
+    return Promise.resolve(hit.rows);
+  }
+  return refreshNativeList(executorId, rootPath, key);
+}
+
+/**
+ * 只读缓存（命中才返回，过期旧值也算命中；冷缓存返回 null）：
+ * unit.history 会话行的原生 enrichment 专用 —— 绝不在请求路径上触发扫描。
+ */
+function peekNativeList(executorId: string, rootPath: string | null): readonly NativeSessionSummary[] | null {
+  return nativeListCache.get(nativeListKey(executorId, rootPath))?.rows ?? null;
+}
+
+/**
+ * 终端回溯的前置闸：原生列表已有缓存（含过期旧值）才放行。
+ * 冷缓存时顺手后台焐热并返回 false —— 调用方本轮直接跳过，**不烧**
+ * 「结算行每进程一次」的回溯名额，下一轮请求（缓存就绪后）自然补上。
+ * 否则 daemon 冷启动后的第一个 unit.history 会在请求路径里同步扫完
+ * 整个原生存储（实测 4.7s），侧栏展开又被拖回秒级。
+ */
+function ensureNativeListWarm(runtimeId: string, rootPath: string): boolean {
+  const bare = runtimeId.replace(/^daemon:/, "").replace(/:yolo$/, "");
+  if (readerOf(bare) === null) return true;
+  const key = nativeListKey(bare, rootPath !== "" ? rootPath : null);
+  if (nativeListCache.has(key)) return true;
+  void refreshNativeList(bare, rootPath !== "" ? rootPath : null, key);
+  return false;
 }
 
 /** 全家聚合的缓存通道（自动收录专用）：逐家走 cachedNativeList（30s TTL +
@@ -2046,6 +2090,31 @@ async function backfillUnitTerminalRefs(unitId: string, rootPath: string): Promi
   }
 }
 
+/**
+ * 会话首条消息标题的进程内缓存（unit.history 用）：首条消息落库后不再变化，
+ * 跨请求复用可省掉每次几十个会话 × 1 次的同步 SQLite 查询。上限保护防长跑泄漏。
+ */
+const sessionTitleCache = new Map<string, string>();
+const SESSION_TITLE_CACHE_MAX = 4000;
+
+/**
+ * unit.history 的 bot 映射短记忆：listBots 是「文件即数据库」的全量重扫
+ * （逐 bot 读 bot.json + AGENTS.md/SOUL.md 全文），这里只取 id/name/rootPath
+ * 三个展示字段，30s 记忆化足够新鲜（bot 改名/换目录的滞后 ≤30s，可接受）。
+ */
+let unitHistoryBotsMemo: { at: number; bots: Awaited<ReturnType<typeof botRegistry.listBots>> } | null = null;
+const UNIT_HISTORY_BOTS_TTL_MS = 30_000;
+
+async function listBotsForHistory() {
+  const now = Date.now();
+  if (unitHistoryBotsMemo !== null && now - unitHistoryBotsMemo.at < UNIT_HISTORY_BOTS_TTL_MS) {
+    return unitHistoryBotsMemo.bots;
+  }
+  const bots = await botRegistry.listBots().catch(() => [] as Awaited<ReturnType<typeof botRegistry.listBots>>);
+  unitHistoryBotsMemo = { at: now, bots };
+  return bots;
+}
+
 registerMethod("unit.history", async (params) => {
   const p = (params ?? {}) as { unitId?: string; limit?: number };
   const targetUnitId = typeof p.unitId === "string" && p.unitId.trim() !== "" ? p.unitId.trim() : null;
@@ -2055,16 +2124,13 @@ registerMethod("unit.history", async (params) => {
   /** 已被运行记录认领的会话 id（全量，不受单次 limit 影响）：会话条目去重用 */
   const claimedSessionIds = store.getClaimedSessionIds();
 
-  // 预载全部 bot 映射，支持单 bot 历史或跨 bot 全局历史
-  const allBots = await botRegistry.listBots().catch(() => []);
+  // 预载全部 bot 映射，支持单 bot 历史或跨 bot 全局历史（30s 记忆化，见上）
+  const allBots = await listBotsForHistory();
   // BotDefinition 的键字段是 id（bot.json 形态），不是 unitId —— 此前按 b.unitId
   // 建键全部落 undefined，unitName/rootPath 解析从未生效（历史行一直显示裸
   // unitId、terminal 回溯拿不到 bot 目录），这是顺带修掉的存量 bug
   const botMap = new Map(allBots.map((b) => [String(b.id ?? ""), b]));
   const defaultBotRootPath = targetUnitId ? (botMap.get(targetUnitId)?.rootPath ? String(botMap.get(targetUnitId)?.rootPath) : "") : "";
-
-  // 进程内已解析会话标题缓存（避免每次 unit.history 对几十个会话同步查 SQLite 首条消息）
-  const sessionTitleCache = new Map<string, string>();
 
   // 单词请求时间预算保护：若原生扫描累计耗时过长，熔断后续扫描，保障 RPC 毫秒级返回
   const reqStart = Date.now();
@@ -2085,7 +2151,7 @@ registerMethod("unit.history", async (params) => {
       let terminalResumeRef: string | null = null;
       if (isTerminal && r.sessionId !== null) {
         const attemptKey = `auto-${r.id}`;
-        if ((!terminalResumeAttempted.has(attemptKey) || r.status === "running") && canAttemptMore()) {
+        if ((!terminalResumeAttempted.has(attemptKey) || r.status === "running") && canAttemptMore() && ensureNativeListWarm(a.runtimeId, autoRootPath)) {
           terminalResumeAttempted.add(attemptKey);
           const resolved = await resolveNativeTerminalSession(a.runtimeId, autoRootPath, r.startedAt, r.finishedAt);
           terminalResumeRef = resolved?.resumeRef ?? null;
@@ -2126,7 +2192,7 @@ registerMethod("unit.history", async (params) => {
       let terminalResumeRef: string | null = null;
       if (isTerminal && r.sessionId !== null) {
         const attemptKey = `bl-${r.id}`;
-        if ((!terminalResumeAttempted.has(attemptKey) || r.status === "running") && canAttemptMore()) {
+        if ((!terminalResumeAttempted.has(attemptKey) || r.status === "running") && canAttemptMore() && ensureNativeListWarm(r.runtimeId, blRootPath)) {
           terminalResumeAttempted.add(attemptKey);
           const resolved = await resolveNativeTerminalSession(r.runtimeId, blRootPath, r.startedAt, r.finishedAt);
           terminalResumeRef = resolved?.resumeRef ?? null;
@@ -2163,7 +2229,7 @@ registerMethod("unit.history", async (params) => {
     // 第一顺位，这里是兜底。结算行每进程只试一次；running 行全局节流 ≥10s/行
     // （原生 id 可能还没刷出来，允许重试，但不能让多路轮询变成同步读风暴）。
     // 回溯本身走 history reader + TTL 缓存，见 resolveNativeTerminalSession 注释。
-    if (!resumeRef && canAttemptMore()) {
+    if (!resumeRef && canAttemptMore() && ensureNativeListWarm(r.runtimeId, botRootPath)) {
       const now = Date.now();
       const mayAttempt =
         r.status === "running"
@@ -2202,18 +2268,19 @@ registerMethod("unit.history", async (params) => {
     });
   }
 
-  // 影子行判定集：非导入台账行与终端运行认领的 (执行器|原生会话 id)
+  // 影子行判定集：非导入台账行与终端运行认领的 (执行器|原生会话 id)。
+  // 轻量列直查（此前整表 SessionRow 搬进内存只为做 Set）
   const shadowedNativeRefs = new Set<string>();
-  for (const s of store.listSessions()) {
-    if (s.source !== "imported" && s.cliRef !== null && s.cliRef !== "") {
-      shadowedNativeRefs.add(`${s.runtimeId.replace(/^daemon:/, "")}|${s.cliRef}`);
-    }
+  for (const ref of store.listSessionNativeRefs()) {
+    shadowedNativeRefs.add(`${ref.runtimeId.replace(/^daemon:/, "")}|${ref.cliRef}`);
   }
   for (const r of store.listTerminalRuns(targetUnitId ?? undefined, 200)) {
     if (r.resumeRef !== null && r.resumeRef !== "") shadowedNativeRefs.add(`${r.runtimeId.replace(/^daemon:/, "")}|${r.resumeRef}`);
   }
 
-  for (const s of store.listSessions()) {
+  // 单 bot 历史：SQL 层按 unit 过滤；全局历史才全量（索引 idx_sessions_unit）
+  const sessionRows = targetUnitId !== null ? store.listSessionsForUnit(targetUnitId) : store.listSessions();
+  for (const s of sessionRows) {
     if ((targetUnitId !== null && s.unitId !== targetUnitId) || claimedSessionIds.has(s.id)) continue;
     // 导入的外部会话：session 形态呈现（launchMode=chat）——点击进聊天页
     // （events.since 触发原生转录投影）、右键可 TUI resume（cliRef=原生 id）
@@ -2238,6 +2305,7 @@ registerMethod("unit.history", async (params) => {
           }
         }
         if (title !== "" && title !== "（无标题会话）") {
+          if (sessionTitleCache.size >= SESSION_TITLE_CACHE_MAX) sessionTitleCache.clear();
           sessionTitleCache.set(s.id, title);
         }
       }
@@ -2263,8 +2331,10 @@ registerMethod("unit.history", async (params) => {
     }
 
     if (s.cliRef) {
-      const nativeList = await cachedNativeList(s.runtimeId, s.rootPath ?? defaultBotRootPath);
-      const hit = nativeList.find((x) => x.sessionId === s.cliRef);
+      // 原生 enrichment 只读缓存（含过期旧值）：绝不在请求路径上触发同步扫描
+      // —— 冷缓存时先按台账数据返回，下一轮（缓存焐热后）自动补上标题/endedAt
+      const nativeList = peekNativeList(s.runtimeId, s.rootPath ?? defaultBotRootPath);
+      const hit = nativeList?.find((x) => x.sessionId === s.cliRef);
       if (hit) {
         if (!title || title === "（无标题会话）") title = hit.title;
         endedAt = Math.max(endedAt ?? 0, hit.updatedAt);
