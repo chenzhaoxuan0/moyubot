@@ -143,6 +143,8 @@ export class BacklogEngine {
     this.pushState();
     // 4. 心跳判定（不 await —— tick 是同步的，跳动自己管自己）
     void this.maybeBeat();
+    // 5. 闲时自动执行（autopilot）：有余量就持续清 ready+auto 的清单 —— 同样不 await
+    void this.maybeAutopilot();
   }
 
   // ---- 总状态 ---------------------------------------------------------------
@@ -270,6 +272,54 @@ export class BacklogEngine {
     return this.beat(true);
   }
 
+  // ---- 闲时自动执行（autopilot）-------------------------------------------------
+  //
+  // 「用量还有富余就持续把清单做完」的引擎面：空闲（无运行会话 + 超过空闲阈值）
+  // 且余量 ≥ 地板时，直接派发下一条 ready + auto 的待办 —— 不进确认门（auto 条目
+  // 的语义就是托管执行，确认门留给非 auto 条目的心跳提议），跑完自动验收。
+  // 与心跳的分工：auto 条目不进心跳候选（免得同一批任务又被提议一遍）。
+
+  /** 派发中的内存旗：tick 每 20s 一拍，派发是异步的，防同拍重入 */
+  private autopilotBusy = false;
+
+  private async maybeAutopilot(): Promise<void> {
+    const cfg = this.deps.getConfig();
+    const ap = cfg.autopilot;
+    if (!ap.enabled) return;
+    if (this.autopilotBusy || this.beating || this.activeProposal !== null) return;
+    if (this.forceBusy()) return;
+    // 空闲判定与心跳同口径：无运行会话 + 距用户最近活动 ≥ idleMinutes
+    const lastActivity = this.lastUserActivityAt();
+    if (Date.now() - lastActivity < cfg.heartbeat.idleMinutes * 60_000) return;
+    const running = this.deps.host.listSessions().filter(
+      (s) => s.status === "running" || s.status === "awaiting_permission" || s.status === "awaiting_input",
+    );
+    const executing = this.deps.store.listBacklogItems().filter((i) => i.status === "executing");
+    if (running.length > 0 || executing.length >= Math.max(1, ap.maxConcurrent)) return;
+    // 清单顺序即优先级（listBacklogItems 已按 sortPos 升序，done 沉底）——取第一条
+    const next = this.deps.store.listBacklogItems().find((i) => i.status === "ready" && i.auto);
+    if (next === undefined) return;
+    // 余量门：指定了执行器就看它，没指定就在订阅执行器里挑剩余最多的
+    const quotas = await this.probe.readAll(cfg.runtimes);
+    const pick = pickAutopilotRuntime(next.runtimeId, quotas, ap.headroomFloorPercent);
+    if (pick === null) {
+      this.saveLedger({ lastBeatOutcome: "autopilot:no-headroom" });
+      return;
+    }
+    this.autopilotBusy = true;
+    try {
+      await this.dispatch(next, pick, next.model, "autopilot");
+      log.info("backlog autopilot dispatched", { itemId: next.id, runtimeId: pick });
+    } catch (err: unknown) {
+      // dispatch 失败已把条目回 ready 并挂 lastError —— 下一拍再试（连续失败靠
+      // lastError 在 UI 上可见，不进休眠：闲时自动执行没有提议可忽略）
+      log.warn("backlog autopilot dispatch failed", { itemId: next.id, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      this.autopilotBusy = false;
+      this.pushState(true);
+    }
+  }
+
   /**
    * 心跳会话跑在哪：backlog 配置显式指定（设置面板）优先，
    * 没指定就读常驻心跳 bot 的主绑定（bot 设置页改绑定即生效）。
@@ -316,7 +366,8 @@ export class BacklogEngine {
       return;
     }
     // 单飞与挂起提案在 phase 里已体现（executing/awaiting_confirm/awaiting_review 都不是 idle）
-    const ready = this.deps.store.listBacklogItems().filter((i) => i.status === "ready");
+    // auto 条目不进心跳候选：它们归 autopilot 托管执行，再提议一遍是打扰
+    const ready = this.deps.store.listBacklogItems().filter((i) => i.status === "ready" && !i.auto);
     this.saveLedger({ lastBeatAt: Date.now() });
     this.beating = true;
     this.pushState(true);
@@ -606,7 +657,7 @@ export class BacklogEngine {
   /** 派发一条待办。terminal 模式：前端 PTY 拉执行器 TUI（yolo 免审批，人可看可插手），
    *  终态由终端 exit 帧回灌；chat / headless：复用 automation 的会话语义
    *  （source=automation → 权限全放行，deny 仍优先），chat 额外把前端拉到该会话。 */
-  async dispatch(item: BacklogRow, runtimeId: string, model: string | null, trigger: "gtd" | "manual" = "gtd"): Promise<{ runId: number; sessionId: string }> {
+  async dispatch(item: BacklogRow, runtimeId: string, model: string | null, trigger: "gtd" | "manual" | "autopilot" = "gtd"): Promise<{ runId: number; sessionId: string }> {
     if (item.launchMode === "terminal" && this.deps.launchTerminal !== undefined) {
       const runId = this.deps.store.startBacklogRun(item.id, null, runtimeId, trigger);
       this.deps.store.updateBacklogItem(item.id, { status: "executing", runtimeId, model, lastError: null, lastRunAt: Date.now() });
@@ -635,11 +686,19 @@ export class BacklogEngine {
     this.deps.store.updateBacklogItem(item.id, { status: "executing", runtimeId, model, lastError: null, lastRunAt: Date.now() });
     this.deps.broadcast({ kind: "items" });
     try {
+      // 显式指定会话（清单升级的可选项）：接得上就往那个会话里发 prompt，
+      // 接不上（记录缺失/换过执行器/无法续）回落新开 —— 指定是尽力而为不是硬约束
+      const explicit = item.targetSessionId ?? null;
       // 时间盒续跑（docs/23）：上次失败且会话接得回来 → resume 原会话发续跑
       // 提示词，不从头开始；首跑 / 上次成功 / TUI 中断 / 换过执行器都走新开
       const resumeSid = this.resumeTargetFor(item.id, runtimeId);
       let sessionId: string;
-      if (resumeSid !== null) {
+      if (explicit !== null && explicit !== "" && this.explicitSessionResumable(explicit, runtimeId)) {
+        if (!this.deps.host.isLive(asSessionId(explicit))) this.deps.host.resumeSession(asSessionId(explicit));
+        this.deps.host.sendMessage(asSessionId(explicit), item.prompt, undefined, undefined, "automation");
+        sessionId = explicit;
+        log.info("backlog item dispatched to specified session", { itemId: item.id, runId, sessionId });
+      } else if (resumeSid !== null) {
         this.deps.host.resumeSession(asSessionId(resumeSid));
         this.deps.host.sendMessage(asSessionId(resumeSid), BACKLOG_RESUME_PROMPT, undefined, undefined, "automation");
         sessionId = resumeSid;
@@ -699,12 +758,25 @@ export class BacklogEngine {
     return sid;
   }
 
-  /** 执行终态收口：done → 待验收；failed → 回就绪挂错误 */
+  /** 显式指定会话的「接得上」判定（与 resumeTargetFor 同口径，但不看上次成败） */
+  private explicitSessionResumable(sessionId: string, runtimeId: string): boolean {
+    const row = this.deps.store.getSession(asSessionId(sessionId));
+    if (row === undefined) return false;
+    if (row.runtimeId !== runtimeId) return false;
+    return this.deps.host.isLive(asSessionId(sessionId)) || row.cliRef !== null;
+  }
+
+  /**
+   * 执行终态收口：done → 待验收；failed → 回就绪挂错误。
+   * auto 条目且 autopilot.autoReview 开：done 直接关闭（托管执行的语义就是
+   * 无人值守跑完即结 —— 否则清单会被待验收积压卡住，闲时循环停摆）。
+   */
   private settleExecution(itemId: number, status: "done" | "failed", detail: string): void {
     const item = this.deps.store.getBacklogItem(itemId);
     if (item === undefined || item.status !== "executing") return;
+    const autoReview = item.auto && this.deps.getConfig().autopilot.autoReview;
     if (status === "done") {
-      this.deps.store.updateBacklogItem(itemId, { status: "awaiting_review", lastError: null });
+      this.deps.store.updateBacklogItem(itemId, { status: autoReview ? "done" : "awaiting_review", lastError: null });
     } else {
       this.deps.store.updateBacklogItem(itemId, { status: "ready", lastError: `执行失败：${detail}` });
     }
@@ -713,7 +785,9 @@ export class BacklogEngine {
     const title = item.title;
     void this.deps.notify(
       status === "done"
-        ? `【待办完成待验收】「${title}」跑完了 —— 回工作台看产出并验收`
+        ? autoReview
+          ? `【清单任务完成】「${title}」已自动执行完毕（闲时托管）`
+          : `【待办完成待验收】「${title}」跑完了 —— 回工作台看产出并验收`
         : `【待办失败】「${title}」：${detail}（已回就绪，下次心跳可能再提议）`,
     );
   }
@@ -894,6 +968,8 @@ export class BacklogEngine {
       launchMode: row.launchMode,
       size: row.size === "big" || row.size === "small" ? row.size : null,
       status: row.status as BacklogItem["status"],
+      auto: row.auto,
+      targetSessionId: row.targetSessionId,
       ignoreCount: row.ignoreCount,
       lastProposedAt: row.lastProposedAt,
       lastRunAt: row.lastRunAt,
@@ -923,6 +999,27 @@ export class BacklogEngine {
 }
 
 // ---- 工具 ---------------------------------------------------------------------
+
+/**
+ * autopilot 的执行器选择：item 指定了就看指定（percent 已知则须 ≥ 地板，未知放行
+ * —— 探针失败不该把清单卡死）；没指定就在订阅执行器里挑剩余最多的，都低于地板
+ * 返回 null（这一拍不跑，等窗口重置）。
+ */
+function pickAutopilotRuntime(
+  preferred: string,
+  quotas: QuotaHeadroom[],
+  floorPercent: number,
+): string | null {
+  const known = (q: QuotaHeadroom | undefined): number | null => (q === undefined ? null : q.percent);
+  if (preferred !== "") {
+    const q = known(quotas.find((x) => x.runtimeId === preferred));
+    return q === null || q >= floorPercent ? preferred : null;
+  }
+  const eligible = quotas
+    .filter((q) => q.subscribed && (q.percent === null || q.percent >= floorPercent))
+    .sort((a, b) => (b.percent ?? -1) - (a.percent ?? -1));
+  return eligible[0]?.runtimeId ?? null;
+}
 
 /** 从模型回复里抠 JSON 决策：取「从某个 { 到最后一个 }」能 parse 的第一个（从右往左试） */
 function extractJson(text: string): Record<string, unknown> | null {

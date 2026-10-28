@@ -25,6 +25,7 @@
     "smoke:ai-native-skill": "tsx scripts/smoke-ai-native-skill.ts",
     "smoke:autoterm": "tsx scripts/smoke-autoterm.ts",
     "smoke:backlog": "tsx scripts/smoke-backlog.ts",
+    "smoke:inbox": "tsx scripts/smoke-inbox.ts",
     "smoke:context": "tsx scripts/smoke-context.ts",
     "smoke:prog-init": "tsx scripts/smoke-progressive-init.ts",
     "smoke:control": "tsx scripts/smoke-control.ts",

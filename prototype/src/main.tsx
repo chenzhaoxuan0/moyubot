@@ -6,10 +6,13 @@ import "./styles.css";
 import "./store/useAppearance.ts";
 // 待办（GTD）信号：提议弹窗/总状态点要跨主视图常驻，订阅挂在应用入口
 import { bindBacklogSignals } from "./store/useBacklog.ts";
+// 清单（inbox）信号：分类状态/条目变化同理跨主视图常驻
+import { bindInboxSignals } from "./store/useInbox.ts";
 import { App } from "./app.tsx";
 import { ErrorBoundary } from "./ui/ErrorBoundary.tsx";
 
 bindBacklogSignals();
+bindInboxSignals();
 
 // 原型期的 T3 provider profiles（agent-workbench:provider-profiles）已整体删除：
 // 那套 store 没有任何消费方，但用户浏览器里可能还躺着当年存进去的明文 API Key ——

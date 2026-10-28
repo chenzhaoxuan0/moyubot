@@ -15,6 +15,7 @@ import {
   GitBranch,
   History,
   ImagePlus,
+  Inbox,
   ListTodo,
   MessageSquare,
   PanelLeftClose,
@@ -281,6 +282,12 @@ export function Sidebar() {
               icon={AlarmClock}
               label="自动化"
               onClick={() => useShell.getState().setMainView("automations")}
+            />
+            <IconNavBtn
+              icon={Inbox}
+              label="清单"
+              hint="想法 · 目标 · 待办"
+              onClick={() => useShell.getState().setMainView("inbox")}
             />
             <IconNavBtn
               icon={ListTodo}

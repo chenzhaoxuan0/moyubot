@@ -27,6 +27,7 @@ export function normalizeBacklogConfig(raw: unknown): BacklogConfig {
   const co = (r["consolidate"] ?? {}) as Record<string, unknown>;
   const fs = (r["feishu"] ?? {}) as Record<string, unknown>;
   const qr = (r["quotaResume"] ?? {}) as Record<string, unknown>;
+  const ap = (r["autopilot"] ?? {}) as Record<string, unknown>;
   const runtimes: Record<string, BacklogConfig["runtimes"][string]> = {};
   if (r["runtimes"] !== null && typeof r["runtimes"] === "object") {
     for (const [id, v] of Object.entries(r["runtimes"] as Record<string, unknown>)) {
@@ -67,6 +68,13 @@ export function normalizeBacklogConfig(raw: unknown): BacklogConfig {
       enabled: co["enabled"] !== false,
       atMinutes: clampInt(co["atMinutes"], 0, 24 * 60 - 1, d.consolidate.atMinutes),
     },
+    autopilot: {
+      // 缺省 enabled=true（跟默认配置同向）：只写了一半的旧配置不该把闲时执行悄悄关掉
+      enabled: ap["enabled"] !== false,
+      maxConcurrent: clampInt(ap["maxConcurrent"], 1, 4, d.autopilot.maxConcurrent),
+      headroomFloorPercent: clampInt(ap["headroomFloorPercent"], 0, 100, d.autopilot.headroomFloorPercent),
+      autoReview: ap["autoReview"] !== false,
+    },
     feishu: {
       enabled: fs["enabled"] === true,
       botId: str(fs["botId"], d.feishu.botId),
@@ -90,7 +98,7 @@ export function getBacklogConfig(store: Store): BacklogConfig {
 export function setBacklogConfig(store: Store, patch: unknown): BacklogConfig {
   const prev = getBacklogConfig(store);
   const p = (patch ?? {}) as Record<string, unknown>;
-  const section = (name: "heartbeat" | "quotaResume" | "consolidate" | "feishu"): Record<string, unknown> => {
+  const section = (name: "heartbeat" | "quotaResume" | "consolidate" | "feishu" | "autopilot"): Record<string, unknown> => {
     const base = prev[name] as unknown as Record<string, unknown>;
     const over = p[name];
     return over !== null && typeof over === "object" ? { ...base, ...(over as Record<string, unknown>) } : base;
@@ -100,6 +108,7 @@ export function setBacklogConfig(store: Store, patch: unknown): BacklogConfig {
   if (p["consolidate"] !== undefined) merged["consolidate"] = section("consolidate");
   if (p["feishu"] !== undefined) merged["feishu"] = section("feishu");
   if (p["quotaResume"] !== undefined) merged["quotaResume"] = section("quotaResume");
+  if (p["autopilot"] !== undefined) merged["autopilot"] = section("autopilot");
   // runtimes 单独按 id 合并（prev 的保留，patch 的覆盖同名项）
   if (p["runtimes"] !== null && typeof p["runtimes"] === "object") {
     merged["runtimes"] = { ...prev.runtimes, ...(p["runtimes"] as Record<string, unknown>) };

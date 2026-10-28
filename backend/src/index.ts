@@ -20,7 +20,7 @@ import { ImageProfileStore, type ImageProfileRow } from "./image/profiles.ts";
 import { handleImageCall } from "./image/proxy.ts";
 import { log, setLogLevel } from "./log.ts";
 import { setSecretsHome } from "./secrets.ts";
-import { applyMethodMeta, attachWs, broadcastBacklog, broadcastEvent, broadcastNotification, broadcastTerminal, dispatchRpc, registerMethod, WIRE_VERSION } from "./wsd.ts";
+import { applyMethodMeta, attachWs, broadcastBacklog, broadcastEvent, broadcastInbox, broadcastNotification, broadcastTerminal, dispatchRpc, registerMethod, WIRE_VERSION } from "./wsd.ts";
 import { METHOD_META } from "./methods.meta.ts";
 import { composePrompt, inlineAttachments, runChatTurn } from "./chat.ts";
 import { NotificationsService } from "./notifications.ts";
@@ -133,6 +133,17 @@ import {
   HEARTBEAT_DEFAULT_RUNTIME_ID,
 } from "./backlog/heartbeatBot.ts";
 import { draftPromptOf, type BacklogConfig, type BacklogSignal } from "../../prototype/src/core/backlog.ts";
+import { InboxClassifier } from "./inbox/classifier.ts";
+import { getInboxConfig, setInboxConfig } from "./inbox/config.ts";
+import {
+  ensureRoutingBot,
+  routingBotDefinition,
+  routingBotShape,
+  ROUTING_BOT_ID,
+  ROUTING_DEFAULT_RUNTIME_ID,
+} from "./inbox/routingBot.ts";
+import type { InboxSignal } from "../../prototype/src/core/inbox.ts";
+import { normalizeInboxHints } from "../../prototype/src/core/inbox.ts";
 import { BotRegistry } from "./bots/registry.ts";
 import { TelegramGateway } from "./channels/telegram.ts";
 import { FeishuGateway, diagnoseLarkAccount, larkIdentities, larkProfileList, addLarkProfile } from "./channels/feishu.ts";
@@ -479,6 +490,38 @@ void ensureHeartbeatBot(config.homeDir)
   })
   .then((r) => log.info("heartbeat bot ready", { id: HEARTBEAT_BOT_ID, unchanged: r.unchanged }))
   .catch((err: unknown) => log.warn("heartbeat bot init failed", { error: err instanceof Error ? err.message : String(err) }));
+
+// routing bot（常驻合成 bot，对齐 steward / heartbeat 模式）：清单分类的总管 bot。
+// 项目的初始默认状态里它就是分类的执行者；用户可以在 bot 设置页换主绑定来「指定」
+// 它跑在哪个执行器上。AGENTS.md 岗位说明书随目录播种。失败不阻断启动。
+void ensureRoutingBot(config.homeDir)
+  .then(({ rootPath }) => {
+    botRegistry.addRoot(rootPath);
+    // 幂等 + 用户数据不覆盖：与 steward / heartbeat 同一套口径
+    return botRegistry.getBot(ROUTING_BOT_ID).then(async (existing) => {
+      const want = routingBotDefinition(rootPath, ROUTING_DEFAULT_RUNTIME_ID);
+      const prev = (existing ?? {}) as Record<string, unknown>;
+      const userOwned: Record<string, unknown> = {};
+      for (const k of [...USER_OWNED_BOT_KEYS, "tags"]) {
+        if (prev[k] !== undefined) userOwned[k] = prev[k];
+      }
+      const prevIdentity = (prev.identity ?? {}) as Record<string, unknown>;
+      const wantIdentity = (want.identity ?? {}) as Record<string, unknown>;
+      userOwned.identity = {
+        ...wantIdentity,
+        ...(prevIdentity.role !== undefined ? { role: prevIdentity.role } : {}),
+        ...(prevIdentity.persona !== undefined ? { persona: prevIdentity.persona } : {}),
+      };
+      const merged = { ...want, ...userOwned };
+      if (existing !== undefined && routingBotShape(existing) === routingBotShape(merged)) {
+        return { unchanged: true as const };
+      }
+      await botRegistry.putBot(merged);
+      return { unchanged: false as const };
+    });
+  })
+  .then((r) => log.info("routing bot ready", { id: ROUTING_BOT_ID, unchanged: r.unchanged }))
+  .catch((err: unknown) => log.warn("routing bot init failed", { error: err instanceof Error ? err.message : String(err) }));
 
 /**
  * 管家定义的**规范形状**，用于幂等比较。
@@ -1378,6 +1421,37 @@ backlogEngine = new BacklogEngine({
   },
 });
 backlogEngine.start();
+
+// ---- 清单（inbox）分类器 —— routing bot 的引擎面，与 backlogEngine 同理依赖 wss ----
+
+const inboxClassifier = new InboxClassifier({
+  store,
+  host,
+  homeDir: config.homeDir,
+  getConfig: () => getInboxConfig(store),
+  broadcast: (signal: InboxSignal) => {
+    broadcastInbox(wss, signal);
+  },
+  unitsWithRoots: async () => {
+    const bots = await botRegistry.listBots();
+    return bots
+      .filter((b) => typeof b.rootPath === "string" && b.rootPath !== "")
+      .map((b) => ({ unitId: String(b.id ?? ""), unitName: String(b.name ?? ""), rootPath: String(b.rootPath) }));
+  },
+  // routing bot 的主绑定（bot 设置页改执行器/模型即生效；inbox 配置显式指定时优先）
+  routingBinding: async () => {
+    const bot = await botRegistry.getBot(ROUTING_BOT_ID);
+    if (bot === undefined) return null;
+    const bindings = Array.isArray(bot.bindings) ? (bot.bindings as Array<Record<string, unknown>>) : [];
+    const primary = bindings.find((b) => b["primary"] === true) ?? bindings[0];
+    if (primary === undefined) return null;
+    const runtimeId = String(primary["runtimeId"] ?? "").replace(/^daemon:/, "");
+    const modelHint = typeof primary["modelHint"] === "string" ? String(primary["modelHint"]) : null;
+    return runtimeId === "" ? null : { runtimeId, model: modelHint };
+  },
+});
+// 重启 sweep：上次没分完的待分类条目补一刀
+inboxClassifier.sweep();
 // dst 启动器已并入 dsh（tuiCommand）：dsh 的 TUI 用 dst shim 拉起
 function tuiCommandFor(executorId: string | undefined): string | undefined {
   if (!executorId) return executorId;
@@ -2507,6 +2581,8 @@ registerMethod("backlog.create", (params) => {
     unitId?: string; unitName?: string; rootPath?: string;
     runtimeId?: string; model?: string | null; mode?: string | null; size?: string | null;
     launchMode?: string;
+    auto?: boolean;
+    targetSessionId?: string | null;
   };
   if (typeof p.goal !== "string" || p.goal.trim() === "") throw badBacklog("goal is required");
   if (typeof p.unitId !== "string" || typeof p.rootPath !== "string" || p.rootPath === "") {
@@ -2529,6 +2605,8 @@ registerMethod("backlog.create", (params) => {
     mode: typeof p.mode === "string" && p.mode !== "" ? p.mode : null,
     size: p.size === "big" || p.size === "small" ? p.size : null,
     launchMode: p.launchMode === "headless" || p.launchMode === "chat" ? p.launchMode : "terminal",
+    auto: p.auto === true,
+    targetSessionId: typeof p.targetSessionId === "string" && p.targetSessionId.trim() !== "" ? p.targetSessionId.trim() : null,
     source: "manual",
   });
   const item = store.getBacklogItem(id);
@@ -2541,6 +2619,8 @@ registerMethod("backlog.update", (params) => {
     unitId?: string; unitName?: string; rootPath?: string;
     runtimeId?: string; model?: string | null; mode?: string | null; size?: string | null;
     launchMode?: string;
+    auto?: boolean;
+    targetSessionId?: string | null;
   };
   if (typeof p.id !== "number") throw badBacklog("id is required");
   if (p.launchMode !== undefined && p.launchMode !== "terminal" && p.launchMode !== "chat" && p.launchMode !== "headless") {
@@ -2561,6 +2641,10 @@ registerMethod("backlog.update", (params) => {
     ...(p.mode !== undefined ? { mode: typeof p.mode === "string" && p.mode !== "" ? p.mode : null } : {}),
     ...(p.size !== undefined ? { size: p.size === "big" || p.size === "small" ? p.size : null } : {}),
     ...(p.launchMode === "terminal" || p.launchMode === "chat" || p.launchMode === "headless" ? { launchMode: p.launchMode } : {}),
+    ...(p.auto !== undefined ? { auto: p.auto === true } : {}),
+    ...(p.targetSessionId !== undefined
+      ? { targetSessionId: typeof p.targetSessionId === "string" && p.targetSessionId.trim() !== "" ? p.targetSessionId.trim() : null }
+      : {}),
   });
   const item = store.getBacklogItem(p.id);
   return { item: item === undefined ? null : requireEngine().toItem(item) };
@@ -2668,6 +2752,95 @@ registerMethod("backlog.heartbeat.force", () => {
 registerMethod("backlog.consolidate.run", (params) => {
   const p = (params ?? {}) as { force?: boolean };
   return requireEngine().consolidate(p.force !== false);
+});
+
+// ---- 清单（inbox）方法 --------------------------------------------------------
+//
+// 清单是用户唯一的捕获入口：文本框写任何东西 → routing bot 分类 → actionable 的
+// 沉淀成待办任务（auto 直通闲时自动执行），想法/资料留在清单按块归档。
+// 提交即收进清单（一分钱不花），分类是 routing 会话的事（自动触发可关）。
+
+registerMethod("inbox.add", (params) => {
+  const p = (params ?? {}) as { text?: string; category?: string | null; hints?: unknown };
+  if (typeof p.text !== "string" || p.text.trim() === "") throw badBacklog("text is required");
+  const cfg = getInboxConfig(store);
+  const hints = normalizeInboxHints(p.hints);
+  // category 直接给了就不进分类队列（用户自己分好了）
+  const category = typeof p.category === "string" && p.category.trim() !== "" ? p.category.trim() : null;
+  const id = store.createInboxEntry({ text: p.text.trim(), category, hints });
+  if (category === null && cfg.autoClassify) inboxClassifier.schedule();
+  const entry = store.getInboxEntry(id);
+  broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
+  return { id, entry: entry ?? null };
+});
+
+registerMethod("inbox.list", () => {
+  return {
+    entries: store.listInboxEntries(),
+    config: getInboxConfig(store),
+    classifier: inboxClassifier.state(),
+  };
+});
+
+/** 编辑条目原话 / 手动改分类（改分类不烧 routing 的一分钱） */
+registerMethod("inbox.update", (params) => {
+  const p = (params ?? {}) as { id?: number; text?: string; category?: string | null; hints?: unknown };
+  if (typeof p.id !== "number") throw badBacklog("id is required");
+  const hit = store.getInboxEntry(p.id);
+  if (hit === undefined) throw Object.assign(new Error(`没有这条清单条目：${p.id}`), { code: "unknown_entry" });
+  const categoryProvided = p.category !== undefined;
+  const category = categoryProvided
+    ? typeof p.category === "string" && p.category.trim() !== "" ? p.category.trim() : null
+    : undefined;
+  store.updateInboxEntry(p.id, {
+    ...(typeof p.text === "string" && p.text.trim() !== "" ? { text: p.text.trim() } : {}),
+    ...(category !== undefined ? { category } : {}),
+    ...(p.hints !== undefined ? { hints: normalizeInboxHints(p.hints) } : {}),
+    ...(categoryProvided
+      ? {
+          status: category === null ? "pending" : "classified",
+          classifiedAt: category === null ? null : Date.now(),
+          // 换分类后旧的任务链接不再代表当前分类 —— 断开（任务本体不动）
+          ...(categoryProvided && category !== hit.category ? { taskId: null } : {}),
+        }
+      : {}),
+  });
+  const entry = store.getInboxEntry(p.id);
+  broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
+  return { entry: entry ?? null };
+});
+
+registerMethod("inbox.delete", (params) => {
+  const p = (params ?? {}) as { id?: number };
+  if (typeof p.id !== "number") throw badBacklog("id is required");
+  return { deleted: store.deleteInboxEntry(p.id) };
+});
+
+/** 手动触发一轮分类（受理即返 —— 分类会话要跑几十秒，结果从 entries/state 信号帧观察） */
+registerMethod("inbox.classify.run", () => {
+  void inboxClassifier
+    .classify()
+    .then((r) => log.info("inbox classify manual run", { ...r }))
+    .catch((err: unknown) => log.warn("inbox classify manual run failed", { error: err instanceof Error ? err.message : String(err) }));
+  return { started: true };
+});
+
+/** 重新分类：把条目打回待分类并立即触发一轮 */
+registerMethod("inbox.reclassify", (params) => {
+  const p = (params ?? {}) as { id?: number };
+  if (typeof p.id !== "number") throw badBacklog("id is required");
+  const hit = store.getInboxEntry(p.id);
+  if (hit === undefined) throw Object.assign(new Error(`没有这条清单条目：${p.id}`), { code: "unknown_entry" });
+  store.updateInboxEntry(p.id, { status: "pending", classifiedAt: null });
+  broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
+  inboxClassifier.schedule(500);
+  return { ok: true };
+});
+
+registerMethod("inbox.config.get", () => getInboxConfig(store));
+registerMethod("inbox.config.set", (params) => {
+  const p = (params ?? {}) as { patch?: unknown };
+  return { config: setInboxConfig(store, p.patch) };
 });
 
 

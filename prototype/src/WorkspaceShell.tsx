@@ -4,6 +4,7 @@ import { Group, Panel, Separator, type PanelImperativeHandle } from "react-resiz
 import { AutomationsPage } from "./ui/AutomationsPage.tsx";
 import { AutomationDialog } from "./ui/AutomationDialog.tsx";
 import { BacklogPage } from "./ui/BacklogPage.tsx";
+import { InboxPage } from "./ui/InboxPage.tsx";
 import { ProposalBanner } from "./ui/ProposalBanner.tsx";
 import { ImageStudioPage } from "./ui/ImageStudioPage.tsx";
 import { CommandCenter } from "./ui/CommandCenter.tsx";
@@ -309,6 +310,11 @@ function ConversationSlot() {
         /* 待办清单（独立主视图） */
         <main className="h-full min-h-0" aria-label="待办">
           <BacklogPage />
+        </main>
+      ) : mainView === "inbox" ? (
+        /* 清单（独立主视图）：个人 context 唯一入口 —— 文本框 + routing 分类 */
+        <main className="h-full min-h-0" aria-label="清单">
+          <InboxPage />
         </main>
       ) : mainView === "sourceControl" ? (
         /* 源代码管理（独立主视图）：分支 / 工作树 */

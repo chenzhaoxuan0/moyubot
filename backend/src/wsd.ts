@@ -68,6 +68,16 @@ export interface BacklogFrame {
 }
 
 /**
+ * 清单（inbox）信号帧 —— 与 backlog 帧同理独立于 event 流：分类状态/清单变化是
+ * daemon 级广播。signal 的类型见 prototype/src/core/inbox.ts 的 InboxSignal。
+ */
+export interface InboxFrame {
+  readonly v: typeof WIRE_VERSION;
+  readonly type: "inbox";
+  readonly signal: unknown;
+}
+
+/**
  * 通知帧（docs/21 P4b）—— daemon 聚合的通知事实推流，行形状见
  * notifications.ts 的 NotificationRow；历史以 notifications.list 拉取为准。
  */
@@ -252,7 +262,7 @@ export function attachWs(
   return wss;
 }
 
-function send(ws: WebSocket, frame: HelloFrame | EventFrame | TerminalFrame | BacklogFrame | ResponseFrame): void {
+function send(ws: WebSocket, frame: HelloFrame | EventFrame | TerminalFrame | BacklogFrame | InboxFrame | ResponseFrame): void {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
 }
 
@@ -267,6 +277,14 @@ export function broadcastTerminal(wss: WebSocketServer, frame: TerminalFrame): v
 /** 向所有在线客户端广播一条待办信号（无订阅者就丢弃，历史以 backlog.list 拉取为准） */
 export function broadcastBacklog(wss: WebSocketServer, signal: unknown): void {
   const payload = JSON.stringify({ v: WIRE_VERSION, type: "backlog", signal } satisfies BacklogFrame);
+  for (const ws of wss.clients) {
+    if (ws.readyState === ws.OPEN) ws.send(payload);
+  }
+}
+
+/** 向所有在线客户端广播一条清单信号（无订阅者就丢弃，历史以 inbox.list 拉取为准） */
+export function broadcastInbox(wss: WebSocketServer, signal: unknown): void {
+  const payload = JSON.stringify({ v: WIRE_VERSION, type: "inbox", signal } satisfies InboxFrame);
   for (const ws of wss.clients) {
     if (ws.readyState === ws.OPEN) ws.send(payload);
   }

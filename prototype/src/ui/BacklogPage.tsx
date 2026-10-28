@@ -303,6 +303,19 @@ function BacklogCard({
           <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">{item.size === "big" ? "大" : "小"}</span>
         )}
         {item.source === "inbox" && <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">收件箱</span>}
+        {item.auto && (
+          <span
+            className="shrink-0 whitespace-nowrap rounded-chip bg-gain/10 px-2 py-0.5 text-caption text-gain"
+            title="闲时自动执行：工作台空闲且余量足够时直接派发，不进确认门，跑完自动验收"
+          >
+            闲时自动执行
+          </span>
+        )}
+        {item.targetSessionId !== null && item.targetSessionId !== "" && (
+          <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 font-mono text-caption text-ash" title="指定在已有会话里执行（接不上回落新开）">
+            会话 {item.targetSessionId.slice(0, 10)}
+          </span>
+        )}
         {item.status === "sleeping" && item.ignoreCount > 0 && (
           <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">忽略 {item.ignoreCount} 次</span>
         )}
@@ -501,6 +514,8 @@ function BacklogSettings({ onClose }: { onClose: () => void }): ReactElement {
   const runtimes = useWorkbench((s) => s.runtimes);
 
   const hb = config?.heartbeat;
+  // 旧 daemon / 旧前端状态里可能还没有 autopilot —— 兜一份默认值，别让设置页崩
+  const ap = config?.autopilot ?? { enabled: false, maxConcurrent: 1, headroomFloorPercent: 10, autoReview: true };
   const [busy, setBusy] = useState(false);
   if (config === null || hb === undefined) {
     return <div className="fixed inset-0 z-50 bg-black/40" onClick={onClose} />;
@@ -593,6 +608,56 @@ function BacklogSettings({ onClose }: { onClose: () => void }): ReactElement {
                 />
               </div>
             </div>
+          </section>
+
+          {/* 闲时自动执行（autopilot）—— 清单升级的引擎面 */}
+          <section className="space-y-2.5">
+            <h3 className="flex items-center gap-2 text-body-sm font-medium text-ink">
+              <Zap size={13} className="text-teal" />
+              闲时自动执行
+              <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-caption text-graphite">
+                <input
+                  type="checkbox"
+                  checked={ap.enabled}
+                  disabled={busy}
+                  onChange={(e) => void save({ autopilot: { ...ap, enabled: e.target.checked } })}
+                  className="accent-teal"
+                />
+                启用
+              </label>
+            </h3>
+            <div className="grid grid-cols-2 gap-3">
+              <NumField
+                label="同时在跑的上限"
+                value={ap.maxConcurrent}
+                min={1}
+                max={4}
+                inputClassName={inputCls}
+                onSave={(n) => void save({ autopilot: { ...ap, maxConcurrent: n } })}
+              />
+              <NumField
+                label="余量地板（%，低于不再派发）"
+                value={ap.headroomFloorPercent}
+                min={0}
+                max={100}
+                inputClassName={inputCls}
+                onSave={(n) => void save({ autopilot: { ...ap, headroomFloorPercent: n } })}
+              />
+            </div>
+            <label className="flex cursor-pointer items-center gap-1.5 text-caption text-graphite">
+              <input
+                type="checkbox"
+                checked={ap.autoReview}
+                disabled={busy}
+                onChange={(e) => void save({ autopilot: { ...ap, autoReview: e.target.checked } })}
+                className="accent-teal"
+              />
+              跑完自动验收（关了仍进待验收，人工过目）
+            </label>
+            <p className="text-[10px] leading-relaxed text-ash">
+              只作用于勾了「闲时自动执行」的待办（清单分类沉淀的任务默认勾上）：工作台空闲且余量 ≥ 地板时直接派发，持续把清单做完。
+              没勾的照旧走心跳提议 + 确认门。
+            </p>
           </section>
 
           {/* 订阅执行器余量 */}

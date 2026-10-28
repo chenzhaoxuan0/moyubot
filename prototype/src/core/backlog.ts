@@ -85,6 +85,17 @@ export interface BacklogItem {
   /** 执行方式（缺省 = terminal）：terminal / chat（对话页前台）/ headless（纯后台），见 automation.ts 的 LaunchMode */
   readonly launchMode?: LaunchMode;
   readonly status: BacklogStatus;
+  /**
+   * 闲时自动执行（autopilot）：true = 引擎在空闲且余量足够时**直接派发**，不进
+   * 确认门，跑完自动验收 —— 清单（inbox）分类产出的任务默认 true；
+   * false = 走原心跳提议 + 确认门（ADR-0001 铁规则原样保留）。
+   */
+  readonly auto: boolean;
+  /**
+   * 指定在某个已有会话里执行（接得上就 resume 发 prompt，接不上回落新开）；
+   * null = 新开会话。
+   */
+  readonly targetSessionId: string | null;
   /** 连续被忽略计数：达到上限进休眠（明确拒绝直接休眠） */
   readonly ignoreCount: number;
   readonly lastProposedAt: number | null;
@@ -229,6 +240,22 @@ export interface BacklogConfig {
     readonly accountId: string;
     readonly receiveId: string;
   };
+  /**
+   * 闲时自动执行（autopilot）——「用量还有富余就持续把清单做完」的引擎面：
+   * 空闲（无运行会话 + 超过空闲阈值）且余量 ≥ 阈值时，直接派发下一条
+   * ready + auto 的待办，不进确认门；跑完自动验收。
+   */
+  readonly autopilot: AutopilotConfig;
+}
+
+export interface AutopilotConfig {
+  readonly enabled: boolean;
+  /** 同时在跑的自动任务上限（1 = 单飞，与心跳时代的执行纪律同口径） */
+  readonly maxConcurrent: number;
+  /** 余量地板：执行器剩余百分比低于此值不再派发（探针读数 null = 放行） */
+  readonly headroomFloorPercent: number;
+  /** 跑完自动验收（true = done；false = 仍进待验收，人工过目） */
+  readonly autoReview: boolean;
 }
 
 /**
@@ -279,6 +306,9 @@ export const DEFAULT_BACKLOG_CONFIG: BacklogConfig = {
     runtimes: null,
   },
   feishu: { enabled: false, botId: "steward", accountId: "main", receiveId: "" },
+  // autopilot 默认开（maxConcurrent=1 单飞）：这是 personal agent 的核心定位 ——
+  // 有闲置用量就持续把清单做完；开关在待办设置里随时可关。
+  autopilot: { enabled: true, maxConcurrent: 1, headroomFloorPercent: 10, autoReview: true },
 };
 
 // ---------------------------------------------------------------------------
