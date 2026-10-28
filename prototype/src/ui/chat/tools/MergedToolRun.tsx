@@ -47,7 +47,7 @@ export function MergedToolRun({
   const failed = entries.some((e) => e.data?.completed === true && e.data?.ok === false);
 
   return (
-    <div className="rounded-btn transition-colors hover:bg-line-soft/40">
+    <div className="chat-tool-card rounded-btn transition-colors hover:bg-line-soft/40">
       <div
         role="button"
         tabIndex={0}

@@ -9,7 +9,7 @@ export function GenericToolCard({ data }: { data: ToolExecutionData }) {
   const brief = toolBrief(data);
 
   return (
-    <div className="rounded-btn transition-colors hover:bg-line-soft/40">
+    <div className="chat-tool-card rounded-btn transition-colors hover:bg-line-soft/40">
       <div
         role="button"
         tabIndex={0}

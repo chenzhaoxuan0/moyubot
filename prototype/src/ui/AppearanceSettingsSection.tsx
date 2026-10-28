@@ -359,6 +359,61 @@ export function AppearanceSettingsSection() {
         </div>
       </SectionCard>
 
+      {/* ---------------------------------------------------- 对话界面风格 */}
+      <SectionCard
+        icon={<Sparkles size={16} />}
+        title="对话界面风格"
+        desc="选择经典极简纯平铺效果，或专为壁纸定制的液态毛玻璃卡片效果（对齐 Codex-Dream-Skin）。"
+      >
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => store.setChatStyle("classic")}
+            className={cn(
+              "group relative rounded-card border p-4 text-left transition cursor-pointer",
+              store.chatStyle === "classic"
+                ? "border-teal bg-teal-tint/20 ring-1 ring-teal"
+                : "border-line bg-canvas hover:border-line-soft hover:bg-surface-hover",
+            )}
+          >
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-body-sm font-semibold text-ink">经典效果 (Classic)</span>
+              {store.chatStyle === "classic" && (
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-teal text-canvas">
+                  <Check size={11} strokeWidth={3} />
+                </span>
+              )}
+            </div>
+            <p className="text-caption text-graphite leading-relaxed">
+              纯净极简、正文与画布底色自然融为一体，无额外气泡包裹，适合专注阅读与代码排版。
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => store.setChatStyle("glass")}
+            className={cn(
+              "group relative rounded-card border p-4 text-left transition cursor-pointer",
+              store.chatStyle === "glass"
+                ? "border-teal bg-teal-tint/20 ring-1 ring-teal"
+                : "border-line bg-canvas hover:border-line-soft hover:bg-surface-hover",
+            )}
+          >
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-body-sm font-semibold text-ink">液态毛玻璃效果 (Liquid Glass)</span>
+              {store.chatStyle === "glass" && (
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-teal text-canvas">
+                  <Check size={11} strokeWidth={3} />
+                </span>
+              )}
+            </div>
+            <p className="text-caption text-graphite leading-relaxed">
+              Codex-Dream-Skin 同款：执行步骤、代码块与助手正文全部独立包裹为微光毛玻璃卡片，特别适合在开启底壁纸时使用。
+            </p>
+          </button>
+        </div>
+      </SectionCard>
+
       {/* ---------------------------------------------------- 外观模式 */}
       <SectionCard
         icon={<Sun size={16} />}

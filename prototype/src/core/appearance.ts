@@ -172,6 +172,9 @@ export interface ArtSettings {
   taskMode: TaskMode;
 }
 
+/** 对话视图形态：classic=经典无气泡平铺，glass=液态毛玻璃卡片（特别适合带壁纸） */
+export type ChatStyle = "classic" | "glass";
+
 export type ShadowLevel = "none" | "soft" | "strong";
 export type DensityScale = "compact" | "standard" | "comfortable";
 export type MotionLevel = "off" | "reduced" | "standard";
@@ -267,6 +270,8 @@ export interface AppearanceState {
   avatarFrame: AvatarFrame;
   /** 当前选中的预设 id，null = 用户已手工改过 */
   presetId: string | null;
+  /** 对话视图形态：classic=经典无气泡平铺，glass=液态毛玻璃卡片（特别适合带壁纸） */
+  chatStyle: ChatStyle;
 }
 
 /* --------------------------------------------------------------------------- 默认值 */
@@ -321,6 +326,10 @@ export interface AppearancePreset {
   readonly mode: AppearanceMode;
   readonly light: AppearanceProfile;
   readonly dark: AppearanceProfile;
+  /** 预设推荐默认壁纸相对路径（如有，切换预设时自动启用） */
+  readonly defaultWallpaperPath?: string;
+  /** 预设推荐对话风格（如有，切换预设时自动启用） */
+  readonly defaultChatStyle?: ChatStyle;
 }
 
 /** 本项目现有的两套配色，原样搬过来，保证升级后视觉零变化 */
@@ -402,10 +411,64 @@ export const PRESET_TWILIGHT: AppearancePreset = {
   },
 };
 
+export const PRESET_SIMPLE_CAT: AppearancePreset = {
+  id: "simple-cat",
+  name: "叶影黑猫 (Dream Skin)",
+  desc: "Codex Dream Skin 经典主题 · 翡翠夜幕、静谧叶影与微光黑猫（默认开启毛玻璃卡片）",
+  mode: "dark",
+  light: {
+    palette: {
+      background: "#ebf2ee",
+      panel: "#dbe8e0",
+      panelAlt: "#cdded4",
+      accent: "#267a5b",
+      accentAlt: "#1e6249",
+      secondary: "#3d735f",
+      highlight: "#267a5b",
+      text: "#12261d",
+      muted: "#496859",
+      line: "rgba(73, 104, 89, 0.28)",
+    },
+    surface: {
+      ...DEFAULT_SURFACE,
+      radius: 16,
+      blur: 16,
+    },
+    transparency: 40,
+    overlayTransparency: 20,
+    terminalTransparency: 25,
+  },
+  dark: {
+    palette: {
+      background: "#031713",
+      panel: "#0f2a23",
+      panelAlt: "#17382e",
+      accent: "#5fc6a5",
+      accentAlt: "#94d9b1",
+      secondary: "#568673",
+      highlight: "#70c9a0",
+      text: "#d4e2d8",
+      muted: "#b8c9be",
+      line: "rgba(184, 201, 190, 0.42)",
+    },
+    surface: {
+      ...DEFAULT_SURFACE,
+      radius: 16,
+      blur: 16,
+    },
+    transparency: 45,
+    overlayTransparency: 20,
+    terminalTransparency: 30,
+  },
+  defaultWallpaperPath: "wallpapers/simple-cat.png",
+  defaultChatStyle: "glass",
+};
+
 export const APPEARANCE_PRESETS: readonly AppearancePreset[] = [
   PRESET_PARCHMENT,
   PRESET_OBSIDIAN,
   PRESET_TWILIGHT,
+  PRESET_SIMPLE_CAT,
 ];
 
 /* --------------------------------------------------------------------------- 默认状态 */
@@ -424,6 +487,7 @@ export function defaultAppearanceState(): AppearanceState {
     logo: { ...DEFAULT_LOGO },
     avatarFrame: "rounded",
     presetId: PRESET_PARCHMENT.id,
+    chatStyle: "classic",
   };
 }
 
@@ -741,6 +805,7 @@ export function sanitizeAppearanceState(raw: unknown): AppearanceState {
     },
     avatarFrame: input.avatarFrame === "square" ? "square" : "rounded",
     presetId: typeof input.presetId === "string" ? input.presetId : null,
+    chatStyle: input.chatStyle === "glass" ? "glass" : "classic",
   };
 }
 
@@ -842,5 +907,6 @@ export function toDreamSkinTheme(
       taskMode: state.art.taskMode === "auto" ? "ambient" : state.art.taskMode,
     },
     colors: { ...profile.palette },
+    chatStyle: state.chatStyle ?? "classic",
   };
 }

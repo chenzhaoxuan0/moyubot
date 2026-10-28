@@ -16,6 +16,7 @@ import {
   type ResolvedAppearance,
   type WallpaperSettings,
   type AvatarFrame,
+  type ChatStyle,
 } from "../core/appearance.ts";
 
 import {
@@ -146,6 +147,7 @@ function applyToDom(state: AppearanceState): void {
 
   root.classList.toggle("dark", resolved === "dark");
   root.setAttribute("data-theme", resolved);
+  root.setAttribute("data-chat-style", state.chatStyle ?? "classic");
 
   const electronBridge = (
     window as unknown as {
@@ -274,6 +276,8 @@ export interface AppearanceStore extends AppearanceState {
   resetLogo: () => void;
 
   setMode: (mode: AppearanceMode) => void;
+  /** 对话视图形态：classic=经典无气泡平铺，glass=液态毛玻璃卡片（特别适合带壁纸） */
+  setChatStyle: (style: ChatStyle) => void;
   /** bot 头像框形态（全局设置，不分亮暗档案） */
   setAvatarFrame: (frame: AvatarFrame) => void;
   applyPreset: (preset: AppearancePreset) => void;
@@ -398,6 +402,10 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
     set(publish({ ...get(), avatarFrame: frame }));
   },
 
+  setChatStyle: (style) => {
+    set(publish({ ...get(), chatStyle: style }));
+  },
+
   applyPreset: (preset) => {
     // 预设 = 配色。只换十组色；用户调过的透明度/表面设置按亮暗档案各自保留，
     // 壁纸/艺术/头像框等全局项更不动 —— 否则切一次主题自定义就被清零（实测）。
@@ -417,6 +425,16 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
         dark: merge("dark", preset.dark),
       },
       presetId: preset.id,
+      chatStyle: preset.defaultChatStyle ?? cur.chatStyle ?? "classic",
+      ...(preset.defaultWallpaperPath
+        ? {
+            wallpaper: {
+              ...cur.wallpaper,
+              enabled: true,
+              path: preset.defaultWallpaperPath,
+            },
+          }
+        : {}),
     };
     set(publish(next));
   },

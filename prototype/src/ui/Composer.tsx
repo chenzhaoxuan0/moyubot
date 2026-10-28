@@ -452,7 +452,7 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={cn(
-            "relative rounded-[20px] border bg-canvas shadow-subtle transition",
+            "chat-composer-box relative rounded-[20px] border bg-canvas shadow-subtle transition",
             isMobile ? "p-2.5 border-line/80 shadow-xs" : "px-4 py-3 border-line",
             "focus-within:border-teal/50 focus-within:ring-2 focus-within:ring-teal/20",
             isDraggingOver && "border-teal ring-2 ring-teal/30 bg-teal-tint/10",

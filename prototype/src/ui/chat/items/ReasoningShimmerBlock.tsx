@@ -52,7 +52,7 @@ export function ReasoningShimmerBlock({
      无边框无底色，灰字小号；展开的思考正文走左侧细线缩进，不另起一张卡。
      内边距与所有工具行严格对齐（px-1.5 py-1.5），右侧 chevron 自然对齐。 */
   return (
-    <div className="my-1.5">
+    <div className="chat-tool-card my-1.5">
       <div
         role="button"
         tabIndex={0}

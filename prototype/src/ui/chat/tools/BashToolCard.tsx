@@ -12,7 +12,7 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
   const isFailed = data.completed && data.ok === false;
 
   return (
-    <div className="rounded-btn transition-colors hover:bg-line-soft/40">
+    <div className="chat-tool-card rounded-btn transition-colors hover:bg-line-soft/40">
       {/* 头部摘要栏 */}
       <div
         role="button"

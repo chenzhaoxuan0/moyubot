@@ -215,7 +215,7 @@ export function ChatViewport({
   );
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="chat-viewport-root relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <div
         ref={containerRef}
         className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden selection:bg-teal-tint selection:text-ink"
@@ -301,7 +301,7 @@ export function ChatViewport({
 
         {/* 忙态底部指示（对齐 DeepSeek 蓝色胶囊状态标） */}
         {busy && (
-          <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-teal/30 bg-teal-tint/40 px-3 py-1 text-caption text-teal select-none shadow-xs">
+          <div className="chat-status-pill mt-3 inline-flex items-center gap-2 rounded-full border border-teal/30 bg-teal-tint/40 px-3 py-1 text-caption text-teal select-none shadow-xs">
             <span className="relative flex h-2 w-2">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-teal opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-teal" />
@@ -471,7 +471,7 @@ function WorkGroupRow({
         onClick={toggleOpen}
         aria-expanded={open}
         className={cn(
-          "group flex w-full cursor-pointer items-center gap-1.5 rounded-btn px-1.5 py-1 text-left text-caption transition select-none",
+          "chat-work-group group flex w-full cursor-pointer items-center gap-1.5 rounded-btn px-1.5 py-1 text-left text-caption transition select-none",
           running ? "text-graphite" : "text-ash hover:text-graphite",
         )}
       >

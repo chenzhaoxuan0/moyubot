@@ -261,7 +261,7 @@ export function UserMessageBubble({
           {attachments && attachments.length > 0 && (
             <AttachmentsBar attachments={[...attachments]} readOnly />
           )}
-          <div className="max-w-full rounded-2xl border border-line bg-rail px-3.5 py-2.5 flex items-center gap-2.5">
+          <div className="chat-user-bubble max-w-full rounded-2xl border border-line bg-rail px-3.5 py-2.5 flex items-center gap-2.5">
             <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-ink text-canvas font-mono text-[11px] font-bold leading-none">
               /
             </div>
@@ -301,7 +301,7 @@ export function UserMessageBubble({
           <AttachmentsBar attachments={[...attachments]} readOnly />
         )}
         {text.trim() && (
-          <div className="max-w-full rounded-2xl border border-line bg-rail px-3.5 py-2.5">
+          <div className="chat-user-bubble max-w-full rounded-2xl border border-line bg-rail px-3.5 py-2.5">
             <ClampedPromptText text={text} stateKey={messageId || `t:${text.slice(0, 60)}`} />
           </div>
         )}

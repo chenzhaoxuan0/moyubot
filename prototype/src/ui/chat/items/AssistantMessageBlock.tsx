@@ -81,7 +81,7 @@ export function AssistantMessageBlock({
   };
 
   return (
-    <div className="group/msg py-1">
+    <div className="chat-assistant-bubble group/msg py-1">
       {/* 正文 Markdown 渲染（流式态容错未闭合围栏、跳过高亮） */}
       <div>
         <MarkdownContent content={text} streaming={streaming} />
