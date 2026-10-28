@@ -625,8 +625,8 @@ export function deriveCssVariables(
   /* ---- 强调色层 ---- */
   vars["--color-teal"] = p.accent;
   vars["--color-teal-hover"] = p.accentAlt;
-  vars["--color-teal-tint"] = withAlpha(p.accent, 0.1);
-  vars["--color-teal-edge"] = withAlpha(p.accent, 0.32);
+  vars["--color-teal-tint"] = withAlpha(p.accent, ACCENT_TINT_ALPHA);
+  vars["--color-teal-edge"] = withAlpha(p.accent, ACCENT_EDGE_ALPHA);
   vars["--color-secondary"] = p.secondary;
   vars["--color-highlight"] = p.highlight;
   vars["--color-on-accent"] = readableInk(p.accent);
@@ -662,7 +662,7 @@ export function deriveCssVariables(
       : `0 1px 2px 0 color-mix(in srgb, ${toHex(p.text)} 6%, transparent)`;
 
   /* ---- 浏览器 chrome ---- */
-  vars["--color-selection"] = withAlpha(p.accent, 0.28);
+  vars["--color-selection"] = withAlpha(p.accent, ACCENT_SELECTION_ALPHA);
   vars["--color-scrollbar"] = withAlpha(p.line, 0.5);
   vars["--color-scrollbar-hover"] = withAlpha(p.line, 0.8);
 
@@ -705,6 +705,53 @@ export function deriveCssVariables(
   return vars;
 }
 
+/** 强调色派生参数：全局主题（deriveCssVariables）与单 bot 对话列共用，改一处两边同步 */
+const ACCENT_TINT_ALPHA = 0.1;
+const ACCENT_EDGE_ALPHA = 0.32;
+const ACCENT_SELECTION_ALPHA = 0.28;
+/** 单 bot 对话列 hover 的加深幅度（对齐预设里 accentAlt 比 accent 略深的手感，亮暗同向） */
+const CHAT_ACCENT_HOVER_MIX = 0.12;
+/**
+ * 单 bot 对话列的可读性护栏（WCAG 相对亮度）：text-teal 会直接落在画布上当正文色，
+ * 亮主题压到 ≤0.28（基准 #f54e00 在羊皮纸画布上 ≈3.3:1）、暗主题抬到 ≥0.18
+ * （≈4.6:1 on 近黑画布）。只挪明度、色相不动——签名色的身份就是色相。
+ */
+const CHAT_ACCENT_LIGHT_MAX_LUMA = 0.28;
+const CHAT_ACCENT_DARK_MIN_LUMA = 0.18;
+
+/** 沿黑/白方向小步迭代，把 hex 夹进当前主题的可读亮度域（色相不变） */
+function enforceChatAccentLuma(hex: string, dark: boolean): string {
+  let out = hex;
+  for (let i = 0; i < 12; i += 1) {
+    const lum = relativeLuminance(out);
+    if (dark ? lum >= CHAT_ACCENT_DARK_MIN_LUMA : lum <= CHAT_ACCENT_LIGHT_MAX_LUMA) return out;
+    out = mixColor(out, dark ? "#ffffff" : "#000000", 0.12);
+  }
+  return out;
+}
+
+/**
+ * 单 bot 对话列强调色（2026-10-28）：把一个 hex 摊成 accent 系变量，由对话列
+ * 容器（.chat-conversation-root）以内联 style 注入——CSS 变量沿子树继承，只
+ * 影响该列（气泡/输入框/工具卡），<html> 上的全局主题同名变量不动。
+ * 与 deriveCssVariables 的强调色层同构（tint/edge/selection 同参）；存储的
+ * hex 只有一份、亮暗两套主题共用，所以先过可读性护栏再派生（见上）。
+ */
+export function deriveChatAccentVariables(accent: string, dark: boolean): Record<string, string> {
+  const base = enforceChatAccentLuma(toHex(accent), dark);
+  const hover = mixColor(base, "#000000", CHAT_ACCENT_HOVER_MIX);
+  return {
+    "--color-teal": base,
+    "--color-teal-hover": hover,
+    "--color-teal-tint": withAlpha(base, ACCENT_TINT_ALPHA),
+    "--color-teal-edge": withAlpha(base, ACCENT_EDGE_ALPHA),
+    "--color-on-accent": readableInk(base),
+    "--color-selection": withAlpha(base, ACCENT_SELECTION_ALPHA),
+    "--ds-theme-color-accent": base,
+    "--ds-theme-color-accent-alt": hover,
+  };
+}
+
 function rgbTriple(color: string): string {
   const parsed = parseColor(color) ?? { r: 0, g: 0, b: 0 };
   return `${Math.round(parsed.r)} ${Math.round(parsed.g)} ${Math.round(parsed.b)}`;
@@ -719,6 +766,9 @@ function cssUrlEscape(url: string): string {
 
 /** 与 DS COLOR_PATTERN 同口径：十六进制或 rgb()/rgba()，长度上限 64 */
 export function isValidColor(value: string): boolean {
+  // bot.json 等手可编辑来源可能给出非字符串（数字/布尔/对象）：先挡类型再碰
+  // 方法，否则 .trim() 直接 TypeError 把渲染面炸到根 ErrorBoundary
+  if (typeof value !== "string") return false;
   return value.trim().length > 0 && value.trim().length <= 64 && parseColor(value) !== null;
 }
 

@@ -65,6 +65,7 @@ export function BotSettingsPane({ unitId }: { unitId: UnitId }): ReactElement | 
             memory: draft.memory,
             channels: draft.channels,
             avatar: draft.avatar,
+            themeAccent: draft.themeAccent,
           },
           opts?.overwrite === true ? {} : guardsOf(fresh),
         );

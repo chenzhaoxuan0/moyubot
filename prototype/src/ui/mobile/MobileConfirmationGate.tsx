@@ -141,7 +141,7 @@ export function MobileConfirmationGate() {
           {/* 批准一次（主要触控点） */}
           <button
             onClick={() => resolve(active.requestId, "allow")}
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-teal font-semibold text-white shadow-md transition active:scale-[0.98] hover:bg-teal-hover"
+            className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-teal font-semibold text-on-accent shadow-md transition active:scale-[0.98] hover:bg-teal-hover"
           >
             <Check size={18} />
             <span>批准本次执行 (Allow Once)</span>

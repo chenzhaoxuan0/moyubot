@@ -21,6 +21,8 @@ import {
 } from "lucide-react";
 import { useWorkbench, selectVisibleModels, BOT_CONFLICT, type BotWriteGuards } from "../store/useWorkbench.ts";
 import { type WorkUnit, type UnitKind, type BotChannel } from "../core/units.ts";
+import { toHex, isValidColor } from "../core/appearance.ts";
+import { accentCandidatesFromImageData, extractAvatarAccents } from "../core/avatarAccent.ts";
 import { type SearchProviderId } from "../core/search.ts";
 import { fetchBotDefaultRoot, inspectBotFolder, openFolder } from "../adapters/daemon/client.ts";
 import { ChannelSection } from "./ChannelSection.tsx";
@@ -60,6 +62,11 @@ export interface AddBotDraft {
   readonly role: string;
   /** 自定义头像（96×96 data URL）。undefined = 用按名字生成的默认头像 */
   readonly avatar?: string;
+  /**
+   * 对话主题色（#rrggbb，2026-10-28）：这个 bot 对话列的强调色，可从头像
+   * 提取（签名色，非最大面积色）也可手动指定。undefined = 跟随全局主题。
+   */
+  readonly themeAccent?: string;
   readonly rootPath: string;
   readonly runtimeId: string;
   readonly modelHint: string | null;
@@ -116,6 +123,9 @@ const SECTION_LIBRARY: readonly { label: string; snippet: (name: string) => stri
 const PERSONA_TEMPLATE = (name: string, role: string) =>
   `你是「${name}」——${role || "一个领域专属助手"}。\n\n语气与风格：\n- 简洁、务实、不堆砌客套\n- 结论先行，细节按需展开\n\n原则：\n- 不确定先问，不要猜\n- 交付前自检一遍\n`;
 
+/** 取色器起始位的兜底色（打开后一次性对齐当前全局 accent，见下方 effect） */
+const ACCENT_PICKER_SEED_FALLBACK = "#7aa2f7";
+
 function agentsMdTemplate(name: string, role: string, rootPath: string): string {
   return `# ${name}\n\n> ${role || "（一句话说清这个 bot 被设计用来做什么）"}\n\n## 这个 bot 负责什么\n- 边界：\n- 产出物：\n\n## 工作目录\n- 根目录：\`${rootPath}\`\n- 动手前先读目录里已有的文件，长期记忆与产出都落在这里\n\n## 工作方式\n- 接到任务先列 3 步以内的计划，再执行\n- 不确定的地方先提问，不要猜\n\n## 交付与验收\n- 每次交付一个可检查的产物（文件 / 清单 / 报告）\n- 完成后汇报：做了什么、产出在哪、下一步建议\n`;
 }
@@ -165,6 +175,16 @@ export function AddBotDialog({
   const [runtimeId, setRuntimeId] = useState<string>("");
   const [modelHint, setModelHint] = useState<string | null>(null);
   const [avatar, setAvatar] = useState<string | null>(null);
+  /** 对话主题色（#rrggbb）。null = 跟随全局主题（不写 bot.json） */
+  const [themeAccent, setThemeAccent] = useState<string | null>(null);
+  /** 从当前头像提取的候选签名色（推荐度降序）。头像一变就重算 */
+  const [accentCandidates, setAccentCandidates] = useState<readonly string[]>([]);
+  /** hex 输入的草稿（draft-on-blur 提交，AppearanceSettingsSection.ColorField 同款） */
+  const [accentHexDraft, setAccentHexDraft] = useState<string | null>(null);
+  /** 未设主题色时原生取色器的起始位（读一次全局 accent，让 picker 从用户熟悉的颜色出发） */
+  const [accentPickerSeed, setAccentPickerSeed] = useState(ACCENT_PICKER_SEED_FALLBACK);
+  /** 上传路径刚同步提取过候选的那个头像 data URL——effect 据此跳过重复提取 */
+  const lastExtractedAvatarRef = useRef<string | null>(null);
   const [resident, setResident] = useState(false);
   const [autoCollect, setAutoCollect] = useState(true);
   /** 单元形态（弱标签）：编辑模式可切 bot ↔ 项目（ADR 0011 第 2 条） */
@@ -214,6 +234,15 @@ export function AddBotDialog({
     setRuntimeId(rid);
     setModelHint(binding?.modelHint ?? runtimes.find((r) => r.id === rid)?.defaultModel ?? null);
     setAvatar(b.avatar ?? null);
+    // bot.json 是手可编辑文件：themeAccent 可能是任意 JSON 值，非法/非字符串一律
+    // 归零（跟随全局），避免坏值进表单后又原样写回盘上
+    const rawAccent = b.themeAccent;
+    setThemeAccent(typeof rawAccent === "string" && isValidColor(rawAccent) ? toHex(rawAccent) : null);
+    setAccentHexDraft(null);
+    // 换填充即换头像：旧候选清空（effect 会按新头像重提），防止上一张头像的
+    // 签名色被点到这个 bot 上
+    setAccentCandidates([]);
+    lastExtractedAvatarRef.current = null;
     setResident(Boolean(b.resident));
     setAutoCollect(b.autoCollect !== false);
     setKind(b.kind ?? "bot");
@@ -275,6 +304,9 @@ export function AddBotDialog({
         st.runtimes.find((r) => r.id === st.activeRuntimeId)?.defaultModel ?? null,
       );
       setAvatar(null);
+      setThemeAccent(null);
+      setAccentCandidates([]);
+      setAccentHexDraft(null);
       setResident(false);
       setKind("bot");
       setChannels([]);
@@ -287,6 +319,41 @@ export function AddBotDialog({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fillFrom 依赖表单重置语义，随 open/initial?.id 整体重跑
   }, [open, initial?.id]);
+
+  // 头像候选签名色：头像一变（上传 / 更换 / 编辑预填）就重算。黑底头像的
+  // 签名色常只有小面积，这里只出候选，选哪个永远归用户；头像清空即候选清空。
+  // 上传路径已在裁剪画布上同步提取过（见 onAvatarFile），同一个 data URL 不再跑异步。
+  useEffect(() => {
+    if (!open) return;
+    const src = avatar;
+    if (!src) {
+      setAccentCandidates([]);
+      lastExtractedAvatarRef.current = null;
+      return;
+    }
+    if (src === lastExtractedAvatarRef.current) return;
+    let cancelled = false;
+    // 头像本体就是 96×96，maxSide 传 96 不再降采样，与上传路径同一份像素
+    void extractAvatarAccents(src, 96)
+      .then((cs) => {
+        if (!cancelled) setAccentCandidates(cs);
+      })
+      .catch(() => {
+        if (!cancelled) setAccentCandidates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, avatar]);
+
+  // 未设主题色时，取色器起始位对齐当前全局 accent（一次性读 computed 变量，
+  // 不订阅——picker 起始位只是便利，不是状态）
+  useEffect(() => {
+    if (!open || themeAccent !== null) return;
+    const v = getComputedStyle(document.documentElement).getPropertyValue("--color-teal").trim();
+    if (isValidColor(v)) setAccentPickerSeed(toHex(v));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只在打开/清空那一刻读一次
+  }, [open, themeAccent === null]);
 
   useEffect(() => {
     if (!open) return;
@@ -352,19 +419,43 @@ export function AddBotDialog({
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      const side = Math.min(img.naturalWidth, img.naturalHeight);
-      const canvas = document.createElement("canvas");
-      canvas.width = 96;
-      canvas.height = 96;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 96, 96);
-        setAvatar(canvas.toDataURL("image/webp", 0.9));
+      // SVG 无固有尺寸（naturalWidth=0）或外链污染画布都会在 drawImage/toDataURL
+      // 抛异常：revoke 必须走 finally 兜底（否则每次尝试漏一个 blob URL），失败
+      // 静默——用户重选一张即可，不该为一张坏图弹错误
+      try {
+        const side = Math.min(img.naturalWidth, img.naturalHeight);
+        if (side <= 0) return;
+        const canvas = document.createElement("canvas");
+        canvas.width = 96;
+        canvas.height = 96;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (ctx) {
+          ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, 96, 96);
+          const dataUrl = canvas.toDataURL("image/webp", 0.9);
+          setAvatar(dataUrl);
+          // 换头像即换签名色：画布现成，同步提取候选并自动顶上最优一个
+          //（候选行随后展示，用户可再改；提不到鲜明色则保持原值不动）。
+          // 结果直接进候选状态并记下 data URL——下方 effect 对它跳过重复提取
+          const candidates = accentCandidatesFromImageData(ctx.getImageData(0, 0, 96, 96));
+          setAccentCandidates(candidates);
+          lastExtractedAvatarRef.current = dataUrl;
+          if (candidates.length > 0) setThemeAccent(candidates[0]!);
+        }
+      } finally {
+        URL.revokeObjectURL(url);
       }
-      URL.revokeObjectURL(url);
     };
     img.onerror = () => URL.revokeObjectURL(url);
     img.src = url;
+  };
+
+  /** hex 输入提交：合法 → 归一成 #rrggbb；清空 → 跟随全局；非法 → 静默回退 */
+  const commitAccentDraft = (): void => {
+    if (accentHexDraft === null) return;
+    const v = accentHexDraft.trim();
+    if (v === "") setThemeAccent(null);
+    else if (isValidColor(v)) setThemeAccent(toHex(v));
+    setAccentHexDraft(null);
   };
 
   const draft = (): AddBotDraft => {
@@ -374,6 +465,7 @@ export function AddBotDialog({
       name: name.trim() || folderBasename(folder),
       role: role.trim(),
       avatar: avatar ?? undefined,
+      themeAccent: themeAccent ?? undefined,
       rootPath: folder,
       runtimeId,
       modelHint,
@@ -608,6 +700,79 @@ export function AddBotDialog({
                       )}
                     </div>
                   </div>
+                </Field>
+                <Field
+                  label="对话主题色"
+                  hint="只作用于这个 bot 的对话界面；候选色块从头像自动提取（取鲜明签名色，不是最大面积色），也可手动取色；留空跟随全局主题"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* 手动取色：色块包原生 picker（外观设置 ColorField 同款）；未设值时显示「全局」占位 */}
+                    <label
+                      className="relative h-8 w-8 shrink-0 overflow-hidden rounded-btn border border-dashed border-line"
+                      title="自定义颜色（打开取色器）"
+                    >
+                      <span
+                        className="absolute inset-0"
+                        style={themeAccent !== null ? { backgroundColor: themeAccent } : undefined}
+                      />
+                      {themeAccent === null && (
+                        <span className="absolute inset-0 flex items-center justify-center text-[10px] text-ash">
+                          全局
+                        </span>
+                      )}
+                      <input
+                        type="color"
+                        value={toHex(themeAccent ?? accentPickerSeed)}
+                        onChange={(e) => setThemeAccent(e.target.value)}
+                        aria-label="自定义对话主题色"
+                        className="absolute inset-0 cursor-pointer opacity-0"
+                      />
+                    </label>
+                    {/* hex 精确输入：draft-on-blur；清空回车 = 跟随全局 */}
+                    <input
+                      value={accentHexDraft ?? themeAccent ?? ""}
+                      placeholder="#rrggbb"
+                      onChange={(e) => setAccentHexDraft(e.target.value)}
+                      onBlur={() => commitAccentDraft()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                      }}
+                      spellCheck={false}
+                      aria-label="对话主题色色值"
+                      className="w-24 shrink-0 rounded-btn border border-line bg-canvas px-2 py-1 text-caption font-mono text-ink outline-none placeholder:text-ash focus:border-teal"
+                    />
+                    {/* 头像提取候选：点击即用 */}
+                    {accentCandidates.map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setThemeAccent(c)}
+                        title={`使用头像提取色 ${c}`}
+                        aria-label={`使用头像提取色 ${c}`}
+                        className={cn(
+                          "h-8 w-8 shrink-0 rounded-btn border transition active:scale-95",
+                          themeAccent === c
+                            ? "border-ink/70 ring-2 ring-ink/25"
+                            : "border-line hover:border-ink/50",
+                        )}
+                        style={{ backgroundColor: c }}
+                      />
+                    ))}
+                    {themeAccent !== null && (
+                      <button
+                        type="button"
+                        onClick={() => setThemeAccent(null)}
+                        className="rounded-btn border border-line px-2.5 py-1.5 text-caption text-graphite transition hover:bg-line-soft hover:text-ink"
+                      >
+                        跟随全局
+                      </button>
+                    )}
+                  </div>
+                  {avatar !== null && accentCandidates.length === 0 && (
+                    <p className="mt-1.5 text-caption text-ash">
+                      头像里没找到足够鲜明的颜色，可手动取色。
+                    </p>
+                  )}
                 </Field>
                 <Field label="默认执行器 (CLI)" hint="这个 bot 主要由哪家 CLI 执行">
                   {runtimes.length === 0 ? (

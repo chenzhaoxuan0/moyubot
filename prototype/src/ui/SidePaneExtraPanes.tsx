@@ -53,6 +53,7 @@ export function NewBotPane(): ReactElement {
             memory: draft.memory,
             channels: draft.channels,
             avatar: draft.avatar,
+            themeAccent: draft.themeAccent,
             tags: ["新建"],
             lastActiveAt: Date.now(),
           },
