@@ -6,13 +6,18 @@ export function ReasoningShimmerBlock({
   text,
   busy,
   startedAt,
+  endedAt,
 }: {
   text: string;
   busy: boolean;
   startedAt?: number;
+  /** 回放态的结束时间（末次 delta）——历史思考块也能显示"思考了 N 秒" */
+  endedAt?: number;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [elapsedSec, setElapsedSec] = useState(0);
+  const [elapsedSec, setElapsedSec] = useState(() =>
+    !busy && startedAt && endedAt && endedAt > startedAt ? Math.round((endedAt - startedAt) / 100) / 10 : 0,
+  );
   const timerStartRef = useRef(startedAt || Date.now());
 
   // 运行中持续更新秒表

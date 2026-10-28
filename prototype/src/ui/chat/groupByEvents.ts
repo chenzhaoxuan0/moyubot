@@ -140,8 +140,10 @@ export function groupTimelineEvents(
         const last = result[result.length - 1];
         if (last && last.kind === "thinking") {
           last.data.text += event.text;
+          // 末次 delta 时间戳：单条目思考组的耗时、"思考了 N 秒"回放都靠它
+          last.data.lastDeltaAt = at;
         } else {
-          result.push({ id, kind: "thinking", at, data: { text: event.text } });
+          result.push({ id, kind: "thinking", at, data: { text: event.text, lastDeltaAt: at } });
         }
         break;
       }

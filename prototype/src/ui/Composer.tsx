@@ -76,7 +76,11 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
     typeof window !== "undefined" ? (window.visualViewport?.height ?? window.innerHeight) : 800,
   );
   const baseH = isMobile ? 64 : 76;
-  const maxH = Math.max(baseH, Math.floor(viewportH - 170));
+  // 高度上限分端：移动端顶到导航栏下（原逻辑，方便编辑）；PC 端钳 60% 视口 ——
+  // 撤回超长 prompt 回填时输入框不能把整个对话页挤没了（页面"卡死"观感的根因）
+  const maxH = isMobile
+    ? Math.max(baseH, Math.floor(viewportH - 170))
+    : Math.max(baseH, Math.floor(viewportH * 0.6));
 
   const [inputHeight, setInputHeight] = useState(baseH);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);

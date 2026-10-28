@@ -354,10 +354,15 @@ function WorkGroupRow({
 
   // 落定后的整段时长（首末条目时间差）：摘要行给「这轮花了多久」的直觉
   const durationLabel = useMemo(() => {
-    if (running || entries.length < 2) return null;
-    const ms = entries[entries.length - 1]!.at - entries[0]!.at;
+    if (running) return null;
+    // 多条目组取首尾事件差；单条目组（如仅一段思考）退到 lastDeltaAt 差值
+    const first = entries[0]!;
+    const last = entries[entries.length - 1]!;
+    const end = entries.length >= 2 ? last.at : (first.data?.lastDeltaAt as number | undefined);
+    const ms = (end ?? first.at) - first.at;
     if (!(ms > 0)) return null;
     const s = Math.round(ms / 1000);
+    if (s === 0) return "不足 1 秒";
     if (s < 60) return `${s} 秒`;
     const m = Math.floor(s / 60);
     if (m < 60) return `${m} 分 ${s % 60} 秒`;
@@ -499,7 +504,14 @@ function SingleItemRow({
       );
 
     case "thinking":
-      return <ReasoningShimmerBlock text={item.data.text} busy={busy} startedAt={item.at} />;
+      return (
+        <ReasoningShimmerBlock
+          text={item.data.text}
+          busy={busy}
+          startedAt={item.at}
+          endedAt={item.data.lastDeltaAt}
+        />
+      );
 
     case "tool":
       return <ToolCardHost data={item.data as ToolExecutionData} />;
@@ -511,6 +523,7 @@ function SingleItemRow({
           messageId={typeof item.data.messageId === "string" ? item.data.messageId : ""}
           sessionId={typeof item.data.sessionId === "string" ? item.data.sessionId : ""}
           streaming={item.data.streaming === true}
+          usage={item.data.usage}
           busy={busy}
           turnStartedAt={item.data.turnStartedAt}
           variant={process ? "process" : "final"}

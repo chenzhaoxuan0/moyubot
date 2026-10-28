@@ -8,6 +8,7 @@ export function AssistantMessageBlock({
   messageId,
   sessionId,
   streaming = false,
+  usage,
   busy,
   turnStartedAt,
   variant = "final",
@@ -17,6 +18,8 @@ export function AssistantMessageBlock({
   messageId: string;
   sessionId: string;
   streaming?: boolean;
+  /** 本轮用量（groupTimelineEvents 把 usage 事件并入这里）；模型名悬停浮现 */
+  usage?: { model: string; inputTokens: number; outputTokens: number };
   busy: boolean;
   turnStartedAt?: number;
   /**
@@ -104,7 +107,15 @@ export function AssistantMessageBlock({
               )}
             </>
           )}
+          {/* 落定后的悬停操作组：模型名 + 分叉 + 复制（流式期间一律不出现 ——
+              流式文本是过程，不是可操作对象） */}
+          {!streaming && (
           <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100">
+          {usage !== undefined && (
+            <span className="mr-1.5 font-mono text-caption text-ash" title={`本轮由 ${usage.model} 执行`}>
+              {usage.model}
+            </span>
+          )}
           <button
             type="button"
             onClick={() => startFork({ ofSessionId: sessionId as never, anchorMessageId: messageId, kind: "branch" })}
@@ -133,6 +144,7 @@ export function AssistantMessageBlock({
             {copied ? <Check size={12} className="text-gain" /> : <Copy size={12} />}
           </button>
           </div>
+          )}
         </div>
         )}
       </div>
