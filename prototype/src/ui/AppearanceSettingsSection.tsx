@@ -363,7 +363,7 @@ export function AppearanceSettingsSection() {
       <SectionCard
         icon={<Sparkles size={16} />}
         title="对话界面风格"
-        desc="选择经典极简纯平铺效果，或专为壁纸定制的液态毛玻璃卡片效果（对齐 Codex-Dream-Skin）。"
+        desc="选择经典极简纯平铺效果，或专为底壁纸定制的液态玻璃卡片效果（基于 Apple visionOS / iOS Liquid Glass 规范）。"
       >
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <button
@@ -400,7 +400,7 @@ export function AppearanceSettingsSection() {
             )}
           >
             <div className="flex items-center justify-between mb-1.5">
-              <span className="text-body-sm font-semibold text-ink">液态毛玻璃效果 (Liquid Glass)</span>
+              <span className="text-body-sm font-semibold text-ink">液态玻璃效果 (Liquid Glass)</span>
               {store.chatStyle === "glass" && (
                 <span className="flex h-4 w-4 items-center justify-center rounded-full bg-teal text-canvas">
                   <Check size={11} strokeWidth={3} />
@@ -408,10 +408,79 @@ export function AppearanceSettingsSection() {
               )}
             </div>
             <p className="text-caption text-graphite leading-relaxed">
-              Codex-Dream-Skin 同款：执行步骤、代码块与助手正文全部独立包裹为微光毛玻璃卡片，特别适合在开启底壁纸时使用。
+              对齐 Apple visionOS 悬浮面板：180% 动态色彩饱和度提升、微对比度透亮与双层镜面高光折射微光，在壁纸上如晶莹流水般通透清澈。
             </p>
           </button>
         </div>
+
+        {/* 液态玻璃细节微调（当选用液态玻璃模式时展开） */}
+        {store.chatStyle === "glass" && (
+          <div className="mt-4 rounded-card border border-teal-edge/60 bg-teal-tint/10 p-4 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-body-sm font-medium text-ink flex items-center gap-1.5">
+                  <Sparkles size={14} className="text-teal" />
+                  液态玻璃模糊度 / 晶莹水感 (Apple Material)
+                </p>
+                <p className="text-caption text-graphite">
+                  依 Apple SwiftUI 规范分级：折射光斑与文字可读性黄金调校，壁纸细节自然透出且不浑浊。
+                </p>
+              </div>
+              <span className="font-mono text-body-sm font-semibold text-teal px-2 py-0.5 rounded-btn bg-teal-tint/30">
+                {store.glassBlur ?? 16}px
+              </span>
+            </div>
+
+            {/* Apple Material 4 档标准分级快捷键 */}
+            <div>
+              <p className="mb-1.5 text-caption text-ash">推荐标准档位（Apple Material 分级）</p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {[
+                  { id: 8, label: "超清水感", desc: "8px · 轻透水膜" },
+                  { id: 16, label: "晶润液态", desc: "16px · 苹果推荐默认" },
+                  { id: 24, label: "柔光润泽", desc: "24px · 细腻柔和" },
+                  { id: 36, label: "沉稳厚实", desc: "36px · 强背景隔绝" },
+                ].map((tier) => {
+                  const active = (store.glassBlur ?? 16) === tier.id;
+                  return (
+                    <button
+                      key={tier.id}
+                      type="button"
+                      onClick={() => store.setGlassBlur(tier.id)}
+                      className={cn(
+                        "rounded-btn border p-2 text-left transition cursor-pointer",
+                        active
+                          ? "border-teal-edge bg-teal-tint text-teal font-medium"
+                          : "border-line bg-canvas/80 text-graphite hover:bg-surface-hover hover:text-ink",
+                      )}
+                    >
+                      <div className="text-body-sm font-medium">{tier.label}</div>
+                      <div className="text-[10px] opacity-75">{tier.desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 连续滑块微调 */}
+            <div className="space-y-1.5 pt-1">
+              <div className="flex items-center justify-between text-caption text-ash">
+                <span>连续滑块微调</span>
+                <span>4px — 48px</span>
+              </div>
+              <input
+                type="range"
+                min={4}
+                max={48}
+                step={1}
+                value={store.glassBlur ?? 16}
+                onChange={(e) => store.setGlassBlur(Number(e.target.value))}
+                className="w-full accent-teal cursor-pointer"
+                aria-label="液态玻璃模糊度（像素）"
+              />
+            </div>
+          </div>
+        )}
       </SectionCard>
 
       {/* ---------------------------------------------------- 外观模式 */}
