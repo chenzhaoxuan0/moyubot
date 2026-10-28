@@ -56,13 +56,13 @@ export function FileDiffToolCard({ data }: { data: ToolExecutionData }) {
   };
 
   return (
-    <div className="overflow-hidden rounded-input border border-line bg-card">
+    <div className="rounded-btn transition-colors hover:bg-line-soft/40">
       <div
         role="button"
         tabIndex={0}
         onClick={() => setExpanded(!expanded)}
         onKeyDown={(e) => e.key === "Enter" && setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-line-soft/50 cursor-pointer transition select-none"
+        className="flex w-full items-center gap-2 px-1.5 py-1.5 text-left cursor-pointer transition select-none"
       >
         <FileCode size={13} className="shrink-0 text-teal" />
         <span className="font-mono text-body-sm font-medium text-ink truncate max-w-[420px]" title={filePath}>
@@ -112,9 +112,9 @@ export function FileDiffToolCard({ data }: { data: ToolExecutionData }) {
       </div>
 
       {expanded && (
-        <div className="border-t border-line/60 bg-rail/30 p-2.5 font-mono text-caption">
+        <div className="px-1.5 pb-1.5 pt-0.5 font-mono text-caption">
           {diffLines.length > 0 ? (
-            <div className="max-h-72 overflow-auto rounded border border-line/50 bg-card p-2 leading-relaxed select-text space-y-0.5">
+            <div className="max-h-72 overflow-auto leading-relaxed select-text space-y-0.5">
               {diffLines.map((line, idx) => {
                 // del 行吃旧侧 token，add/ctx 行吃新侧 token（meta 行无下标 → 纯文本）
                 const lineTokens =
@@ -162,7 +162,7 @@ export function FileDiffToolCard({ data }: { data: ToolExecutionData }) {
               })}
             </div>
           ) : (
-            <pre className="max-h-60 overflow-auto rounded border border-line/50 bg-card p-2 text-graphite whitespace-pre-wrap">
+            <pre className="max-h-60 overflow-auto text-graphite whitespace-pre-wrap">
               <code>{data.output || JSON.stringify(data.input, null, 2)}</code>
             </pre>
           )}

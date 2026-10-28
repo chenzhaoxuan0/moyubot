@@ -439,7 +439,7 @@ function WorkGroupRow({
       {/* 展开的详细执行流。file.diff / deliverable 不逐条渲染——底部已聚合成
           一张交付摘要卡，逐条再画一遍是同一信息两份 */}
       {open && (
-        <div className="mt-1.5 ml-[18px] space-y-2 border-l border-line/70 pl-3">
+        <div className="mt-1.5 ml-[18px] space-y-1 border-l border-line/70 pl-2.5">
           {entries
             .filter((e) => e.kind !== "file.diff" && e.kind !== "deliverable")
             .map((e) => (

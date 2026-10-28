@@ -22,7 +22,7 @@ export function ContextInjectionCard({
   const total = totalChars ?? parts.reduce((sum, p) => sum + p.chars, 0);
 
   return (
-    <div className="my-2 overflow-hidden rounded-input border border-line/70 bg-rail/15 text-caption">
+    <div className="my-1.5 rounded-btn transition-colors hover:bg-line-soft/40 text-caption">
       <div
         role="button"
         tabIndex={0}
@@ -40,7 +40,7 @@ export function ContextInjectionCard({
       </div>
 
       {expanded && (
-        <div className="border-t border-line-soft bg-rail/30 p-2.5 space-y-1.5 font-mono text-[11px]">
+        <div className="px-3 pb-1.5 pt-0.5 space-y-1.5 font-mono text-[11px]">
           {parts.map((part, idx) => (
             <div key={idx} className="flex items-center justify-between text-graphite px-1">
               <span className="flex items-center gap-1.5">

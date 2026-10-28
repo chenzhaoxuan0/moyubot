@@ -9,13 +9,13 @@ export function SearchToolCard({ data }: { data: ToolExecutionData }) {
   const results = parseSearchResults(data.output);
 
   return (
-    <div className="overflow-hidden rounded-input border border-line bg-card">
+    <div className="rounded-btn transition-colors hover:bg-line-soft/40">
       <div
         role="button"
         tabIndex={0}
         onClick={() => setExpanded(!expanded)}
         onKeyDown={(e) => e.key === "Enter" && setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-line-soft/50 cursor-pointer transition select-none"
+        className="flex w-full items-center gap-2 px-1.5 py-1.5 text-left cursor-pointer transition select-none"
       >
         <Search size={13} className="shrink-0 text-teal" />
         <span className="font-mono text-body-sm font-medium text-ink">联网检索</span>

@@ -12,14 +12,14 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
   const isFailed = data.completed && data.ok === false;
 
   return (
-    <div className="overflow-hidden rounded-input border border-line bg-card">
+    <div className="rounded-btn transition-colors hover:bg-line-soft/40">
       {/* 头部摘要栏 */}
       <div
         role="button"
         tabIndex={0}
         onClick={() => setExpanded(!expanded)}
         onKeyDown={(e) => e.key === "Enter" && setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-line-soft/50 cursor-pointer transition select-none"
+        className="flex w-full items-center gap-2 px-1.5 py-1.5 text-left cursor-pointer transition select-none"
       >
         <Terminal size={13} className="shrink-0 text-teal" />
         <span className="text-body-sm font-medium text-ink">执行</span>
@@ -54,7 +54,7 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
 
       {/* 展开的输出明细 */}
       {expanded && (
-        <div className="border-t border-line/60 bg-rail/30 p-3 font-mono text-[12px] leading-[1.65] space-y-2">
+        <div className="px-1.5 pb-1.5 pt-0.5 font-mono text-[12px] leading-[1.65] space-y-2">
           {cwd && (
             <div className="text-[10px] text-ash truncate" title={`工作目录: ${cwd}`}>
               cwd: {cwd}
@@ -63,7 +63,7 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
           {command && (
             <div>
               <div className="text-[10px] text-ash mb-1">执行命令</div>
-              <div className="rounded bg-card border border-line/50 p-2 text-ink overflow-x-auto whitespace-pre-wrap select-text">
+              <div className="text-ink overflow-x-auto whitespace-pre-wrap select-text">
                 <span className="text-teal select-none">$ </span>
                 {command}
               </div>
@@ -73,7 +73,7 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
           {data.output && (
             <div>
               <div className="text-[10px] text-ash mb-1">终端输出</div>
-              <pre className="max-h-72 overflow-auto rounded bg-card border border-line/50 p-2.5 text-graphite select-text">
+              <pre className="max-h-72 overflow-auto text-graphite select-text">
                 <code>{data.output}</code>
               </pre>
             </div>
@@ -82,7 +82,7 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
           {data.error && (
             <div>
               <div className="text-[10px] text-loss/80 mb-1">错误信息</div>
-              <pre className="max-h-40 overflow-auto rounded bg-loss/10 border border-loss/20 p-2.5 text-loss select-text">
+              <pre className="max-h-40 overflow-auto text-loss select-text">
                 <code>{data.error}</code>
               </pre>
             </div>
