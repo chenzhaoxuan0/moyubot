@@ -9,7 +9,8 @@
  *   （启动一次性探测），daemon 侧没有缓存、也**不做启动探测**（index.ts 刻意
  *   不做启动预热的同一决策）——无 spawn、按需付费。
  * - **daemon 只拥有网络面**：npm registry / PyPI 查 latest，内存 + 磁盘缓存
- *   （<homeDir>/updates-cache.json）TTL 1 小时，force 直查。
+ *   （<homeDir>/updates-cache.json）。TTL 按结果区分：成功 1 小时，失败 60 秒
+ *   且不落盘（离线启动一次不许让之后 1h 的自动检测全是 unknown）；force 直查。
  * - 检测源表是白名单：没登记的执行器（zcode/agy/…）不检测、不产生噪音。
  *
  * 比对是启发式 semver：CLI 版本串五花八门（"2.0.1 (Claude Code)" / "v1.2.3"），
@@ -43,6 +44,9 @@ export const EXECUTOR_UPDATE_SOURCES: Readonly<Record<string, ExecutorUpdateSour
 };
 
 const CACHE_TTL_MS = 60 * 60 * 1000;
+/** 检测失败（latest=null）的短 TTL：失败结果不配 1h 长缓存——离线启动一次就
+ * 让后续 1h 内的自动检测全是 unknown 的话，用户会误以为「没有新版本」 */
+const FAIL_TTL_MS = 60 * 1000;
 const FETCH_TIMEOUT_MS = 5000;
 
 export type ExecutorUpdateState = "current" | "behind" | "unknown";
@@ -106,8 +110,13 @@ export class ExecutorUpdatesChecker {
       const parsed = JSON.parse(await readFile(path.join(this.homeDir, "updates-cache.json"), "utf8")) as LatestCacheFile;
       if (parsed !== null && typeof parsed === "object" && parsed.entries !== null && typeof parsed.entries === "object") {
         for (const [k, v] of Object.entries(parsed.entries)) {
-          if (v !== null && typeof v === "object" && typeof v.latest !== "undefined" && typeof v.checkedAt === "number") {
-            this.cache.set(k, v as LatestCacheEntry);
+          // 只载入成功结果（latest 为 string）：旧版盘上可能落过 null 失败项，
+          // 载入只会带来过期的 unknown。且按 checkedAt 取较新者——盘读是构造
+          // 函数里的异步活，完成时内存里可能已有刚网络刷新的值，陈旧盘值
+          // 不许覆盖它
+          if (v !== null && typeof v === "object" && typeof v.latest === "string" && typeof v.checkedAt === "number") {
+            const cur = this.cache.get(k);
+            if (cur === undefined || v.checkedAt > cur.checkedAt) this.cache.set(k, v);
           }
         }
       }
@@ -120,7 +129,8 @@ export class ExecutorUpdatesChecker {
     clearTimeout(this.persistTimer);
     this.persistTimer = setTimeout(() => {
       const entries: Record<string, LatestCacheEntry> = {};
-      for (const [k, v] of this.cache) entries[k] = v;
+      // 失败项（latest=null）不落盘：磁盘缓存只存成功事实，重启不带着上次的失败跑
+      for (const [k, v] of this.cache) if (v.latest !== null) entries[k] = v;
       void mkdir(this.homeDir, { recursive: true })
         .then(() => writeFile(path.join(this.homeDir, "updates-cache.json"), JSON.stringify({ entries }), "utf8"))
         .catch(() => undefined);
@@ -128,6 +138,9 @@ export class ExecutorUpdatesChecker {
   }
 
   private async fetchLatest(src: ExecutorUpdateSource): Promise<string | null> {
+    // 注意：Node 内置 fetch（undici）不读 HTTP_PROXY/HTTPS_PROXY 环境变量——
+    // 配了系统代理的机器上这里会直连失败并报 unknown。刻意不实现代理逻辑
+    //（升级检测是增强面，不为它引入 undici ProxyAgent/环境感知那套面）
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
@@ -152,14 +165,17 @@ export class ExecutorUpdatesChecker {
   private async latestOf(runtimeId: string, src: ExecutorUpdateSource, force: boolean): Promise<LatestCacheEntry> {
     const cached = this.cache.get(runtimeId);
     const now = Date.now();
-    if (!force && cached !== undefined && now - cached.checkedAt < CACHE_TTL_MS) return cached;
+    // TTL 按结果好坏区分：成功 1h，失败 60s（失败长缓存 = 离线一次后自动检测全 unknown）
+    if (!force && cached !== undefined && now - cached.checkedAt < (cached.latest === null ? FAIL_TTL_MS : CACHE_TTL_MS)) {
+      return cached;
+    }
     const running = this.inflight.get(runtimeId);
     if (running !== undefined) return running;
     const p = this.fetchLatest(src)
       .then((latest) => {
         const entry: LatestCacheEntry = { latest, checkedAt: Date.now() };
         this.cache.set(runtimeId, entry);
-        this.persist();
+        if (latest !== null) this.persist(); // 失败不持久化（persist 内也只写成功项，双保险）
         return entry;
       })
       .finally(() => {

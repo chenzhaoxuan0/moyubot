@@ -16,6 +16,7 @@
 import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { log } from "../../log.ts";
 import type { NativeCommandInfo } from "../../contract.ts";
 
 export interface FrontmatterResult {
@@ -159,8 +160,12 @@ export function hasDotSegment(relPath: string): boolean {
 export function listMarkdownFilesPruned(dir: string, limit = 2000): string[] {
   const out: string[] = [];
   const skip = (name: string): boolean => name.startsWith(".") || name === "node_modules";
+  let capped = false;
   const walk = (d: string, prefix: string): void => {
-    if (out.length >= limit) return;
+    if (out.length >= limit) {
+      capped = true;
+      return;
+    }
     let entries: Dirent[];
     try {
       entries = readdirSync(d, { withFileTypes: true });
@@ -168,10 +173,15 @@ export function listMarkdownFilesPruned(dir: string, limit = 2000): string[] {
       return;
     }
     for (const e of entries) {
-      if (out.length >= limit) return;
+      if (out.length >= limit) {
+        capped = true;
+        return;
+      }
+      // 点开头/node_modules 对目录与文件一视同仁：skip 原先只作用于目录，
+      // 点开头的散文件（.draft.md 等）会被收录——文件名也要过 skip
+      if (skip(e.name)) continue;
       const rel = prefix === "" ? e.name : `${prefix}/${e.name}`;
       if (e.isDirectory()) {
-        if (skip(e.name)) continue;
         walk(join(d, e.name), rel);
       } else if (e.isFile() && e.name.toLowerCase().endsWith(".md")) {
         out.push(rel);
@@ -179,6 +189,10 @@ export function listMarkdownFilesPruned(dir: string, limit = 2000): string[] {
     }
   };
   walk(dir, "");
+  // 触顶截断必须可见：静默丢条目等于斜杠菜单「莫名缺项」且无从排查
+  if (capped) {
+    log.warn(`[discovery] markdown 枚举触顶截断（limit=${limit}），后续条目未收录`, { dir });
+  }
   return out;
 }
 

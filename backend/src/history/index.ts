@@ -44,13 +44,24 @@ const readers: readonly SessionReader[] = [
 ];
 
 function withBudget<T>(p: Promise<T>, executorId: string): Promise<T | null> {
-  return Promise.race([
-    p.catch((err: unknown) => {
-      log.info(`[history] ${executorId} reader 失败（跳过）`, { error: err instanceof Error ? err.message : String(err) });
-      return null;
-    }),
-    new Promise<null>((resolve) => setTimeout(() => resolve(null), READER_BUDGET_MS)),
-  ]);
+  const startedAt = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      // 超时分支必须可观测：此前静默 resolve(null)，一家 reader 慢了整行从
+      // 列表里无声消失，排查只能靠猜。reader 本体继续跑完（race 不取消），
+      // claude 层的结果缓存仍会被填充——下一次 list 直接命中。
+      log.warn(`[history] ${executorId} reader 超过 ${READER_BUDGET_MS}ms 预算，本次结果丢弃`, {
+        budgetMs: READER_BUDGET_MS,
+        elapsedMs: Date.now() - startedAt,
+      });
+      resolve(null);
+    }, READER_BUDGET_MS);
+  });
+  return Promise.race([p.catch((err: unknown) => {
+    log.info(`[history] ${executorId} reader 失败（跳过）`, { error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }), timeout]).finally(() => clearTimeout(timer));
 }
 
 /** executorId → reader（detail 下钻用） */

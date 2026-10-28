@@ -109,16 +109,31 @@ function querySessionById(sessionId: string): McodeSessionRow | null {
 
 /**
  * 剥掉 user 消息开头连续的 <system-reminder>…</system-reminder> 包裹块
- * （内嵌的其它 reminder 标签随整块一起剥掉；剥完为空 = 纯系统注入，整条丢弃）。
+ * （连续多个、嵌套（块中又有块）都能剥净——首个闭合标签截断会残留半个闭合
+ * 标签；内嵌的其它 reminder 标签随整块一起剥掉；未闭合的不剥，原样保留。
+ * 剥完为空 = 纯系统注入，整条丢弃）。
  */
 function stripLeadingReminders(text: string): string {
+  const OPEN = "<system-reminder>";
+  const CLOSE = "</system-reminder>";
+  const TAG_RE = /<system-reminder>|<\/system-reminder>/g;
   let t = text;
   for (;;) {
-    const m = /^\s*<system-reminder>/.exec(t);
-    if (m === null) break;
-    const close = t.indexOf("</system-reminder>");
-    if (close === -1) break; // 未闭合：不剥，原样保留
-    t = t.slice(close + "</system-reminder>".length);
+    const open = /^\s*<system-reminder>/.exec(t);
+    if (open === null) break;
+    // 深度计数找**配对**的外层闭合标签（嵌套块的内层闭合不算数）
+    let depth = 1;
+    let end = -1;
+    TAG_RE.lastIndex = open[0].length;
+    for (let m = TAG_RE.exec(t); m !== null; m = TAG_RE.exec(t)) {
+      if (m[0] === OPEN) depth++;
+      else if (--depth === 0) {
+        end = TAG_RE.lastIndex;
+        break;
+      }
+    }
+    if (end === -1) break; // 未闭合：不剥，原样保留
+    t = t.slice(end);
   }
   return t.trimStart();
 }

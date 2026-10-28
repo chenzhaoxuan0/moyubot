@@ -178,11 +178,18 @@ export class TraceSink {
   async readSessionNdjson(sessionId: SessionId, afterSeq = 0): Promise<string> {
     await this.#ensureIndex();
     const out: string[] = [];
-    for (const [, entry] of this.#fileIndex) {
+    // 按排序后的文件名序迭代（跨日期文件升序拼接的既定语义）：#fileIndex 的
+    // Map 只当缓存用，插入序在「中间文件 stat 失败 continue / prune 后重插」
+    // 之后会偏离文件名序，直接迭代 Map 会跨文件乱序
+    const files = [...this.#fileIndex.keys()].sort();
+    for (const f of files) {
+      const entry = this.#fileIndex.get(f);
+      if (entry === undefined) continue;
       const bucket = entry.bySid.get(sessionId);
       if (bucket === undefined) continue;
       if (afterSeq === 0) {
-        out.push(...bucket);
+        // 循环 push：十万级 bucket 上 spread 会 Maximum call stack size exceeded
+        for (const line of bucket) out.push(line);
         continue;
       }
       for (const line of bucket) {

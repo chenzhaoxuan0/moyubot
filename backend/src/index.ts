@@ -373,9 +373,11 @@ try {
     const rows = store.listSessions().filter((s) => s.source === "imported");
     if (rows.length > 0) {
       const removed = await traceSink.pruneExtRecords(rows.map((r) => r.id));
+      // 只清消息行，不动 last_seq/turn_count：setSessionProgress 是 MAX 钳制的
+      // 只增接口，传 0 是 no-op；同步游标不来自台账行，来自 sync.ts 对账本的
+      // msg_ext_/tc_ext_ 扫描（prune 已把旧投影记录剔除，扫描自然从 0 起步）
       for (const r of rows) {
         store.clearSessionMessages(r.id);
-        store.setSessionProgress(r.id, r.lastSeq, 0);
       }
       log.info("imported sessions re-projection migration", { sessions: rows.length, removedRecords: removed });
     }
@@ -3934,7 +3936,9 @@ registerMethod("session.export", async (params) => {
   if (typeof p.sessionId !== "string") throw Object.assign(new Error("sessionId is required"), { code: "bad_params" });
   const row = store.getSession(p.sessionId);
   if (row === undefined) throw Object.assign(new Error(`no such session: ${p.sessionId}`), { code: "unknown_session" });
-  const messages = store.listMessages(p.sessionId);
+  // 导出必须全量：listMessages 默认 limit=500，长会话的 messages 段会被截断
+  //（events 段走账本本来就是全量，两段缺一会造出「半截 bundle」）
+  const messages = store.listMessages(p.sessionId, 1_000_000);
   const events = parseTraceNdjson(await traceSink.readSessionNdjson(asSessionId(p.sessionId), 0));
   return buildSharedBundle(row, messages, events);
 });

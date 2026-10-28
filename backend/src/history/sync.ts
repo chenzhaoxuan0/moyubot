@@ -127,7 +127,8 @@ async function performNativeSync(
         if (num > maxExtIdx) maxExtIdx = num;
       }
     }
-    // 若账本中已有同步事件，则以此为准；若账本完全无同步事件且数据库已有记录，以 s.turnCount 兜底
+    // 账本里有同步事件则以最大编号为准；账本完全无同步事件则从 0 起步——
+    // 不拿 store 侧行数/轮数当游标（store.messages 只存 user/assistant，条数口径不同）
     currentCount = maxExtIdx > 0 ? maxExtIdx : 0;
     sessionNativeSyncedCounts.set(sessionId, currentCount);
   }
