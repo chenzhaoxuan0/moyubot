@@ -28,9 +28,13 @@
           try { legacy = localStorage.getItem('agent-workbench:theme-mode'); } catch (e) {}
           mode = legacy === 'light' || legacy === 'dark' || legacy === 'system' ? legacy : 'auto';
         }
-        var d = mode === 'dark' ||
-          ((mode === 'auto' || mode === 'system') &&
-            window.matchMedia('(prefers-color-scheme: dark)').matches);
+        // matchMedia 也包进 try：这里抛异常会把 IIFE 整个打死，
+        // 连后面的全局 error 监听器都注册不上
+        var prefersDark = false;
+        try {
+          prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        } catch (e) {}
+        var d = mode === 'dark' || ((mode === 'auto' || mode === 'system') && prefersDark);
         if (d) {
           document.documentElement.classList.add('dark');
           document.documentElement.setAttribute('data-theme', 'dark');

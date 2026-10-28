@@ -174,9 +174,11 @@ ipcMain.on("app:brand-icon", (_event, payload) => {
 });
 
 // auto 模式下渲染层会跟着系统变化重推结论；这里的 nativeTheme 兜底只服务
-// 渲染层还没起来（后端未就绪、加载重试中）的那段窗口期
+// 渲染层还没起来（后端未就绪、加载重试中）的那段窗口期。与首帧同源取
+// startupUseDark（持久化钉死的 mode 优先）—— 不然加载期间系统明暗一变，
+// 钉了 light/dark 的用户图标会被系统带跑偏
 nativeTheme.on("updated", () => {
-  if (!rendererThemeReported) applyBrandIcons(nativeTheme.shouldUseDarkColors);
+  if (!rendererThemeReported) applyBrandIcons(startupUseDark());
 });
 
 let mainWindow = null;
@@ -206,12 +208,16 @@ function readPersistedAppearanceMode() {
   }
 }
 
-/** 首帧按哪个明暗档：应用里钉死的 mode 优先，auto / 没有 → 跟随系统 */
-function startupUseDark() {
-  const mode = readPersistedAppearanceMode();
+/** mode → 首帧明暗档：钉死的优先，auto / 没有 → 跟随系统 */
+function appearanceModeToDark(mode) {
   if (mode === "dark") return true;
   if (mode === "light") return false;
   return nativeTheme.shouldUseDarkColors;
+}
+
+/** 首帧按哪个明暗档（每次现读文件 —— createTray / nativeTheme 兜底共用） */
+function startupUseDark() {
+  return appearanceModeToDark(readPersistedAppearanceMode());
 }
 
 /**
@@ -451,9 +457,11 @@ function createTray() {
 }
 
 function createWindow() {
-  // 首帧底色 / 图标按「上次的主题」来（见 readPersistedAppearanceMode 注释）：
+  // 首帧底色 / 图标 / 传给 preload 的 mode 用同一次文件快照 —— 分开读的话，
+  // 两次读之间文件被改（agent 在改外观）会让三者互相矛盾。
   // 写死浅色底会让深色用户在页面绘出前闪一屏白，反之亦然
-  const startDark = startupUseDark();
+  const startMode = readPersistedAppearanceMode();
+  const startDark = appearanceModeToDark(startMode);
   mainWindow = new BrowserWindow({
     width: 1520,
     height: 940,
@@ -479,7 +487,7 @@ function createWindow() {
       spellcheck: false,
       // 把持久化的外观档位交给 preload（--aw-appearance=light|dark|auto），
       // 它会在页面任何脚本跑之前合进 localStorage 外观缓存 —— 首帧即上次主题
-      additionalArguments: ["--aw-appearance=" + (readPersistedAppearanceMode() ?? "auto")],
+      additionalArguments: ["--aw-appearance=" + (startMode ?? "auto")],
     },
   });
 

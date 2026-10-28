@@ -94,6 +94,8 @@ function wallpaperCssUrl(source: string | null): string | null {
 
 /** 上次写进 favicon 的来源键（brand:light/dark 或 custom:<path>），变化才重算 —— applyToDom 高频触发 */
 let lastFaviconKey = "";
+/** 上次写进 theme-color 的底色，变化才重写 —— 同上 */
+let lastThemeColor = "";
 /** 当前桌面端（Electron）是否已处于「自定义 logo」覆盖态，变化才重发图标 */
 let brandIconIsCustom = false;
 
@@ -211,6 +213,15 @@ function applyToDom(state: AppearanceState): void {
       electronBridge?.setBrandIcon?.(null);
     }
   }
+  // theme-color（浏览器 / PWA 环境的窗口着色）跟真实画布底色走：
+  // index.html 首屏设的只是按明暗档的近似值，自定义底色（如暮色镜湖 #101b55）不能一直错着
+  const themeColor = state.profiles[resolved].palette.background;
+  if (themeColor !== lastThemeColor) {
+    lastThemeColor = themeColor;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", themeColor);
+  }
+
   electronBridge?.notifyTheme?.(resolved);
 
   // 壁纸：没有图或未启用时移除 data 属性，让 CSS 的默认分支接管

@@ -85,12 +85,28 @@ daemon 侧刻意**不做内存缓存**（对齐 `bots/registry.ts` 的「文件�
 daemon 没起时依次退到 `localStorage`，再退到内置默认 —— 界面照常可用，
 只是重启会丢。设置页「外观文件」卡片会显示当前处在哪一层。
 
+`localStorage` 除了当降级层，还兼**首屏快路径缓存**：文件是唯一真相，但
+要等 React 挂载 + daemon RPC 往返（dev 冷启动数秒）才读得到，首帧没人喂
+的话会先按「跟随系统」上错色再被纠正（系统深色 + 应用钉浅色 = 每次启动
+先黑一截）。所以：
+
+- 每次采纳文件态（hydrate / 4 秒轮询发现外部改动）都会把 state 同步刷进
+  `localStorage`（壁纸 / logo 的运行时 data URL 落缓存前剥掉，防占满配额）；
+- 桌面端启动时主进程直接同步读 `appearance.json` 的 `mode`（不等 daemon）：
+  决定窗口底色与初始图标，并经 `--aw-appearance=` 交给 preload，preload 在
+  页面任何脚本执行前把 `mode` 合进这份缓存 —— `index.html` 首屏脚本与
+  `useAppearance` 的模块初始态读到的就是「上次主题」；
+- 纯浏览器访问没有这条接力，靠上一条刷出来的缓存（同样有效，只是 agent
+  直接改文件后的下一次启动首帧可能短暂用旧档，几秒内被 hydrate 纠正）。
+
 ## 相关文件
 
 | 位置 | 作用 |
 |---|---|
 | `backend/src/appearance/store.ts` | 落盘、原子写、乐观锁、壁纸目录 |
 | `backend/src/appearance/smoke.ts` | 22 项冒烟自检（`pnpm exec tsx src/appearance/smoke.ts`） |
+| `electron/main.cjs` / `electron/preload.cjs` | 启动代读 `appearance.json` 的 mode：窗口底色 / 图标 / 首屏缓存接力 |
+| `prototype/index.html` | 首屏内联脚本：读缓存定主题、favicon 与 theme-color |
 | `prototype/src/core/appearance.ts` | 类型、取值域、默认值、色彩推导 |
 | `prototype/src/core/appearanceStore.ts` | 前端 RPC 封装与三层降级 |
 | `prototype/src/store/useAppearance.ts` | 状态、落盘、4 秒轮询外部改动 |
