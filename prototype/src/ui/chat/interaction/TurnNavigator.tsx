@@ -79,15 +79,15 @@ export function TurnNavigator({
   return (
     <nav
       aria-label="对话轮次导航"
-      className="hidden @min-[768px]:flex fixed right-2.5 top-1/2 -translate-y-1/2 z-20 flex-col items-end py-1 select-none pointer-events-auto opacity-40 hover:opacity-100 transition-opacity duration-150"
+      className="hidden @min-[768px]:flex absolute left-2.5 top-1/2 -translate-y-1/2 z-20 flex-col items-start py-1 select-none pointer-events-auto opacity-40 hover:opacity-100 transition-opacity duration-150"
     >
-      <div className="flex flex-col gap-0.5 items-end py-0.5">
+      <div className="flex flex-col gap-0.5 items-start py-0.5">
         {anchors.map((a) => {
           const isHovered = hoveredTurn === a.turnIndex;
           const label = `Q${a.turnIndex}`;
 
-          // Codex 波浪形态（GPU 硬件加速 scaleX + origin-right，无重排掉帧）：
-          // 悬停横线最长，相邻线根据距离呈现高斯波浪平滑衰减
+      // Codex 波浪形态（GPU 硬件加速 scaleX + origin-left，无重排掉帧）：
+      // 悬停横线最长，相邻线根据距离呈现高斯波浪平滑衰减
           const dist = hoveredTurn === null ? null : Math.abs(a.turnIndex - hoveredTurn);
           const isActive = a.turnIndex === activeTurn;
 
@@ -130,13 +130,13 @@ export function TurnNavigator({
           return (
             <div
               key={a.userMessageId}
-              className="relative flex items-center justify-end"
+              className="relative flex items-center justify-start"
               onMouseEnter={() => setHoveredTurn(a.turnIndex)}
               onMouseLeave={() => setHoveredTurn(null)}
             >
               {/* 悬停展开的详情内容气泡：完全非透明实底 bg-canvas，清晰支持 6 行正文纵览 */}
               {isHovered && (
-                <div className="absolute right-full mr-3 top-1/2 -translate-y-1/2 w-[340px] max-w-[calc(100vw-5rem)] p-3.5 rounded-card bg-canvas border border-line shadow-2xl text-left z-40 pointer-events-none animate-in fade-in zoom-in-95 duration-100 select-text">
+                <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 w-[340px] max-w-[calc(100vw-5rem)] p-3.5 rounded-card bg-canvas border border-line shadow-2xl text-left z-40 pointer-events-none animate-in fade-in zoom-in-95 duration-100 select-text">
                   <div className="flex items-center justify-between gap-2 mb-2 pb-1.5 border-b border-line">
                     <span className="font-mono text-[11px] font-bold text-teal">{label}</span>
                     <div className="flex items-center gap-2 text-[10px] text-graphite font-mono">
@@ -173,7 +173,7 @@ export function TurnNavigator({
                 type="button"
                 onClick={() => scrollToTurn(a)}
                 aria-label={`跳转到第 ${a.turnIndex} 轮提问`}
-                className="group flex items-center justify-end h-3.5 w-8 pr-0.5 cursor-pointer"
+                className="group flex items-center justify-start h-3.5 w-8 pl-0.5 cursor-pointer"
               >
                 <span
                   style={{
@@ -181,7 +181,7 @@ export function TurnNavigator({
                     opacity,
                   }}
                   className={cn(
-                    "w-7 h-[2px] rounded-full origin-right transition-transform duration-100 ease-out will-change-transform",
+                    "w-7 h-[2px] rounded-full origin-left transition-transform duration-100 ease-out will-change-transform",
                     bgClass,
                   )}
                 />

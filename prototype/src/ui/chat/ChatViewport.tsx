@@ -226,13 +226,6 @@ export function ChatViewport({
         {/* 选中文本微型交互 Tooltip（引用追问、复制） */}
         <SelectionTooltip containerRef={containerRef} />
 
-        {/* 轮次导航大纲条（右轨） */}
-        <TurnNavigator
-          anchors={turnAnchors}
-          containerRef={containerRef}
-          onNavigate={handleScrollToTurn}
-        />
-
       {/* 居中正文阅读列 */}
       <div
         style={{ maxWidth: chatColumnWidth }}
@@ -317,6 +310,15 @@ export function ChatViewport({
       </div>
 
       </div>
+
+      {/* 轮次导航大纲条（左轨）：挂在列根（relative）而非滚动容器内 ——
+          absolute 定位才不会随内容滚动；此前 fixed 是贴窗口右缘，现改贴
+          对话列左缘 */}
+      <TurnNavigator
+        anchors={turnAnchors}
+        containerRef={containerRef}
+        onNavigate={handleScrollToTurn}
+      />
 
       {/* 悬浮回到底部 FAB 按钮（居中悬浮于主对话页面底部对话框上方） */}
       <BackToBottomFab
