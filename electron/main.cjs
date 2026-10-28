@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, net, protocol, shell, ipcMain, Menu, nativeImage, nativeTheme, Tray } = require("electron");
 const path = require("path");
+const os = require("os");
 const { fork } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const fs = require("node:fs");
@@ -173,13 +174,52 @@ ipcMain.on("app:brand-icon", (_event, payload) => {
 });
 
 // auto 模式下渲染层会跟着系统变化重推结论；这里的 nativeTheme 兜底只服务
-// 渲染层还没起来（后端未就绪、加载重试中）的那段窗口期
+// 渲染层还没起来（后端未就绪、加载重试中）的那段窗口期。与首帧同源取
+// startupUseDark（持久化钉死的 mode 优先）—— 不然加载期间系统明暗一变，
+// 钉了 light/dark 的用户图标会被系统带跑偏
 nativeTheme.on("updated", () => {
-  if (!rendererThemeReported) applyBrandIcons(nativeTheme.shouldUseDarkColors);
+  if (!rendererThemeReported) applyBrandIcons(startupUseDark());
 });
 
 let mainWindow = null;
 let tray = null;
+
+/**
+ * 启动主题预取 —— 同步读 <homeDir>/appearance.json 的 mode（家目录规则与
+ * backend/src/config.ts 一致：AGENT_WORKBENCH_HOME 优先，默认 ~/.agent-workbench）。
+ *
+ * appearance.json 是外观的唯一真相，但渲染层要等 React 挂载 + daemon RPC 往返
+ * （dev 冷启动数秒）之后才见到它。这三样东西等不了，必须主进程先代读：
+ *   1. 窗口 backgroundColor —— 页面绘出来之前窗口就是这个色；
+ *   2. 窗口 / 托盘初始图标 —— 渲染层 app:theme-changed 上报前的近似值；
+ *   3. 经 additionalArguments 交给 preload，preload 把 mode 合进 localStorage
+ *      外观缓存，页面首帧（index.html 内联脚本 / useAppearance 初始态）
+ *      读到的就是「上次主题」，而不是默认的跟随系统。
+ * 读不到 / 损坏返回 null，一切回落旧行为（nativeTheme 跟随系统）。
+ */
+function readPersistedAppearanceMode() {
+  try {
+    const home = process.env.AGENT_WORKBENCH_HOME || path.join(os.homedir(), ".agent-workbench");
+    const raw = fs.readFileSync(path.join(home, "appearance.json"), "utf8");
+    const mode = JSON.parse(raw)?.mode;
+    return mode === "light" || mode === "dark" || mode === "auto" ? mode : null;
+  } catch {
+    return null;
+  }
+}
+
+/** mode → 首帧明暗档：钉死的优先，auto / 没有 → 跟随系统 */
+function appearanceModeToDark(mode) {
+  if (mode === "dark") return true;
+  if (mode === "light") return false;
+  return nativeTheme.shouldUseDarkColors;
+}
+
+/** 首帧按哪个明暗档（每次现读文件 —— createTray / nativeTheme 兜底共用） */
+function startupUseDark() {
+  return appearanceModeToDark(readPersistedAppearanceMode());
+}
+
 /**
  * 关窗语义：X 不再退出进程，而是藏进通知区域（托盘）—— 后台守护（定时任务 /
  * IM 渠道 / 心跳）还在值班，任务栏托盘灯就是「它还在」的可见凭证。真正退出
@@ -397,8 +437,8 @@ function showMainWindow() {
  * dev 模式下 daemon 由 concurrently 另起，生命周期独立于本进程）。
  */
 function createTray() {
-  // 初始按系统明暗挑底色；渲染层起来后 app:theme-changed 会带着应用内结论来纠正
-  tray = new Tray(nativeTheme.shouldUseDarkColors ? TRAY_DARK : TRAY_LIGHT);
+  // 初始按持久化主题；渲染层起来后 app:theme-changed 会带着应用内结论来纠正
+  tray = new Tray(startupUseDark() ? TRAY_DARK : TRAY_LIGHT);
   tray.setToolTip("MoyuBot · 后台运行中");
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -417,15 +457,20 @@ function createTray() {
 }
 
 function createWindow() {
+  // 首帧底色 / 图标 / 传给 preload 的 mode 用同一次文件快照 —— 分开读的话，
+  // 两次读之间文件被改（agent 在改外观）会让三者互相矛盾。
+  // 写死浅色底会让深色用户在页面绘出前闪一屏白，反之亦然
+  const startMode = readPersistedAppearanceMode();
+  const startDark = appearanceModeToDark(startMode);
   mainWindow = new BrowserWindow({
     width: 1520,
     height: 940,
     minWidth: 360,
     minHeight: 480,
     title: "MoyuBot",
-    // 初始按系统明暗；渲染层上报后 applyBrandIcons 会换（icon.png 仅作打包兜底，运行时不再引用）
-    icon: nativeTheme.shouldUseDarkColors ? ICON_DARK : ICON_LIGHT,
-    backgroundColor: "#f7f7f4",
+    // 初始按持久化主题；渲染层上报后 applyBrandIcons 会换（icon.png 仅作打包兜底，运行时不再引用）
+    icon: startDark ? ICON_DARK : ICON_LIGHT,
+    backgroundColor: startDark ? "#000000" : "#f7f7f4",
     show: true, // 立即显示窗口，防止 ready-to-show 被阻塞
     autoHideMenuBar: true,
     // 无边框窗口：隐藏系统标题栏，网页内容铺到窗口最顶端。拖拽移动 / 双击最大化 /
@@ -440,6 +485,9 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: false,
       spellcheck: false,
+      // 把持久化的外观档位交给 preload（--aw-appearance=light|dark|auto），
+      // 它会在页面任何脚本跑之前合进 localStorage 外观缓存 —— 首帧即上次主题
+      additionalArguments: ["--aw-appearance=" + (startMode ?? "auto")],
     },
   });
 

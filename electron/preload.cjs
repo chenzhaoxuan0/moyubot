@@ -1,5 +1,43 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
+/**
+ * 启动主题接力：main.cjs 代读了 appearance.json 的 mode，经
+ * --aw-appearance=<mode> 传到这里。preload 先于页面任何脚本执行，在这里把
+ * mode 合进 localStorage 的外观缓存（与 appearanceStore.ts 的
+ * FALLBACK_STORAGE_KEY 同键），index.html 首屏脚本与 useAppearance 的初始态
+ * 读到的就是「上次主题」——不然要等 daemon RPC 往返（dev 冷启动数秒），
+ * 系统深色 + 应用钉浅色的用户每次启动都先黑一截再被纠正。
+ * 只动 mode：缓存里其余字段（用户调过的色板等）归渲染层自己维护。
+ * 整段防御式，任何一步失败都不影响加载（回落默认链路）。
+ */
+try {
+  const FLAG = "--aw-appearance=";
+  const flag = process.argv.find((arg) => arg.startsWith(FLAG));
+  const mode = flag ? flag.slice(FLAG.length) : null;
+  if (mode === "light" || mode === "dark" || mode === "auto") {
+    const KEY = "agent-workbench:appearance:fallback";
+    let state = null;
+    try {
+      state = JSON.parse(localStorage.getItem(KEY) || "null");
+    } catch {
+      state = null;
+    }
+    if (!state || typeof state !== "object") {
+      // 没有缓存时写一份最小骨架：sanitizeAppearanceState 读回时会补全其余字段
+      state = { schemaVersion: 1 };
+    } else if (state.schemaVersion !== 1) {
+      // 旧缓存缺 schemaVersion 的话 sanitize 会整份判废、mode 也跟着失效 —— 归一化
+      state.schemaVersion = 1;
+    }
+    if (state.mode !== mode) {
+      state.mode = mode;
+      localStorage.setItem(KEY, JSON.stringify(state));
+    }
+  }
+} catch {
+  /* localStorage 不可用（隐私模式等）—— 走默认链路 */
+}
+
 contextBridge.exposeInMainWorld("electronAPI", {
   isElectron: true,
   platform: process.platform,

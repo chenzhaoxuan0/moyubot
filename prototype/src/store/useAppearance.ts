@@ -30,6 +30,8 @@ import {
   deleteThemeRpc,
   listThemesRpc,
   sanitizePresetProfile,
+  readCachedAppearance,
+  cacheAppearanceState,
   type AppearanceLoadSource,
 } from "../core/appearanceStore.ts";
 
@@ -93,6 +95,8 @@ function wallpaperCssUrl(source: string | null): string | null {
 
 /** 上次写进 favicon 的来源键（brand:light/dark 或 custom:<path>），变化才重算 —— applyToDom 高频触发 */
 let lastFaviconKey = "";
+/** 上次写进 theme-color 的底色，变化才重写 —— 同上 */
+let lastThemeColor = "";
 /** 当前桌面端（Electron）是否已处于「自定义 logo」覆盖态，变化才重发图标 */
 let brandIconIsCustom = false;
 
@@ -215,6 +219,15 @@ function applyToDom(state: AppearanceState): void {
       electronBridge?.setBrandIcon?.(null);
     }
   }
+  // theme-color（浏览器 / PWA 环境的窗口着色）跟真实画布底色走：
+  // index.html 首屏设的只是按明暗档的近似值，自定义底色（如暮色镜湖 #101b55）不能一直错着
+  const themeColor = state.profiles[resolved].palette.background;
+  if (themeColor !== lastThemeColor) {
+    lastThemeColor = themeColor;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", themeColor);
+  }
+
   electronBridge?.notifyTheme?.(resolved);
 
   // 壁纸：没有图或未启用时移除 data 属性，让 CSS 的默认分支接管
@@ -235,10 +248,12 @@ export function resolveAppearance(state: AppearanceState): ResolvedAppearance {
 }
 
 /**
- * 首屏先用内置默认立即上色，避免等 daemon 往返时闪一帧白；
- * 真正的外观随后由 hydrateFromFile() 换上。
+ * 首屏先用「上次记住的外观」（localStorage 快路径，Electron 下 preload 已把
+ * appearance.json 的 mode 合并进去）立即上色。之前这里盲用默认态（mode=auto
+ * 跟随系统）：系统深色 + 应用钉浅色的用户每次启动都要先黑几秒，等 hydrate
+ * 读回文件才被纠正。真正的外观随后仍由 hydrateFromFile() 换上。
  */
-const initialState: AppearanceState = defaultAppearanceState();
+const initialState: AppearanceState = readCachedAppearance() ?? defaultAppearanceState();
 applyToDom(initialState);
 
 /**
@@ -632,6 +647,9 @@ async function hydrate(): Promise<void> {
   lastKnownHash = result.hash;
   lastPath = result.path;
   lastSource = result.source;
+  // 采纳文件态后同步刷 localStorage 快路径：下次启动的首帧（index.html 内联
+  // 脚本 / 本模块初始态）才能按这份最新真相上色，而不是按旧的 UI 兜底
+  cacheAppearanceState(result.state);
   applyToDom(result.state);
   useAppearance.setState({
     ...result.state,
@@ -679,6 +697,8 @@ async function pollExternalChanges(): Promise<void> {
   lastKnownHash = result.hash;
   lastPath = result.path;
   lastSource = result.source;
+  // 外部（agent）改了文件：连 localStorage 快路径一起刷，下次启动首帧即新主题
+  cacheAppearanceState(result.state);
   applyToDom(result.state);
   useAppearance.setState({
     ...result.state,
@@ -690,7 +710,7 @@ async function pollExternalChanges(): Promise<void> {
   } as Partial<AppearanceStore>);
 }
 
-/* 首屏立即从文件取真实外观（此时界面已经用默认配色上色，不会闪） */
+/* 首屏立即从文件取真实外观（此时界面已经用缓存/默认配色上色，不会闪） */
 void hydrate();
 
 if (typeof window !== "undefined") {
