@@ -36,6 +36,7 @@ import {
 } from "./items/SegmentRows.tsx";
 
 import { ToolCardHost } from "./tools/ToolCardHost.tsx";
+import { MergedToolRun } from "./tools/MergedToolRun.tsx";
 import { FileDiffToolCard } from "./tools/FileDiffToolCard.tsx";
 import { DeliverablesSummaryCard } from "./tools/DeliverablesSummaryCard.tsx";
 
@@ -284,6 +285,25 @@ export function ChatViewport({
   );
 }
 
+/** 连续同类工具调用合并成运行段（Codex 合并行）；非工具条目各自成段 */
+function mergeConsecutiveTools(items: readonly GroupedItem[]): { key: string; entries: [GroupedItem, ...GroupedItem[]] }[] {
+  const runs: { key: string; entries: [GroupedItem, ...GroupedItem[]] }[] = [];
+  for (const it of items) {
+    const last = runs[runs.length - 1];
+    if (
+      it.kind === "tool" &&
+      last !== undefined &&
+      last.entries[0]!.kind === "tool" &&
+      String(last.entries[0]!.data?.toolName) === String(it.data?.toolName)
+    ) {
+      last.entries.push(it);
+    } else {
+      runs.push({ key: `run-${String(it.id)}`, entries: [it] });
+    }
+  }
+  return runs;
+}
+
 /* ------------------------------------------------------------- 单元渲染路由器 */
 
 function UnitRowRenderer({
@@ -440,17 +460,33 @@ function WorkGroupRow({
           一张交付摘要卡，逐条再画一遍是同一信息两份 */}
       {open && (
         <div className="mt-1.5 ml-[18px] space-y-1 border-l border-line/70 pl-2.5">
-          {entries
-            .filter((e) => e.kind !== "file.diff" && e.kind !== "deliverable")
-            .map((e) => (
+          {mergeConsecutiveTools(
+            entries.filter((e) => e.kind !== "file.diff" && e.kind !== "deliverable"),
+          ).map((run) =>
+            run.entries.length > 1 ? (
+              <MergedToolRun
+                key={run.key}
+                entries={run.entries}
+                renderEntry={(e) => (
+                  <SingleItemRow
+                    key={e.id}
+                    item={e}
+                    busy={busy}
+                    lastUserTurnId={lastUserTurnId}
+                    process
+                  />
+                )}
+              />
+            ) : (
               <SingleItemRow
-                key={e.id}
-                item={e}
+                key={run.key}
+                item={run.entries[0]!}
                 busy={busy}
                 lastUserTurnId={lastUserTurnId}
                 process
               />
-            ))}
+            ),
+          )}
 
           {/* 聚合文件交付卡 */}
           {deliverableFiles.length > 0 && (

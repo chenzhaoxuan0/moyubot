@@ -177,3 +177,21 @@ text-3 50%），映射到本项目 token（ink / graphite / ash）：
   按实际观感回调。节奏对比成为设计语言：**过程紧凑（逻辑流），正文疏朗（阅读流）**。
 
 实测：工具卡 border 0px / 背景透明；正文 14px/23px=1.643。
+
+## 第七轮（2026-10-28）：同类工具合并 + 行内关键信息（Codex 二级展开）
+
+Codex 实拍的二级形态：连续同类调用合并为一行「动词汇总」，展开后**每条直接
+带关键参数**（命令文本/文件名+变更数）。本项目落地（用户诉求加码：合并行也
+内联关键信息，不点开就知道动了哪些对象）：
+
+- **`tools/brief.ts` 通用关键信息提取器**：键语义优先级（path/file_path/pattern/
+  command/url/query/...）→ MCP 嵌套包装（arguments/parameters）→ 兜底短字符串；
+  序列化 JSON 字符串先 parse 再递归、解析不动则弃用（切一刀的 JSON 片段是纯噪音，
+  title 兜底同款过滤）；路径压尾部两级；title=工具名视为噪音弃用。
+  各执行器 input 形状不统一（zcode payload.input / mcode rawInput / 外部同步 ""），
+  提取器统一消化。
+- **`tools/MergedToolRun.tsx` 连续同类合并行**：`read ×8 steward/MEMORY.md ·
+  steward/STANDING.md · +N`（前 3 个关键参数内联 + 计数），展开逐条明细（每条
+  仍是可独立展开输出的工具行）；展开态按合并组记忆。
+- 已知局限：外部同步会话（native-sync）`input: ""`，无参数可显——行只剩动词，
+  属数据源缺失非渲染问题。

@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Wrench } from "lucide-react";
 import type { ToolExecutionData } from "../types.ts";
+import { toolBrief } from "./brief.ts";
 
 export function GenericToolCard({ data }: { data: ToolExecutionData }) {
   const [expanded, setExpanded] = useState(false);
 
-  const brief = data.title || formatGenericInputBrief(data.input);
+  const brief = toolBrief(data);
 
   return (
     <div className="rounded-btn transition-colors hover:bg-line-soft/40">
@@ -79,13 +80,3 @@ export function GenericToolCard({ data }: { data: ToolExecutionData }) {
   );
 }
 
-function formatGenericInputBrief(input: unknown): string {
-  if (!input) return "";
-  if (typeof input === "string") return input.slice(0, 60);
-  if (typeof input === "object") {
-    const o = input as Record<string, unknown>;
-    const v = o.id ?? o.name ?? o.query ?? o.prompt ?? o.path ?? o.url;
-    if (typeof v === "string") return v.slice(0, 60);
-  }
-  return "";
-}
