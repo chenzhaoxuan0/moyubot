@@ -53,14 +53,20 @@ export function toolBriefOf(input: unknown, limit = 80): string {
   if (typeof input === "string") {
     const t = input.trim();
     if (!t) return "";
-    // 序列化 JSON 字符串（部分执行器把 input 整个 stringify）：parse 后递归；
-    // parse 不动就直接弃用——切一刀的 JSON 片段全是引号花括号，纯噪音
+    // 序列化 JSON 字符串（部分执行器把 input 整个 stringify）：**JSON.parse 成功
+    // 且结果真是对象/数组**才走摘要分支。`[ -f x ] && …` 这类以 [ 开头的普通
+    // 命令 parse 必失败 —— 回退原文本身，绝不能丢成空串（合并行会缺关键信息）；
+    // 切一刀的 JSON 片段全是引号花括号，那才是该弃用的噪音
     if (looksSerialized(t)) {
       try {
-        return toolBriefOf(JSON.parse(t), limit);
+        const parsed: unknown = JSON.parse(t);
+        if (parsed !== null && typeof parsed === "object") {
+          return toolBriefOf(parsed, limit);
+        }
       } catch {
-        return "";
+        // 非 JSON：走原文回退
       }
+      return shortenPath(t).slice(0, limit);
     }
     return shortenPath(t).slice(0, limit);
   }

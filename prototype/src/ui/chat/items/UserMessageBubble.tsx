@@ -23,11 +23,12 @@ function parseSlashCommand(text: string): { isCommand: boolean; name: string; ar
 
 /**
  * 账本真实用户消息 id 的形态判定。daemon 侧只有两种构造：
- * - `user-${turnCount}`（backend/src/runtime/host.ts，普通轮/首轮的用户 delta）；
+ * - `user-${turnCount}`（backend/src/runtime/host.ts：run() 发送的轮次由 daemon
+ *   回显 message.delta(user) 渲染气泡，不再本地乐观合成）；
  * - `msg_ext_${idx+1}`（backend/src/history/sync.ts，外部原生会话同步轮）。
  * 分叉锚点校验（resolveForkAtSeq）按账本里的这两种 id 匹配；本地合成气泡的
- * 假 id（run 内 `u${seq}`、pushUserBubble 的 `user_opt_N`，echo 回填前）不在
- * 其中 —— 不能当撤回/编辑锚点，否则 daemon 直接 unknown_anchor。
+ * 假 id（问卷等 pushUserBubble 路径的 `user_opt_N`，echo 回填前）不在其中 ——
+ * 不能当撤回/编辑锚点，否则 daemon 直接 unknown_anchor。
  */
 const isLedgerMessageId = (id: string): boolean => /^(user-\d+|msg_ext_\d+)$/.test(id);
 
@@ -45,12 +46,13 @@ function ClampedPromptText({ text, stateKey }: { text: string; stateKey: string 
   const pRef = useRef<HTMLParagraphElement | null>(null);
 
   // 钳制态下的溢出检测：scrollHeight 超过 clientHeight 即超过 6 行；宽度变化
-  //（对话列变宽/变窄导致换行数变化）也要重判，挂 ResizeObserver
+  //（对话列变宽/变窄导致换行数变化）也要重判，挂 ResizeObserver。
+  // 直接赋值而非单向锁存：列变宽后行数收回 6 行内时「展开全文」要随之消失
   useLayoutEffect(() => {
     const p = pRef.current;
     if (p === null || open) return;
     const check = (): void => {
-      if (p.scrollHeight - p.clientHeight > 2) setOverflows(true);
+      setOverflows(p.scrollHeight - p.clientHeight > 2);
     };
     check();
     const ro = new ResizeObserver(check);
@@ -302,7 +304,7 @@ export function UserMessageBubble({
         )}
         {text.trim() && (
           <div className="chat-user-bubble max-w-full rounded-2xl border border-line bg-rail px-3.5 py-2.5">
-            <ClampedPromptText text={text} stateKey={messageId || `t:${text.slice(0, 60)}`} />
+            <ClampedPromptText text={text} stateKey={messageId || `t:${text.length}:${text.slice(0, 60)}`} />
           </div>
         )}
       </div>

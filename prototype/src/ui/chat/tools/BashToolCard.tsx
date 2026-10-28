@@ -44,7 +44,8 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
           ) : (
             <span className="flex items-center gap-1.5 text-[11px] text-ash">
               <Check size={12} className="text-gain" />
-              <span>exit 0</span>
+              {/* ok !== false 只代表适配器判成功，不保证退出码真是 0 —— 不硬编码 exit 0 */}
+              <span>完成</span>
             </span>
           )}
 

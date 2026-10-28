@@ -270,6 +270,7 @@ export function ChatViewport({
                     unit={u}
                     busy={busy}
                     lastUserTurnId={lastUserTurnId}
+                    isLastUnit={!liveTailUnit && virtualRow.index === settledUnits.length - 1}
                   />
                 </div>
               );
@@ -277,12 +278,13 @@ export function ChatViewport({
           </div>
         ) : (
           <div className="space-y-3">
-            {settledUnits.map((u) => (
+            {settledUnits.map((u, idx) => (
               <UnitRowRenderer
                 key={u.key}
                 unit={u}
                 busy={busy}
                 lastUserTurnId={lastUserTurnId}
+                isLastUnit={!liveTailUnit && idx === settledUnits.length - 1}
               />
             ))}
           </div>
@@ -295,6 +297,7 @@ export function ChatViewport({
               unit={liveTailUnit}
               busy={busy}
               lastUserTurnId={lastUserTurnId}
+              isLastUnit
             />
           </div>
         )}
@@ -350,10 +353,13 @@ function UnitRowRenderer({
   unit,
   busy,
   lastUserTurnId,
+  isLastUnit = false,
 }: {
   unit: RenderUnit;
   busy: boolean;
   lastUserTurnId: string | number | undefined;
+  /** 该单元是否时间线末位：末位 + busy = 单元仍在运行（思考活跃度推导用） */
+  isLastUnit?: boolean;
 }) {
   if (unit.kind === "work") {
     return (
@@ -363,6 +369,7 @@ function UnitRowRenderer({
         running={unit.running}
         busy={busy}
         lastUserTurnId={lastUserTurnId}
+        isLastUnit={isLastUnit}
       />
     );
   }
@@ -372,6 +379,7 @@ function UnitRowRenderer({
       busy={busy}
       lastUserTurnId={lastUserTurnId}
       process={unit.itemIsProcess === true}
+      active={busy && isLastUnit}
     />
   );
 }
@@ -390,19 +398,32 @@ function WorkGroupRow({
   running,
   busy,
   lastUserTurnId,
+  isLastUnit = false,
 }: {
   groupKey: string;
   entries: readonly GroupedItem[];
   running: boolean;
   busy: boolean;
   lastUserTurnId: string | number | undefined;
+  /** 该组是否时间线末位：末位 + busy = 组所在轮仍在运行（思考活跃度推导用） */
+  isLastUnit?: boolean;
 }) {
   // 运行中默认自动徐徐展开以呈现思考与工具流式执行过程；
-  // 运行结束时（任务落定）自动折叠回收到单行摘要；
-  // 用户手动点击展开/收起时优先遵循用户意图
-  const [userToggled, setUserToggled] = useState(false);
+  // 运行结束时（任务落定）自动折叠回单行摘要；
+  // 用户手动点击展开/收起时优先遵循用户意图。虚拟滚动卸载重挂时按模块级
+  // 记忆恢复「用户操作过」这一事实（评审 P2）：从没操作过的组继续跟随
+  // running，操作过的组重挂后保持用户选择，不再被强制折叠。
+  const [userToggled, setUserToggled] = useState(() => workGroupOpenStates.has(groupKey));
   const [manualOpen, setManualOpen] = useState(() => workGroupOpenStates.get(groupKey) ?? false);
   const open = userToggled ? manualOpen : running;
+
+  // 思考条目活跃度（评审 P2，推导在父层）：仅当「组所在轮仍在运行（末位 + busy）
+  // 且该条目是组内最后一个条目」时活跃 —— 全局 busy 会让所有历史思考块同时
+  // 「深度思考中」并 10Hz 重渲染（用户手动展开的历史组在新一轮运行时诈尸）。
+  // activeEntry 只可能是思考条目；其余条目一律非活跃。
+  const unitRunning = busy && isLastUnit;
+  const activeEntry =
+    unitRunning && entries[entries.length - 1]?.kind === "thinking" ? entries[entries.length - 1] : undefined;
 
   const toggleOpen = (): void => {
     const next = !open;
@@ -519,6 +540,7 @@ function WorkGroupRow({
                     busy={busy}
                     lastUserTurnId={lastUserTurnId}
                     process
+                    active={e === activeEntry}
                   />
                 )}
               />
@@ -529,6 +551,7 @@ function WorkGroupRow({
                 busy={busy}
                 lastUserTurnId={lastUserTurnId}
                 process
+                active={run.entries[0] === activeEntry}
               />
             ),
           )}
@@ -552,12 +575,15 @@ function SingleItemRow({
   busy,
   lastUserTurnId,
   process = false,
+  active = false,
 }: {
   item: GroupedItem;
   busy: boolean;
   lastUserTurnId: string | number | undefined;
   /** 工作组内的过程语境：中间叙述不渲染 meta 行（Codex 逻辑） */
   process?: boolean;
+  /** 条目活跃度（仅思考条目消费）：所在单元仍在运行且为其末条目时为 true */
+  active?: boolean;
 }) {
   switch (item.kind) {
     case "session.start":
@@ -589,7 +615,7 @@ function SingleItemRow({
       return (
         <ReasoningShimmerBlock
           text={item.data.text}
-          busy={busy}
+          active={active}
           startedAt={item.at}
           endedAt={item.data.lastDeltaAt}
         />

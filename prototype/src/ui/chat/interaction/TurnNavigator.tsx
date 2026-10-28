@@ -50,7 +50,11 @@ export function TurnNavigator({
       container.removeEventListener("scroll", onScroll);
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
-  }, [anchors, containerRef]);
+    // 依赖 anchors.length 而非 anchors 本体：流式期间 anchors 数组随每个 delta
+    // 重建（useMemo 依赖 renderUnits），按本体依赖会反复摘挂 scroll 监听并重跑
+    // N 次 querySelector。锚点定位靠 data-turn-id（每轮稳定），数量不变时无需
+    // 重挂 —— 只有轮数增减才真正需要重算，语义等价。
+  }, [anchors.length, containerRef]);
 
   // 轮次少于 2 轮时不显示大纲，保持界面极致极简
   if (anchors.length < 2) return null;
