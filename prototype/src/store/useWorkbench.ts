@@ -29,6 +29,7 @@ import {
   type UnitId,
   type WorkUnit,
 } from "../core/units.ts";
+import type { ChatAttachment } from "../core/attachments.ts";
 import type { AutomationWriteInput, DaemonSessionRow } from "../adapters/daemon/client.ts";
 import {
   normalizePrefs,
@@ -1731,6 +1732,16 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       fullPrompt = prompt.trim() ? `${prompt}\n\n${parts.join("\n")}` : parts.join("\n");
     }
 
+    // 浏览器/混合附件（评审 P1）：fullPrompt 是把附件全文内联后的合成文本，
+    // daemon 回显 message.delta(user) 只会带它 —— 登记展示形态（原始文本 +
+    // chips），consumeEvents 消费回显时改写，气泡不泄附件全文。sessionId 在
+    // fork / 开新段分支发起时尚不可知，先记 null 按文本退化匹配。
+    const registerBrowserEcho = (sessionId: string | null): void => {
+      if (attachments !== undefined && attachments.length > 0 && !allPaths && fullPrompt !== prompt) {
+        registerDisplayEcho(sessionId, fullPrompt, prompt, attachments);
+      }
+    };
+
     // 对话分叉（ADR 0013 + docs/18 §〇）：分叉意图存在 → 下一次发送一定开新段。
     // 绕过续聊判定与 retention（分叉语义就是「回到锚点边界重来」，不该被接回旧段）。
     // HANDOFF 不单独传 —— daemon 对 fork 自动取分叉父段为交接源并带 seq 上界。
@@ -1747,6 +1758,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
           ? MANIFEST_ALL_OFF
           : { ...turnManifest, firstTurnInject: false };
 
+      registerBrowserEcho(null);
       try {
         session = await adapter.startSession({
           unit,
@@ -1839,6 +1851,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       const currentTurnConfig = get().turnContextConfig;
       const turnManifest = resolveEffectiveTurnManifest(currentTurnConfig, unit?.contextManifest, false);
       const contextInject = turnManifest !== null ? { manifest: turnManifest } : undefined;
+      registerBrowserEcho(String(active.id));
       try {
         await adapter.sendMessage({
           sessionId: active.id,
@@ -1920,6 +1933,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
           const currentTurnConfig = get().turnContextConfig;
           const turnManifest = resolveEffectiveTurnManifest(currentTurnConfig, unit?.contextManifest, false);
           const contextInject = turnManifest !== null ? { manifest: turnManifest } : undefined;
+          registerBrowserEcho(String(normalized.id));
           await adapter.sendMessage({
             sessionId: normalized.id,
             text: fullPrompt,
@@ -1953,6 +1967,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     }
 
     let session: Awaited<ReturnType<RuntimeAdapter["startSession"]>>;
+    registerBrowserEcho(null);
     try {
       session = await adapter.startSession({
         unit,
@@ -2122,7 +2137,7 @@ function consumeEcho(event: RuntimeEvent): boolean {
   const entry = pendingEcho[idx]!;
   pendingEcho.splice(idx, 1);
   // 回声不是白丢：把 daemon 侧的真实 messageId 回填给本地气泡 —— 分叉锚点
-  // （ADR 0013）要拿它去账本定位轮边界，本地合成的 `u${seq}` 假 id 查不到。
+  //（ADR 0013）要拿它去账本定位轮边界，本地合成的 `u${seq}` 假 id 查不到。
   useWorkbench.setState((s) => ({
     timeline: s.timeline.map((t) =>
       t.id === entry.itemId && t.event.type === "message.delta"
@@ -2131,6 +2146,47 @@ function consumeEcho(event: RuntimeEvent): boolean {
     ),
   }));
   return true;
+}
+
+/**
+ * 本端刚发送消息的「展示形态」登记（评审 P1，浏览器附件路径）：
+ * 无本地路径的附件只能在 run() 里把全文内联进 fullPrompt，daemon 回显的
+ * message.delta(user) 因此只有合成文本 —— 消费时用这里登记的原始文本 +
+ * 附件 chips 改写，气泡不泄露附件全文。与 pendingEcho 同款窗口（30s / 8 条）；
+ * sessionId 在 fork / 开新段分支发起时尚不可知，记 null 按文本退化匹配。
+ * 注意：这是本端会话期的易失补丁 —— 持久修复在 daemon 侧（全路径附件），
+ * 刷新后回放该轮会还原为合成文本（事件账本里存的原文）。
+ */
+const pendingDisplayEcho: Array<{
+  sessionId: string | null;
+  sentText: string;
+  displayText: string;
+  attachments: readonly ChatAttachment[];
+  at: number;
+}> = [];
+
+function registerDisplayEcho(
+  sessionId: string | null,
+  sentText: string,
+  displayText: string,
+  attachments: readonly ChatAttachment[],
+): void {
+  pendingDisplayEcho.push({ sessionId, sentText, displayText, attachments, at: Date.now() });
+  while (pendingDisplayEcho.length > 8) pendingDisplayEcho.shift();
+  const cutoff = Date.now() - 30_000;
+  while (pendingDisplayEcho.length > 0 && (pendingDisplayEcho[0]?.at ?? Infinity) < cutoff) pendingDisplayEcho.shift();
+}
+
+/** daemon 回显的是合成文本（前端内联附件）且未带 chips 时，改写回干净的展示形态 */
+function applyDisplayEcho(event: RuntimeEvent): RuntimeEvent {
+  if (event.type !== "message.delta" || event.role !== "user" || event.attachments !== undefined) return event;
+  const idx = pendingDisplayEcho.findIndex(
+    (p) => (p.sessionId === null || p.sessionId === String(event.sessionId)) && event.text === p.sentText,
+  );
+  if (idx < 0) return event;
+  const entry = pendingDisplayEcho[idx]!;
+  pendingDisplayEcho.splice(idx, 1);
+  return { ...event, text: entry.displayText, attachments: entry.attachments };
 }
 
 /** 输入历史上限（终端 shell 的 HISTSIZE 同位） */
@@ -2173,11 +2229,14 @@ function consumeEvents(adapter: RuntimeAdapter): void {
   if (consumerAttached.has(adapter)) return;
   consumerAttached.add(adapter);
   void (async () => {
-    for await (const event of adapter.events()) {
+    for await (const rawEvent of adapter.events()) {
       // 用户轮回显：只丢「本端刚发的那条」（回声窗口匹配）——本地 pushUserBubble
       // 已渲染且带附件 chips。窗口不匹配的用户轮（渠道发起、断线期间其他端的
       // 消息经 resync 补拉）照常渲染，不再全局丢弃（review P1）。
-      if (event.type === "message.delta" && event.role === "user" && consumeEcho(event)) continue;
+      if (rawEvent.type === "message.delta" && rawEvent.role === "user" && consumeEcho(rawEvent)) continue;
+      // 浏览器附件路径的回显改写（评审 P1）：fullPrompt 已把附件全文内联，
+      // daemon 回显只有合成文本 —— 换回登记过的原始文本 + chips 再入时间线。
+      const event = applyDisplayEcho(rawEvent);
       useWorkbench.setState((s) => {
         // 谱系过滤（底栏任务栏的配套）：时间线只收「活跃视图」的事件。规则：
         // 台账已认识、又不是活跃会话的 → 丢弃（被切走的运行中对话不再把事件

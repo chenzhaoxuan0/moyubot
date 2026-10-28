@@ -3690,6 +3690,12 @@ registerMethod("session.start", async (params) => {
     p.attachments !== undefined && p.attachments.length > 0
       ? composePrompt(p.prompt, await inlineAttachments(p.attachments))
       : p.prompt;
+  // 回显契约（评审 P1）：附件全文内联只进执行器 prompt；原始文本 + 附件路径交
+  // host 透传进 message.delta(user)——用户气泡显示干净文本 + chips，不泄全文。
+  const display =
+    p.attachments !== undefined && p.attachments.length > 0
+      ? { prompt: p.prompt, attachmentPaths: p.attachments }
+      : undefined;
   // ADR 0014：注入清单的权威在 bot.json——这里从注册表带出归一后的 manifest 给
   // host（host 不认识注册表）。扫不到定义（外部根/测试路径）= 不带，注入器退回
   // legacy 行为。前端**不再**传全局 scopes 作为真相源；memoryOptions 只做 /mem 覆盖。
@@ -3700,6 +3706,7 @@ registerMethod("session.start", async (params) => {
     unitName: p.unitName ?? p.unitId,
     rootPath: p.rootPath,
     prompt,
+    display,
     model: typeof p.model === "string" ? asModelId(p.model) : null,
     mode: p.mode,
     reasoningLevel: p.reasoningLevel,
@@ -3760,6 +3767,11 @@ registerMethod("session.send", async (params) => {
     p.attachments !== undefined && p.attachments.length > 0
       ? composePrompt(p.text, await inlineAttachments(p.attachments))
       : p.text;
+  // 同 session.start（评审 P1）：合成文本只给执行器，回显带原始文本 + chips
+  const display =
+    p.attachments !== undefined && p.attachments.length > 0
+      ? { prompt: p.text, attachmentPaths: p.attachments }
+      : undefined;
   return host.sendMessage(
     asSessionId(p.sessionId),
     text,
@@ -3769,6 +3781,8 @@ registerMethod("session.send", async (params) => {
       contextLength: typeof p.contextLength === "string" && p.contextLength !== "" ? p.contextLength : undefined,
     },
     p.contextInject,
+    undefined,
+    display,
   );
 });
 // headless 一轮闭环（docs/21 P4a）：附件内联 + 续聊判定 + 模型解析 + 等轮落定回全文。

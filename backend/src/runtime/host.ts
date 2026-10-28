@@ -41,14 +41,19 @@ import { normalizeContextManifest, normalizeSkillBinding, resolveAgentsMdInjecti
 import { log } from "../log.ts";
 import { ensureWorktree } from "../git/repo.ts";
 import { asSessionId, type SessionSource } from "../../../prototype/src/core/units.ts";
+import {
+  categorizeAttachment,
+  inferAttachmentMimeType,
+  type ChatAttachment,
+} from "../../../prototype/src/core/attachments.ts";
 import { planProposedFromTodoTool } from "./planTools.ts";
 import type { TraceSink } from "./trace.ts";
 import type { Store, SessionRow } from "../store/db.ts";
 import type { PermissionGate } from "../permissions/gate.ts";
 import { appendJournal, MAX_USAGE } from "../store/journals.ts";
 import { redact as redactText } from "../memory/redact.ts";
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 
 /**
  * 界面侧的运行时命名空间前缀。
@@ -225,6 +230,8 @@ interface HostSession {
     contextInject?: { readonly manifest?: ContextManifest };
     /** 消息来源标记（如 "automation"）：出队派发时随 message.delta 进账本 */
     origin?: string;
+    /** 用户轮展示元数据（评审 P1）：排队期间随条目存续，出队派发时随 delta 透传 */
+    display?: UserTurnDisplay;
   }>;
   /** 队列 id 发号器（会话内单调） */
   queueSeq: number;
@@ -253,12 +260,67 @@ export interface SendLoopParams {
   readonly contextLength?: string;
 }
 
+/**
+ * 用户轮展示元数据（评审 P1）：附件全文内联（docs/21 P4a）只该进执行器 prompt，
+ * message.delta(user) 回显 / messages 表必须仍是干净的原始文本 + 附件 chips——
+ * 回显合成文本会把附件全文泄进用户气泡（回放、HANDOFF 投影同遭殃）。
+ * 调用方在组装 prompt 时把原始输入与附件路径一并交给 host 透传。
+ */
+export interface UserTurnDisplay {
+  /** 未合成附件的用户原始输入（气泡正文 / messages 表口径） */
+  readonly prompt: string;
+  /** daemon 侧内联过的附件路径（chips 描述符由 host 从路径派生，不回传全文） */
+  readonly attachmentPaths?: readonly string[];
+}
+
+/** 附件路径 → chips 描述符：刻意不带 url/base64/textContent——事件要进账本落盘，大字段不能灌进去 */
+function describeAttachmentPaths(paths: readonly string[]): ChatAttachment[] {
+  const out: ChatAttachment[] = [];
+  for (let i = 0; i < paths.length; i++) {
+    const p = paths[i]!;
+    let size = 0;
+    try {
+      size = statSync(p).size;
+    } catch {
+      // inlineAttachments 已保证可读；这里只做展示，读不到就记 0
+    }
+    const mimeType = inferAttachmentMimeType(p);
+    out.push({
+      id: `att-${i}-${p}`,
+      name: basename(p),
+      size,
+      mimeType,
+      category: categorizeAttachment(p, mimeType),
+      localPath: p,
+    });
+  }
+  return out;
+}
+
+/** 用户轮回显的正文与 chips：display 带原始文本时优先（合成文本只给执行器） */
+function userEchoOf(
+  text: string,
+  display: UserTurnDisplay | undefined,
+): { text: string; attachments?: ChatAttachment[] } {
+  if (display === undefined) return { text };
+  const attachments =
+    display.attachmentPaths !== undefined && display.attachmentPaths.length > 0
+      ? describeAttachmentPaths(display.attachmentPaths)
+      : undefined;
+  return { text: display.prompt, ...(attachments !== undefined ? { attachments } : {}) };
+}
+
 export interface StartSessionInput {
   readonly runtimeId: string;
   readonly unitId: UnitId;
   readonly unitName: string;
   readonly rootPath: string;
   readonly prompt: string;
+  /**
+   * 用户轮展示元数据（评审 P1）：prompt 已含内联附件全文（发给执行器）时，
+   * 带上原始文本与附件路径 —— 回显 delta / messages 表记干净文本 + chips。
+   */
+  readonly display?: UserTurnDisplay;
   readonly model: ModelId | null;
   /**
    * 会话谱系（ADR 0012）：切换执行器开新段时传旧段所属谱系 id。
@@ -1341,7 +1403,9 @@ export class RuntimeHost {
       forkKind: h.forkKind,
       stats: { ...h.stats },
     });
-    this.store.insertMessage(h.id, Date.now(), "user", input.prompt);
+    // messages 表口径 = 用户原话（评审 P1）：附件全文内联只属于执行器 prompt，
+    // 账本与回显一致记干净文本（display 缺席时 prompt 本来就是原话）
+    this.store.insertMessage(h.id, Date.now(), "user", userEchoOf(input.prompt, input.display).text);
     // 分发日志：用户原话与注入内容**分列**存（docs/10 §2.1 残件）。
     // 有了它才能回答「这一轮它到底知道什么」—— messages 表做不到，
     // 因为那里的 prompt 只是一整块文本，注入部分和用户原话糊在一起。
@@ -1410,9 +1474,19 @@ export class RuntimeHost {
     }
     // 首轮 turn 边界 + 用户轮入账本（ADR 0012）：时间线重建（session.events.since）
     // 从此完整 —— 用户消息是账本事实，不再只存在于前端本地合成。
-    // delta 记用户原话 input.prompt，不是记忆注入后的 effectivePrompt（与 messages 表口径一致）。
+    // delta 记用户原话，不是记忆注入后的 effectivePrompt，也不是附件内联后的
+    // 合成 prompt（评审 P1）——附件以 chips 描述符透传（event.attachments），
+    // 全文只进执行器输入；与 messages 表口径一致。
     this.emitStamped(h, { type: "turn.started", sessionId: h.id, turn: h.turnCount });
-    this.emitStamped(h, { type: "message.delta", sessionId: h.id, messageId: `user-${h.turnCount}`, role: "user", text: input.prompt });
+    const firstEcho = userEchoOf(input.prompt, input.display);
+    this.emitStamped(h, {
+      type: "message.delta",
+      sessionId: h.id,
+      messageId: `user-${h.turnCount}`,
+      role: "user",
+      text: firstEcho.text,
+      ...(firstEcho.attachments !== undefined ? { attachments: firstEcho.attachments } : {}),
+    });
     void impl.send(effectivePrompt).catch((err: unknown) => {
       log.error("first turn failed", { sessionId: h.id, error: err instanceof Error ? err.message : String(err) });
       const errorEvent: RuntimeEvent = { type: "error", sessionId: h.id, message: err instanceof Error ? err.message : String(err), recoverable: false };
@@ -1658,6 +1732,7 @@ export class RuntimeHost {
     loop?: SendLoopParams,
     contextInject?: { readonly manifest?: ContextManifest },
     origin?: string,
+    display?: UserTurnDisplay,
   ): void {
     const h = this.sessions.get(sessionId);
     if (h === undefined) throw adapterError("unknown_session", `no such session: ${sessionId}`);
@@ -1686,7 +1761,7 @@ export class RuntimeHost {
       if (h.pendingSends.length >= 10) {
         throw adapterError("send_queue_full", "该会话已有 10 条排队消息 —— 等当前轮完成再发");
       }
-      this.enqueueSend(h, text, loop, contextInject, origin);
+      this.enqueueSend(h, text, loop, contextInject, origin, display);
       return;
     }
     // 暂停中的队列还挂着（用户停止 / 轮失败后）：新消息排到队尾并恢复出队 ——
@@ -1694,12 +1769,12 @@ export class RuntimeHost {
     // 先解除暂停再入队：enqueueSend 内的快照一次到位，不用补发第二份。
     if (h.pendingSends.length > 0) {
       h.queuePaused = false;
-      this.enqueueSend(h, text, loop, contextInject, origin);
+      this.enqueueSend(h, text, loop, contextInject, origin, display);
       this.flushPendingSends(h);
       return;
     }
 
-    this.dispatchSend(h, text, loop, contextInject, origin);
+    this.dispatchSend(h, text, loop, contextInject, origin, display);
   }
 
   /** 入队（发号 + steer.queued 通知 + 权威快照）。调用方负责 flush/暂停语义 */
@@ -1709,9 +1784,10 @@ export class RuntimeHost {
     loop?: SendLoopParams,
     contextInject?: { readonly manifest?: ContextManifest },
     origin?: string,
+    display?: UserTurnDisplay,
   ): void {
     const id = `q${++h.queueSeq}`;
-    h.pendingSends.push({ id, text, loop, contextInject, origin });
+    h.pendingSends.push({ id, text, loop, contextInject, origin, display });
     // 轮进行中入队是常态，但暂停队列续排也走这里 —— 日志不预设「turn in flight」
     log.info("message queued (steer)", { sessionId: h.id, queueDepth: h.pendingSends.length });
     // WP-10：插话入队对客户端可见（steer.queued）
@@ -1788,6 +1864,7 @@ export class RuntimeHost {
     loop?: SendLoopParams,
     contextInject?: { readonly manifest?: ContextManifest },
     origin?: string,
+    display?: UserTurnDisplay,
   ): void {
     if (loop?.mode !== undefined) {
       h.mode = loop.mode;
@@ -1798,15 +1875,19 @@ export class RuntimeHost {
     h.turnCount += 1;
     h.turnOpen = true;
     this.emitStamped(h, { type: "turn.started", sessionId: h.id, turn: h.turnCount });
+    // 回显与 messages 表同口径记用户原话（评审 P1）：text 是附件内联后的合成
+    // prompt（全文只给执行器），display 带原始文本 + chips 描述符时优先。
+    const echo = userEchoOf(text, display);
     this.emitStamped(h, {
       type: "message.delta",
       sessionId: h.id,
       messageId: `user-${h.turnCount}`,
       role: "user",
-      text,
+      text: echo.text,
       ...(origin !== undefined ? { origin } : {}),
+      ...(echo.attachments !== undefined ? { attachments: echo.attachments } : {}),
     });
-    this.store.insertMessage(h.id, Date.now(), "user", text);
+    this.store.insertMessage(h.id, Date.now(), "user", echo.text);
 
     void (async () => {
       let promptToSend = text;
@@ -2057,7 +2138,7 @@ export class RuntimeHost {
     // WP-10：注入点事件化——前端据此把 pre/post-steer 的助手消息分行
     this.emitStamped(h, { type: "steer.boundary", sessionId: h.id, id: next.id, text: next.text });
     this.emitQueueSnapshot(h);
-    this.dispatchSend(h, next.text, next.loop, next.contextInject, next.origin);
+    this.dispatchSend(h, next.text, next.loop, next.contextInject, next.origin, next.display);
   }
 
   /**
