@@ -4,6 +4,12 @@
 > 数值真值来源：Codex 桌面版（OpenAI.Codex 26.1013）的包拆解产物
 > `codexskin/codex-clone`（tokens.css + ANALYSIS.md，从 app.asar 的
 > app-shared-*.css 与 codex-ui-kit@0.1.2 交叉验证）。
+>
+> 来源协议备注（2026-10-28 核查）：Suk1u/codex-clone 本身**无许可证**
+> （README 明言 "No license is granted by default"）——本项目只采用其中
+> 实测得到的数值事实（字号/行高/间距等参数不受版权保护），**未复制其任何
+> 代码**；若日后要复用它的 CSS/组件代码，需先取得作者许可。其上游
+> codex-ui-kit 为 MIT。Codex-Dream-Skin 为 MIT（macos/LICENSE）。
 
 ## 为什么改
 
@@ -29,10 +35,11 @@
 | 行内代码 | 12.5px、5px 圆角、hairline 边 | `text-[0.875em] rounded-[5px] border-line bg-rail/60 px-[5px]` |
 | 代码块 | mono 12px / 1.65 | `text-[12px] leading-[1.65]`，语言栏压到 11px |
 | 标题 | 单色、字重/字号分层 | `text-[1.25em/1.1em/1em/0.95em] font-semibold text-ink` |
-| 正文栏宽 | 768px | **不采用**——沿用本项目 `chatColumnWidth`（默认 900px，用户可调） |
+| 正文栏宽 | 768px | **三档模式**（2026-10-28 第二轮）：standard=768（默认）/ wide=900（超宽，旧默认）/ custom（滑杆），设置页「外观 → 对话列宽」分段控件 |
 
 宽度特意保留本项目自己的：Codex 的 768px 是它的产品选择，本工作台是
 多栏重型工具，阅读列更宽是既定设定（外观设置里用户可调）。
+（第二轮更新：768 成为默认档「标准」，900 保留为「超宽」档——用户可一键切换。）
 
 ## 排版纪律（新规则，后续改动请遵守）
 
@@ -69,3 +76,50 @@
   （teal tint 保留——交付物是强调色唯一合理的落点之一）
 - Composer 的阴影保留（`shadow-subtle` + 聚焦 teal 光晕）：它是合法的浮层，
   例外于"对话流内无阴影"规则。
+
+## 第二轮（2026-10-28）：表现形式对齐 + 两个修复
+
+对照 codex-clone 截图与 CSS 真值逐项补齐 Codex 的"表现形式"：
+
+| 项 | Codex 形式 | 落点 |
+|---|---|---|
+| 思考过程 | "Thought for Ns" **无卡片轻量披露行** | `ReasoningShimmerBlock` 去边框卡 → 一行灰字（✨ + 思考了 N 秒 + 字数），展开内容走左侧细线缩进 |
+| 执行过程折叠 | 同上披露行语言 | `WorkGroupRow`（ChatViewport）去卡片，展开工具明细走左细线，工具卡本身仍是卡片 |
+| 用户气泡宽 | 78% | 80% → 78% |
+| 列顶 inset | 33px | 阅读列 `@min-[720px]:pt-[33px]` |
+| 发送按钮 | 圆形 + 前景反色（dark 白底黑箭头） | `bg-ink text-canvas rounded-full`（Composer + 气泡编辑态） |
+| Composer 圆角 | 25px（radius-composer） | 16 → 20px（带顶栏结构略收） |
+| 列宽 | 768 默认 | useShell `chatColumnMode: standard(768)/wide(900)/custom`，设置页分段控件 |
+
+**修复：问卷卡（QuestionnaireCard）主题不跟随**——根因是它用了 Tailwind `dark:`
+变体 + 硬编码色（`dark:bg-[#18181c]` 等）。本项目的主题机制是 `data-theme` +
+语义 token，`dark:` 跟随的是**操作系统**深浅偏好——OS 在深色时无论应用切到
+什么主题这张卡都是暗的。全部替换为语义 token（含发送钮 `text-white` →
+`text-on-accent`）。同类隐患一并清理：`StatusIndicators`（图例徽标）、
+`UnitContextEditor`（amber 徽标）。**规则：chat UI 禁用 `dark:` 变体，颜色
+一律走语义 token。**
+
+
+## 第三轮（2026-10-28）：逻辑对齐——元信息的归属权
+
+原则：**元信息跟着它的语义位置走，不跟着每条消息走**（Codex 逻辑）。
+分区并行审计（两个子 agent 分区扫描 + 仲裁）后落地：
+
+| 元信息 | 归属（Codex 逻辑） | 改动 |
+|---|---|---|
+| 时间戳 | 会话边界行独有；消息不显示 | 删用户气泡/助手回复/系统通知的时间戳；保留「会话开始」行 |
+| 耗时 | 思考行（"思考了 N 秒"）与工具状态独有 | 删助手回复落定耗时、工具卡头部耗时；流式期间保留实时秒表 |
+| 分叉/复制 | 落定回复的操作，**悬停才现** | `opacity-0 group-hover/msg:opacity-100` |
+| 用户气泡操作 | 悬停才现，平时完全隐藏 | `opacity-0 group-hover/user:opacity-100`，时间戳删除 |
+| 模型名/执行器 | 不上时间线（在 Composer 全局选） | 删 meta 行模型名、UsageFallbackRow 改中性文案 |
+| 过程文本 | 纯文本，零元信息 | AssistantMessageBlock 增 `variant: final/process`；工作组内过程叙述不渲染 meta 行 |
+| 工具卡复制 | 头部不放操作 | 删 Bash/Generic/FileDiff 头部复制按钮（展开区内容可选中复制） |
+| 状态文案 | 终端卡 `exit 0`（Codex 形态）；通用卡保留「完成」 | BashToolCard |
+| cwd | 上下文不是状态 | Bash 卡头部 cwd chip 移入展开区 |
+| 轮次导轨 | Codex 无此元素；保留功能但降为幽灵态 | `opacity-25 hover:opacity-100` |
+| 字数统计 | 思考行无此项 | 删 `(N 字)`，保留「思考了 N 秒」（即 Thought for Ns）+ 流式 shimmer 摘要 |
+| 通知行 | 中性底，彩色装饰移除 | SystemNoticeRow 统一 `border-line bg-line-soft`，语义色只在图标 |
+
+仲裁保留项：SessionStartRow 的 modelActual/modelHintDropped（会话头一次性上下文/回落告警，
+非过程噪音）；FileDiff 头部 +N/−N（Codex diff 文件头同样有统计）。mono 核心 11px→12px
+一并统一（Bash 命令/Generic 摘要/检索词/交付路径）；AttachmentsBar 非语义黑 → ink。

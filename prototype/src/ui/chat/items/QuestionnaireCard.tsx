@@ -326,7 +326,7 @@ export function QuestionnaireComposer({
         className={cn("mx-auto w-full", isMobile ? "px-3 pb-2 pt-1" : "px-3 pb-4 pt-2 @min-[560px]:px-8")}
       >
         {/* 1. 最外层大容器：常规 border-line，不加任何主题色发光外框（对齐图 2） */}
-        <div className="relative rounded-2xl border border-line bg-canvas/98 dark:bg-[#18181c]/98 shadow-2xl backdrop-blur-xl overflow-hidden transition-all duration-200">
+        <div className="relative rounded-2xl border border-line bg-canvas/98 shadow-2xl backdrop-blur-xl overflow-hidden transition-all duration-200">
           {/* 顶栏：标题、上下题切换（对齐图 1）与关闭按钮 */}
           <div className="flex items-center justify-between border-b border-line-soft/60 px-4 py-2.5">
             <div className="min-w-0 flex-1">
@@ -335,7 +335,7 @@ export function QuestionnaireComposer({
                   {currentStep.header || questionnaire.title}
                 </div>
               )}
-              <h3 className="text-body-sm font-semibold text-ink dark:text-zinc-100 select-none leading-snug truncate">
+              <h3 className="text-body-sm font-semibold text-ink select-none leading-snug truncate">
                 {currentStep.question}
               </h3>
             </div>
@@ -343,7 +343,7 @@ export function QuestionnaireComposer({
             <div className="flex items-center gap-1.5 shrink-0 ml-2">
               {/* 多步翻题器（图 1 形式：^ 2/ 共 3 步 v） */}
               {totalSteps > 1 && (
-                <div className="flex items-center gap-1 text-xs text-ash bg-line-soft/60 dark:bg-white/[0.05] rounded-lg px-2 py-1">
+                <div className="flex items-center gap-1 text-xs text-ash bg-line-soft/60 rounded-lg px-2 py-1">
                   <button
                     type="button"
                     disabled={!canGoPrev}
@@ -353,7 +353,7 @@ export function QuestionnaireComposer({
                   >
                     <ChevronUp size={14} />
                   </button>
-                  <span className="font-mono text-[11px] select-none text-graphite dark:text-zinc-300 px-0.5">
+                  <span className="font-mono text-[11px] select-none text-graphite px-0.5">
                     {currentStepIndex + 1}/ 共 {totalSteps} 步
                   </span>
                   <button
@@ -391,8 +391,8 @@ export function QuestionnaireComposer({
                   className={cn(
                     "group flex w-full items-center justify-between gap-3 rounded-xl border px-3 py-2 text-left transition-all duration-150 cursor-pointer select-none",
                     isSelected
-                      ? "border-teal/60 bg-teal-500/10 text-teal-700 dark:text-teal-300 ring-1 ring-teal/30 shadow-sm"
-                      : "border-line-soft/80 bg-rail/40 dark:bg-white/[0.03] text-ink dark:text-zinc-200 hover:border-teal/40 hover:bg-line-soft/50 dark:hover:bg-white/[0.06]",
+                      ? "border-teal/60 bg-teal-tint text-teal ring-1 ring-teal/30 shadow-sm"
+                      : "border-line-soft/80 bg-rail/40 text-ink hover:border-teal/40 hover:bg-line-soft/50",
                   )}
                 >
                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
@@ -402,8 +402,8 @@ export function QuestionnaireComposer({
                         "flex h-6 w-6 shrink-0 items-center justify-center font-mono text-xs font-bold transition-all",
                         currentStep.isMultiSelect ? "rounded-md" : "rounded-full",
                         isSelected
-                          ? "bg-teal text-white shadow-subtle"
-                          : "bg-line-soft dark:bg-white/[0.08] text-graphite dark:text-zinc-300 group-hover:bg-line group-hover:text-ink",
+                          ? "bg-teal text-on-accent shadow-subtle"
+                          : "bg-line-soft text-graphite group-hover:bg-line group-hover:text-ink",
                       )}
                     >
                       {option.key}
@@ -413,7 +413,7 @@ export function QuestionnaireComposer({
                     </span>
                   </div>
                   {option.recommended && (
-                    <span className="inline-flex items-center rounded-full bg-line-soft dark:bg-white/[0.1] px-2 py-0.5 text-[10px] font-medium text-graphite dark:text-zinc-400 shrink-0">
+                    <span className="inline-flex items-center rounded-full bg-line-soft px-2 py-0.5 text-[10px] font-medium text-graphite shrink-0">
                       推荐
                     </span>
                   )}
@@ -423,7 +423,7 @@ export function QuestionnaireComposer({
           </div>
 
           {/* 底部输入框与提交/下一题/跳过按钮 */}
-          <div className="border-t border-line-soft/60 bg-rail/30 dark:bg-white/[0.02] px-3 py-2">
+          <div className="border-t border-line-soft/60 bg-rail/30 px-3 py-2">
             <div className="flex items-center gap-2">
               {/* 2. 中间层输入框条：仅此层在激活时呈现主题色边框（对齐图 2） */}
               <div
@@ -435,8 +435,8 @@ export function QuestionnaireComposer({
                 className={cn(
                   "relative flex flex-1 items-center rounded-xl border px-3 py-1.5 transition-all duration-150 cursor-text",
                   isInputActive
-                    ? "border-teal/60 bg-teal-500/10 text-teal-700 dark:text-teal-300 ring-1 ring-teal/30 shadow-sm"
-                    : "border-line-soft/80 bg-rail/40 dark:bg-white/[0.03] hover:border-teal/40 hover:bg-line-soft/50 dark:hover:bg-white/[0.06]",
+                    ? "border-teal/60 bg-teal-tint text-teal ring-1 ring-teal/30 shadow-sm"
+                    : "border-line-soft/80 bg-rail/40 hover:border-teal/40 hover:bg-line-soft/50",
                 )}
               >
                 {/* 笔图标：点击支持 Toggle 激活 / 取消 */}
@@ -485,7 +485,7 @@ export function QuestionnaireComposer({
               <button
                 type="button"
                 onClick={handleSkip}
-                className="rounded-xl px-4 py-1.5 text-xs font-semibold bg-line-soft dark:bg-white/[0.08] text-ash hover:bg-line hover:text-ink transition cursor-pointer select-none shrink-0"
+                className="rounded-xl px-4 py-1.5 text-xs font-semibold bg-line-soft text-ash hover:bg-line hover:text-ink transition cursor-pointer select-none shrink-0"
               >
                 跳过
               </button>
@@ -493,7 +493,7 @@ export function QuestionnaireComposer({
                 <button
                   type="button"
                   onClick={handleNextStep}
-                  className="rounded-xl px-4 py-1.5 text-xs font-semibold bg-teal text-white shadow-sm hover:brightness-110 active:scale-95 transition cursor-pointer select-none shrink-0"
+                  className="rounded-xl px-4 py-1.5 text-xs font-semibold bg-teal text-on-accent shadow-sm hover:brightness-110 active:scale-95 transition cursor-pointer select-none shrink-0"
                 >
                   下一题
                 </button>
@@ -505,8 +505,8 @@ export function QuestionnaireComposer({
                   className={cn(
                     "rounded-xl px-4 py-1.5 text-xs font-semibold transition select-none shrink-0",
                     hasAnyAnswer
-                      ? "bg-teal text-white shadow-sm hover:brightness-110 active:scale-95 cursor-pointer"
-                      : "bg-line-soft dark:bg-white/[0.08] text-ash cursor-not-allowed",
+                      ? "bg-teal text-on-accent shadow-sm hover:brightness-110 active:scale-95 cursor-pointer"
+                      : "bg-line-soft text-ash cursor-not-allowed",
                   )}
                 >
                   提交

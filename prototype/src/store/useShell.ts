@@ -159,25 +159,56 @@ function persistWidth(w: number): void {
 }
 
 // ---------------------------------------------------------------------------
-// 对话列宽：时间线阅读列与输入框共用的最大宽度（对齐 ZCode：composer 与消息列
-// 同容器同宽）。默认 900 ≈ ZCode 有内容时的 max-w-4xl（896px），设置页可调。
+// 对话列宽：时间线阅读列与输入框共用的最大宽度（对齐 Codex：composer 与消息列
+// 同容器同宽）。三档模式（docs/28）：
+//   standard 768 = Codex 真值（--thread-content-max-width: 48rem），默认档
+//   wide    900 = 旧默认（≈ ZCode max-w-4xl），「超宽模式」
+//   custom  自定义像素（设置页滑杆，拖动即进入）
 // ---------------------------------------------------------------------------
 
 const CHAT_WIDTH_KEY = "agent-workbench:chat-column-width-px";
+const CHAT_COLUMN_MODE_KEY = "agent-workbench:chat-column-mode";
 /** 阅读舒适度的下限（再窄一行放不下几个字）与上限（跟整窗等宽就失去列的意义） */
 export const CHAT_WIDTH_MIN = 640;
 export const CHAT_WIDTH_MAX = 1440;
-const CHAT_WIDTH_DEFAULT = 900;
+/** 标准档（Codex）：48rem */
+export const CHAT_WIDTH_STANDARD = 768;
+/** 超宽档：旧默认 900 */
+export const CHAT_WIDTH_WIDE = 900;
 
-function readChatColumnWidth(): number {
-  if (typeof window === "undefined") return CHAT_WIDTH_DEFAULT;
+export type ChatColumnMode = "standard" | "wide" | "custom";
+
+function readChatColumnMode(): ChatColumnMode {
+  if (typeof window === "undefined") return "standard";
+  try {
+    const raw = window.localStorage.getItem(CHAT_COLUMN_MODE_KEY);
+    if (raw === "standard" || raw === "wide" || raw === "custom") return raw;
+  } catch {
+    /* ignore */
+  }
+  return "standard";
+}
+
+function persistChatColumnMode(mode: ChatColumnMode): void {
+  try {
+    window.localStorage.setItem(CHAT_COLUMN_MODE_KEY, mode);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 宽度按模式派生：standard/wide 由常量锁定，custom 才读用户拖过的像素值 */
+function readChatColumnWidth(mode: ChatColumnMode): number {
+  if (mode === "standard") return CHAT_WIDTH_STANDARD;
+  if (mode === "wide") return CHAT_WIDTH_WIDE;
+  if (typeof window === "undefined") return CHAT_WIDTH_WIDE;
   try {
     const raw = window.localStorage.getItem(CHAT_WIDTH_KEY);
     const n = raw === null ? NaN : Number(raw);
-    if (!Number.isFinite(n) || n <= 0) return CHAT_WIDTH_DEFAULT;
+    if (!Number.isFinite(n) || n <= 0) return CHAT_WIDTH_WIDE;
     return Math.min(CHAT_WIDTH_MAX, Math.max(CHAT_WIDTH_MIN, Math.round(n)));
   } catch {
-    return CHAT_WIDTH_DEFAULT;
+    return CHAT_WIDTH_WIDE;
   }
 }
 
@@ -235,8 +266,10 @@ function readStatusBarLocked(): boolean {
 
 interface ShellState {
   sidebarWidth: number;
-  /** 对话阅读列最大宽度（时间线与输入框共用，设置页外观区可调） */
+  /** 对话阅读列最大宽度（时间线与输入框共用）—— 由 chatColumnMode 派生的实际像素 */
   chatColumnWidth: number;
+  /** 对话列宽模式：standard(768/Codex) | wide(900/超宽) | custom(滑杆自定) */
+  chatColumnMode: ChatColumnMode;
   sidebarCollapsed: boolean;
   /** 全局底栏（任务栏）高度，px。默认 28（最薄档）；拖上缘调高，双击手柄复位 */
   statusBarHeight: number;
@@ -268,6 +301,8 @@ interface ShellState {
 
   setSidebarWidth: (w: number) => void;
   setChatColumnWidth: (w: number) => void;
+  /** 切换对话列宽模式：standard/wide 落预设像素；custom 保留当前值交给滑杆 */
+  setChatColumnMode: (mode: ChatColumnMode) => void;
   /** 底栏高度（px）。拖拽过程传 persist:false 只改内存，落定后默认落盘 */
   setStatusBarHeight: (h: number, opts?: { persist?: boolean }) => void;
   /** 锁定底栏高度（默认 true） */
@@ -290,7 +325,8 @@ interface ShellState {
 
 export const useShell = create<ShellState>((set, get) => ({
   sidebarWidth: readWidth(),
-  chatColumnWidth: readChatColumnWidth(),
+  chatColumnWidth: readChatColumnWidth(readChatColumnMode()),
+  chatColumnMode: readChatColumnMode(),
   statusBarHeight: readStatusBarHeight(),
   statusBarLocked: readStatusBarLocked(),
   sidebarCollapsed: false,
@@ -326,8 +362,23 @@ export const useShell = create<ShellState>((set, get) => ({
 
   setChatColumnWidth: (w) => {
     const clamped = Math.min(CHAT_WIDTH_MAX, Math.max(CHAT_WIDTH_MIN, Math.round(w)));
-    set({ chatColumnWidth: clamped });
+    // 滑杆只在「自定义」语境下出现；任何拖动都视为离开预设档
+    set({ chatColumnWidth: clamped, chatColumnMode: "custom" });
     persistChatColumnWidth(clamped);
+    persistChatColumnMode("custom");
+  },
+
+  setChatColumnMode: (mode: ChatColumnMode) => {
+    if (mode === "custom") {
+      // 从预设切到自定义：保留当前像素值不动，滑杆从当前位置接着调
+      set({ chatColumnMode: "custom" });
+      persistChatColumnMode("custom");
+      return;
+    }
+    const w = mode === "wide" ? CHAT_WIDTH_WIDE : CHAT_WIDTH_STANDARD;
+    set({ chatColumnMode: mode, chatColumnWidth: w });
+    persistChatColumnMode(mode);
+    persistChatColumnWidth(w);
   },
 
   /** 底栏高度：拖拽中连续 set（不落盘，跟手），结束时调用方传 persist 落盘 */

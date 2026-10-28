@@ -440,7 +440,7 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           className={cn(
-            "relative rounded-2xl border bg-canvas shadow-subtle transition",
+            "relative rounded-[20px] border bg-canvas shadow-subtle transition",
             isMobile ? "p-2.5 border-line/80 shadow-xs" : "px-4 py-3 border-line",
             "focus-within:border-teal/50 focus-within:ring-2 focus-within:ring-teal/20",
             isDraggingOver && "border-teal ring-2 ring-teal/30 bg-teal-tint/10",
@@ -691,7 +691,7 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
 
           {/* 拖拽上传覆盖提示 */}
           {isDraggingOver && (
-            <div className="pointer-events-none absolute inset-0 z-50 flex flex-col items-center justify-center rounded-2xl bg-teal-tint/90 backdrop-blur-xs border-2 border-dashed border-teal text-teal">
+            <div className="pointer-events-none absolute inset-0 z-50 flex flex-col items-center justify-center rounded-[20px] bg-teal-tint/90 backdrop-blur-xs border-2 border-dashed border-teal text-teal">
               <Paperclip size={28} className="animate-bounce mb-1" />
               <span className="text-sm font-semibold">松开鼠标添加附件</span>
               <span className="text-xs opacity-75">支持图片、源代码与各类文档</span>
@@ -816,7 +816,7 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
                   disabled={!draft.trim() && attachments.length === 0}
                   aria-label="发送"
                   title="发送 · Enter"
-                  className="flex shrink-0 items-center justify-center rounded-lg bg-teal text-canvas hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:bg-ink transition shadow-xs h-7 w-7 @min-[480px]:h-8 @min-[480px]:w-8"
+                  className="flex shrink-0 items-center justify-center rounded-full bg-ink text-canvas hover:opacity-90 active:scale-95 disabled:opacity-30 transition h-7 w-7 @min-[480px]:h-8 @min-[480px]:w-8"
                 >
                   <ArrowUp size={isMobile ? 14 : 16} strokeWidth={2.5} />
                 </button>

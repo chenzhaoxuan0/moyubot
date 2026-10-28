@@ -27,6 +27,7 @@
 | termux-app | 本地克隆（GPL-3.0） | 移动端终端虚拟键盘辅助按键栏形式与排布（2x7 双行网格、倒 T 方向键集群、修饰键粘滞状态机） | `prototype/src/ui/mobile/MobileVirtualKeyBar.tsx` | `C:\Users\chenziyu\project\Agent\termux-app` | 无（纯前端触控交互） |
 | GrokBot | 视觉参照 | 侧栏 bot 头像形态 | `Sidebar.tsx` `UnitRow` | 无本地克隆（仅视觉参照） | 无 |
 | Apache Maka | 本地克隆（Apache-2.0，ASF 孵化中；**2026-10 引入的后期架构参照**，不在起步四家之列） | 对话账本归 host、对话谱系与分叉 | `backend/src/runtime/host.ts` `backend/src/store/db.ts` `prototype/src/core/events.ts` `prototype/src/ui/forkHistory.ts` | `C:\Users\chenziyu\project\Agent\maka` | `core/events.ts` RuntimeEvent union + `store/db.ts` 账本 seq 与血缘三列 + `session.events.since` 账本读通道 |
+| Codex 桌面版排版真值 | 数值参照（**只采测量数值，零代码复制**；经 Suk1u/codex-clone 拆解产出，codex-ui-kit@0.1.2 MIT 对账确认；Suk1u 仓库本身无许可证，协议备注见 docs/28） | 对话页排版体系：14/22 正文档、单色标题阶梯、轮次间距 12/34px、气泡、行内代码、过程卡统一 | `prototype/src/styles.css`（text-thread）`MarkdownContent.tsx` `UserMessageBubble.tsx` `ChatViewport.tsx` 等（全清单见 docs/28） | `C:\Users\chenziyu\project\Agent\codexskin\codex-clone` | 无（纯前端视觉参数） |
 
 > 上述 git 克隆（含 WeKnora 源码）已于 2026-09-29 全量 `git pull --ff-only` 同步至各自上游 HEAD；
 > WeKnora 源码带一处本地定制（docker-compose.yml 将 neo4j 端口映射改为 17474/17687，

@@ -1,22 +1,11 @@
 import { useState } from "react";
-import { AlertTriangle, Check, ChevronDown, ChevronRight, Copy, Wrench } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Wrench } from "lucide-react";
 import type { ToolExecutionData } from "../types.ts";
 
 export function GenericToolCard({ data }: { data: ToolExecutionData }) {
   const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const brief = data.title || formatGenericInputBrief(data.input);
-
-  const copyPayload = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const textToCopy = data.output || (typeof data.input === "string" ? data.input : JSON.stringify(data.input, null, 2));
-    if (!textToCopy) return;
-    void navigator.clipboard.writeText(textToCopy).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    });
-  };
 
   return (
     <div className="overflow-hidden rounded-input border border-line bg-card">
@@ -30,15 +19,9 @@ export function GenericToolCard({ data }: { data: ToolExecutionData }) {
         <Wrench size={13} className="shrink-0 text-teal" />
         <span className="font-mono text-body-sm font-medium text-ink">{data.toolName}</span>
 
-        {brief && <span className="min-w-0 max-w-[420px] truncate font-mono text-caption text-ash">{brief}</span>}
+        {brief && <span className="min-w-0 max-w-[420px] truncate font-mono text-body-sm text-ash">{brief}</span>}
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          {data.durationMs !== undefined && data.durationMs > 0 && (
-            <span className="font-mono text-[10px] text-ash">
-              {data.durationMs < 1000 ? `${data.durationMs}ms` : `${(data.durationMs / 1000).toFixed(1)}s`}
-            </span>
-          )}
-
           {data.completed ? (
             data.ok !== false ? (
               <span className="flex items-center gap-1 text-[11px] text-gain">
@@ -57,15 +40,6 @@ export function GenericToolCard({ data }: { data: ToolExecutionData }) {
               <span>执行中</span>
             </span>
           )}
-
-          <button
-            type="button"
-            onClick={copyPayload}
-            title={copied ? "已复制" : "复制结果"}
-            className="rounded p-1 text-ash hover:bg-line-soft hover:text-ink cursor-pointer"
-          >
-            {copied ? <Check size={12} className="text-gain" /> : <Copy size={12} />}
-          </button>
 
           {expanded ? <ChevronDown size={12} className="text-ash" /> : <ChevronRight size={12} className="text-ash" />}
         </div>

@@ -1,25 +1,15 @@
 import { useState } from "react";
-import { AlertTriangle, Check, ChevronDown, ChevronRight, Copy, Terminal } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Terminal } from "lucide-react";
 import { cn } from "../../cn.ts";
 import type { ToolExecutionData } from "../types.ts";
 
 export function BashToolCard({ data }: { data: ToolExecutionData }) {
   const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   const command = extractCommand(data.input);
   const cwd = extractCwd(data.input) || data.cwd;
   const isRunning = !data.completed;
   const isFailed = data.completed && data.ok === false;
-
-  const copyCommand = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!command) return;
-    void navigator.clipboard.writeText(command).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    });
-  };
 
   return (
     <div className="overflow-hidden rounded-input border border-line bg-card">
@@ -35,27 +25,12 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
         <span className="text-body-sm font-medium text-ink">终端命令</span>
 
         {command && (
-          <span className="min-w-0 max-w-[400px] truncate font-mono text-caption text-ash">
+          <span className="min-w-0 max-w-[400px] truncate font-mono text-body-sm text-ash">
             $ {command}
           </span>
         )}
 
-        {cwd && (
-          <span
-            className="hidden sm:inline-block max-w-[140px] truncate rounded bg-line-soft px-1.5 py-0.5 font-mono text-[10px] text-ash"
-            title={`工作目录: ${cwd}`}
-          >
-            {cwd.replace(/^[a-zA-Z]:[/\\]/, "")}
-          </span>
-        )}
-
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          {data.durationMs !== undefined && data.durationMs > 0 && (
-            <span className="font-mono text-[10px] text-ash">
-              {data.durationMs < 1000 ? `${data.durationMs}ms` : `${(data.durationMs / 1000).toFixed(1)}s`}
-            </span>
-          )}
-
           {isRunning ? (
             <span className="flex items-center gap-1 text-[11px] text-teal">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal" />
@@ -69,19 +44,8 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
           ) : (
             <span className="flex items-center gap-1 text-[11px] text-gain">
               <Check size={12} />
-              <span>完成</span>
+              <span>exit 0</span>
             </span>
-          )}
-
-          {command && (
-            <button
-              type="button"
-              onClick={copyCommand}
-              title={copied ? "已复制命令" : "复制命令"}
-              className="rounded p-1 text-ash hover:bg-line-soft hover:text-ink cursor-pointer"
-            >
-              {copied ? <Check size={12} className="text-gain" /> : <Copy size={12} />}
-            </button>
           )}
 
           {expanded ? <ChevronDown size={12} className="text-ash" /> : <ChevronRight size={12} className="text-ash" />}
@@ -91,6 +55,11 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
       {/* 展开的输出明细 */}
       {expanded && (
         <div className="border-t border-line/60 bg-rail/30 p-3 font-mono text-[12px] leading-[1.65] space-y-2">
+          {cwd && (
+            <div className="text-[10px] text-ash truncate" title={`工作目录: ${cwd}`}>
+              cwd: {cwd}
+            </div>
+          )}
           {command && (
             <div>
               <div className="text-[10px] text-ash mb-1">执行命令</div>

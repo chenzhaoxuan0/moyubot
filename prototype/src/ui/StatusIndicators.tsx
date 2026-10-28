@@ -79,7 +79,7 @@ export function SessionLightLegendBadge({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
                     <span className="font-medium text-ink">任务执行中</span>
-                    <span className="rounded bg-blue-50 px-1 py-0.2 text-[10px] text-blue-600 dark:bg-blue-950 dark:text-blue-300">
+                    <span className="rounded bg-blue-500/10 px-1 py-0.2 text-[10px] text-blue-500">
                       蓝灯呼吸
                     </span>
                   </div>
@@ -95,7 +95,7 @@ export function SessionLightLegendBadge({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
                     <span className="font-medium text-ink">新结果未读</span>
-                    <span className="rounded bg-emerald-50 px-1 py-0.2 text-[10px] text-emerald-600 dark:bg-emerald-950 dark:text-emerald-300">
+                    <span className="rounded bg-emerald-500/10 px-1 py-0.2 text-[10px] text-emerald-500">
                       绿灯常亮
                     </span>
                   </div>
@@ -111,7 +111,7 @@ export function SessionLightLegendBadge({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
                     <span className="font-medium text-ink">空闲在线</span>
-                    <span className="rounded bg-sky-50 px-1 py-0.2 text-[10px] text-sky-600 dark:bg-sky-950 dark:text-sky-300">
+                    <span className="rounded bg-sky-500/10 px-1 py-0.2 text-[10px] text-sky-500">
                       浅蓝静态
                     </span>
                   </div>
@@ -127,7 +127,7 @@ export function SessionLightLegendBadge({
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
                     <span className="font-medium text-ink">执行失败 / 异常</span>
-                    <span className="rounded bg-rose-50 px-1 py-0.2 text-[10px] text-rose-600 dark:bg-rose-950 dark:text-rose-300">
+                    <span className="rounded bg-rose-500/10 px-1 py-0.2 text-[10px] text-rose-500">
                       红灯常亮
                     </span>
                   </div>
@@ -218,7 +218,7 @@ export function WorkPhaseBadge({ popoverUp = false, align = "right" }: { popover
       >
         <span
           className={cn(
-            forceBusy || manual === "busy" ? "font-medium text-amber-700 dark:text-amber-400" : "text-graphite",
+            forceBusy || manual === "busy" ? "font-medium text-amber-600" : "text-graphite",
           )}
         >
           {label}

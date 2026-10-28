@@ -45,7 +45,7 @@ export function ContextInjectionCard({
             <div key={idx} className="flex items-center justify-between text-graphite px-1">
               <span className="flex items-center gap-1.5">
                 {part.scope === "standing" ? (
-                  <ShieldCheck size={11} className="text-amber-500" />
+                  <ShieldCheck size={11} className="text-graphite" />
                 ) : (
                   <BookOpen size={11} className="text-ash" />
                 )}

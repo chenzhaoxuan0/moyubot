@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Code2, Copy, FileCode, FolderOpen } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Code2, FileCode, FolderOpen } from "lucide-react";
 import { openInEditor } from "../../../adapters/daemon/client.ts";
 import { cn } from "../../cn.ts";
 import { highlightCode, type CodeTokenLines } from "../../shikiHighlighter.ts";
@@ -8,7 +8,6 @@ import type { ToolExecutionData } from "../types.ts";
 
 export function FileDiffToolCard({ data }: { data: ToolExecutionData }) {
   const [expanded, setExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
   const appearance = useAppearance((s) => s.resolvedAppearance);
 
   const { filePath, additions, deletions, diffLines } = useMemo(() => parseDiffPayload(data), [data]);
@@ -42,15 +41,6 @@ export function FileDiffToolCard({ data }: { data: ToolExecutionData }) {
       alive = false;
     };
   }, [expanded, lang, oldCode, newCode, appearance]);
-
-  const copyPath = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!filePath) return;
-    void navigator.clipboard.writeText(filePath).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    });
-  };
 
   const openCode = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -104,14 +94,6 @@ export function FileDiffToolCard({ data }: { data: ToolExecutionData }) {
                 className="rounded p-1 text-ash hover:bg-line-soft hover:text-ink cursor-pointer"
               >
                 <FolderOpen size={12} />
-              </button>
-              <button
-                type="button"
-                onClick={copyPath}
-                title={copied ? "已复制路径" : "复制文件路径"}
-                className="rounded p-1 text-ash hover:bg-line-soft hover:text-ink cursor-pointer"
-              >
-                {copied ? <Check size={12} className="text-gain" /> : <Copy size={12} />}
               </button>
             </>
           )}

@@ -21,7 +21,7 @@ export function SearchToolCard({ data }: { data: ToolExecutionData }) {
         <span className="font-mono text-body-sm font-medium text-ink">联网检索</span>
 
         {query && (
-          <span className="min-w-0 max-w-[420px] truncate font-mono text-caption text-ash">
+          <span className="min-w-0 max-w-[420px] truncate font-mono text-body-sm text-ash">
             "{query}"
           </span>
         )}

@@ -138,7 +138,7 @@ export function ImagePreviewModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/80 backdrop-blur-sm p-4 animate-in fade-in duration-150 select-none"
       onClick={onClose}
     >
       <div
@@ -179,7 +179,7 @@ export function ImagePreviewModal({
         </div>
 
         {/* 图片主体 */}
-        <div className="flex max-h-[calc(90vh-50px)] max-w-full items-center justify-center p-3 overflow-auto bg-black/40">
+        <div className="flex max-h-[calc(90vh-50px)] max-w-full items-center justify-center p-3 overflow-auto bg-ink/40">
           <img
             src={imgSrc}
             alt={attachment.name}

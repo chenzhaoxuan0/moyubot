@@ -24,7 +24,7 @@ export function DeliverablesSummaryCard({
         {files.map((f, i) => (
           <div
             key={i}
-            className="flex items-center gap-1.5 rounded-btn border border-line bg-card px-2.5 py-1 text-caption font-mono hover:border-teal/50 transition group"
+            className="flex items-center gap-1.5 rounded-btn border border-line bg-card px-2.5 py-1 text-body-sm font-mono hover:border-teal/50 transition group"
           >
             <span className="truncate max-w-[220px] text-ink" title={f.path}>
               {f.path.split(/[\\/]/).pop()}

@@ -100,7 +100,6 @@ export function UserMessageBubble({
   origin,
   isLatestUserTurn,
   busy,
-  at,
 }: {
   text: string;
   attachments?: readonly ChatAttachment[];
@@ -113,8 +112,6 @@ export function UserMessageBubble({
   /** 时间线最后一条用户消息 */
   isLatestUserTurn: boolean;
   busy: boolean;
-  /** 发送时间戳 */
-  at?: number;
 }) {
   const parsed = parseSlashCommand(text);
   const [editing, setEditing] = useState(false);
@@ -197,7 +194,7 @@ export function UserMessageBubble({
               onClick={submitEdit}
               disabled={editDraft.trim() === ""}
               title="重发（Enter）"
-              className="flex shrink-0 cursor-pointer items-center rounded-btn bg-teal p-1.5 text-canvas transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              className="flex shrink-0 cursor-pointer items-center justify-center rounded-full bg-ink p-1.5 text-canvas transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
               <ArrowUp size={12} />
             </button>
@@ -215,22 +212,13 @@ export function UserMessageBubble({
     });
   };
 
-  const timeLabel = at
-    ? new Date(at).toLocaleTimeString("zh-CN", {
-        hour12: false,
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      })
-    : null;
-
   const recallEntry = isLatestUserTurn ? (
     <button
       onClick={handleRecall}
       disabled={!canRecall}
       aria-label="撤回消息"
       title={canRecall ? "撤回此消息：中止执行并将内容退回输入框重新编辑" : "正在发送中，稍候可撤回"}
-      className="flex shrink-0 cursor-pointer items-center rounded-btn p-1 text-ash opacity-60 transition hover:bg-line-soft hover:text-ink group-hover/user:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+      className="flex shrink-0 cursor-pointer items-center rounded-btn p-1 text-ash transition hover:bg-line-soft hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
     >
       <Undo2 size={12} />
     </button>
@@ -242,19 +230,16 @@ export function UserMessageBubble({
       disabled={!canEdit}
       aria-label="编辑重发"
       title={canEdit ? editTitle : disabledTitle}
-      className="flex shrink-0 cursor-pointer items-center rounded-btn p-1 text-ash opacity-60 transition hover:bg-line-soft hover:text-ink group-hover/user:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+      className="flex shrink-0 cursor-pointer items-center rounded-btn p-1 text-ash transition hover:bg-line-soft hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
     >
       <PencilLine size={12} />
     </button>
   );
 
+  /* Codex 逻辑：用户气泡不带任何常显元信息（时间戳也不显示）；
+     撤回/编辑/复制是本项目功能件 —— 完全隐藏，悬停气泡才浮现 */
   const actionEntries = (
-    <div className="flex shrink-0 items-center gap-1 opacity-60 transition group-hover/user:opacity-100">
-      {timeLabel && (
-        <span className="font-mono text-[11px] text-ash select-none mr-0.5">
-          {timeLabel}
-        </span>
-      )}
+    <div className="flex shrink-0 items-center gap-1 opacity-0 transition group-hover/user:opacity-100">
       {recallEntry}
       {editEntry}
       <button
@@ -272,7 +257,7 @@ export function UserMessageBubble({
     return (
       <div data-turn-id={messageId} className="group/user flex items-end justify-end gap-1.5 pt-[22px]">
         {actionEntries}
-        <div className="flex min-w-0 max-w-[80%] flex-col items-end gap-1.5">
+        <div className="flex min-w-0 max-w-[78%] flex-col items-end gap-1.5">
           {attachments && attachments.length > 0 && (
             <AttachmentsBar attachments={[...attachments]} readOnly />
           )}
@@ -300,7 +285,7 @@ export function UserMessageBubble({
   return (
     <div data-turn-id={messageId} className="group/user flex items-end justify-end gap-1.5 pt-[22px]">
       {actionEntries}
-      <div className="flex min-w-0 max-w-[80%] flex-col items-end gap-1.5">
+      <div className="flex min-w-0 max-w-[78%] flex-col items-end gap-1.5">
         {/* 定时代发徽标（docs/23）：气泡上方一枚小 pill —— 这条不是用户亲手
             发的，是定时任务到点投进来的；字段随事件进账本，回放同样可见 */}
         {origin === "automation" && (

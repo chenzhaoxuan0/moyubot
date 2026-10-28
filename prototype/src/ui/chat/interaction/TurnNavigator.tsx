@@ -38,7 +38,7 @@ export function TurnNavigator({
   return (
     <nav
       aria-label="对话轮次导航"
-      className="hidden @min-[768px]:flex fixed right-4 top-1/2 -translate-y-1/2 z-20 flex-col items-end gap-1.5 py-2 px-1 rounded-full bg-card/75 backdrop-blur-md border border-line/60 shadow-subtle transition-opacity duration-200"
+      className="hidden @min-[768px]:flex fixed right-4 top-1/2 -translate-y-1/2 z-20 flex-col items-end gap-1.5 py-2 px-1 rounded-full bg-card/75 backdrop-blur-md border border-line/60 shadow-subtle opacity-25 hover:opacity-100 transition-opacity duration-200"
     >
       <div className="px-1.5 py-0.5 text-[9px] font-mono text-ash/80 uppercase select-none">
         Turns

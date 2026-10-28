@@ -3,45 +3,28 @@ import { Check, Copy, GitBranch, Timer } from "lucide-react";
 import { MarkdownContent } from "../../MarkdownContent.tsx";
 import { useWorkbench } from "../../../store/useWorkbench.ts";
 
-const clock = (at: number) =>
-  new Date(at).toLocaleTimeString("zh-CN", {
-    hour12: false,
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-
-function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const sec = Math.round(ms / 100) / 10;
-  if (sec < 60) return `${sec}s`;
-  const min = Math.floor(sec / 60);
-  const remSec = Math.round(sec % 60);
-  return `${min}分${remSec}秒`;
-}
-
 export function AssistantMessageBlock({
   text,
-  at,
   messageId,
   sessionId,
   streaming = false,
-  usage,
   busy,
   turnStartedAt,
-  durationMs,
+  variant = "final",
 }: {
   text: string;
-  at: number;
   /** daemon 侧的助手消息 id —— 分叉锚点（resolveForkAtSeq 按它定位轮边界） */
   messageId: string;
   sessionId: string;
   streaming?: boolean;
-  /** 本轮用量（groupTimelineEvents 把 usage 事件并入这里；缺省不渲染右侧 meta） */
-  usage?: { model: string; inputTokens: number; outputTokens: number };
   busy: boolean;
   turnStartedAt?: number;
-  durationMs?: number;
+  /**
+   * final = 落定回复（meta 行：流式秒表 + 悬停浮现的分叉/复制；无时间戳/落定耗时/模型名）；
+   * process = 工作组里的中间叙述（Codex 逻辑：过程文本就是纯文本，
+   * 不带任何元信息行——时间、耗时、分叉、复制、执行器全部不出现）。
+   */
+  variant?: "final" | "process";
 }) {
   const startFork = useWorkbench((s) => s.startFork);
   const sourceStatus = useWorkbench((s) => s.sessions.find((x) => String(x.id) === sessionId)?.status);
@@ -61,11 +44,11 @@ export function AssistantMessageBlock({
     return () => clearInterval(interval);
   }, [isActuallyLive, turnStartedAt]);
 
+  // Codex 逻辑：耗时属于思考行（"思考了 N 秒"），落定回复不挂耗时；
+  // 这里只在流式期间保留实时秒表作为"仍在干活"的反馈
   const displayDuration = isActuallyLive
     ? (liveSec > 0 ? `已执行 ${liveSec}秒` : "执行中…")
-    : durationMs !== undefined && durationMs > 0
-      ? `耗时 ${formatDuration(durationMs)}`
-      : null;
+    : null;
 
   // idle 门禁（ADR 0013 不变量 6）：本轮流式中 / 源段 running/awaiting_* 时禁止分叉
   const blocked =
@@ -100,24 +83,28 @@ export function AssistantMessageBlock({
       <div>
         <MarkdownContent content={text} streaming={streaming} />
 
-        {/* 底部 meta 行：左 = 流式点 + 时间 + 分叉 + 复制；右 = 执行器模型名 */}
-        <div className="mt-2 flex items-center gap-2.5 text-caption text-ash select-none">
+        {/* meta 行只属于落定回复（Codex 逻辑）：流式中 = 脉冲点 + 实时秒表；
+            落定后只剩悬停浮现的分叉/复制；时间戳、落定耗时、模型名一律不显示 */}
+        {variant === "final" && (
+        <div className="mt-1.5 flex items-center gap-2.5 text-caption text-ash select-none">
           {streaming && (
-            <span
-              className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-teal"
-              aria-label="生成中"
-            />
+            <>
+              <span
+                className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-teal"
+                aria-label="生成中"
+              />
+              {displayDuration && (
+                <span
+                  className="flex shrink-0 items-center gap-1 font-mono text-[11px] text-ash/90"
+                  title="正在执行中"
+                >
+                  <Timer size={11} className="animate-spin text-teal" />
+                  <span>{displayDuration}</span>
+                </span>
+              )}
+            </>
           )}
-          <span className="tnum shrink-0">{clock(at)}</span>
-          {displayDuration && (
-            <span
-              className="flex shrink-0 items-center gap-1 font-mono text-[11px] text-ash/90"
-              title={streaming ? "正在执行中" : "本轮任务总耗时"}
-            >
-              <Timer size={11} className={streaming ? "animate-spin text-teal" : "text-ash"} />
-              <span>{displayDuration}</span>
-            </span>
-          )}
+          <div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100">
           <button
             type="button"
             onClick={() => startFork({ ofSessionId: sessionId as never, anchorMessageId: messageId, kind: "branch" })}
@@ -145,12 +132,9 @@ export function AssistantMessageBlock({
           >
             {copied ? <Check size={12} className="text-gain" /> : <Copy size={12} />}
           </button>
-          {usage !== undefined && (
-            <span className="ml-auto flex min-w-0 shrink-0 items-center font-mono" title={`本轮由 ${usage.model} 执行`}>
-              <span className="truncate">{usage.model}</span>
-            </span>
-          )}
+          </div>
         </div>
+        )}
       </div>
     </div>
   );

@@ -192,7 +192,7 @@ export function PermissionRow({
           <button
             type="button"
             onClick={() => resolve(requestId, "allow")}
-            className="cursor-pointer rounded px-2 py-0.5 text-xs font-medium bg-teal text-white hover:bg-teal/90 transition shadow-xs"
+            className="cursor-pointer rounded px-2 py-0.5 text-xs font-medium bg-teal text-on-accent hover:bg-teal/90 transition shadow-xs"
           >
             允许
           </button>
@@ -211,7 +211,6 @@ export function PermissionRow({
 
 export function SystemNoticeRow({
   event,
-  at,
 }: {
   event: {
     title: string;
@@ -219,7 +218,6 @@ export function SystemNoticeRow({
     level?: "info" | "success" | "warn";
     meta?: Readonly<Record<string, string>>;
   };
-  at: number;
 }) {
   const isSuccess = event.level === "success";
   const isWarn = event.level === "warn";
@@ -227,25 +225,19 @@ export function SystemNoticeRow({
   return (
     <div
       className={cn(
-        "rounded-card border p-3.5 shadow-xs transition animate-in fade-in slide-in-from-bottom-1 duration-150",
-        isSuccess
-          ? "border-teal/30 bg-teal-tint/20 text-ink"
-          : isWarn
-            ? "border-amber-500/30 bg-amber-500/10 text-ink"
-            : "border-line bg-line-soft/80 text-ink",
+        "rounded-input border border-line bg-line-soft/60 p-3.5 transition animate-in fade-in slide-in-from-bottom-1 duration-150 text-ink",
       )}
     >
       <div className="flex items-center gap-2">
         <div
           className={cn(
             "flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-xs font-bold",
-            isSuccess ? "bg-teal text-canvas" : isWarn ? "bg-amber-600 text-white" : "bg-ink text-canvas",
+            isSuccess ? "bg-gain text-on-accent" : "bg-ink text-canvas",
           )}
         >
           ⚡
         </div>
         <span className="font-semibold text-body-sm text-ink">{event.title}</span>
-        <span className="ml-auto font-mono text-[10px] text-ash">{clock(at)}</span>
       </div>
 
       <div className="mt-2 text-body-sm text-graphite whitespace-pre-wrap leading-relaxed font-normal">
@@ -297,9 +289,9 @@ export function SubagentFinishedRow({ summary }: { summary?: string }) {
 
 export function UsageFallbackRow({ model }: { model: string }) {
   return (
-    <div className="flex items-center gap-2 pl-1 text-caption text-ash">
+    <div className="flex items-center gap-2 pl-1 text-caption text-ash" title={`本轮用量数据缺失（执行器 ${model} 未上报）`}>
       <Wallet size={12} />
-      <span className="font-mono">{model}</span>
+      <span>本轮用量数据缺失</span>
     </div>
   );
 }

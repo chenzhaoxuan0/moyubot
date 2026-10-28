@@ -776,7 +776,7 @@ function CustomPromptEditor({
             {isSubstantive ? `已配置 · 首轮注入 (${draft.trim().length}字)` : "留空（0 注入）"}
           </span>
           {dirty && (
-            <span className="rounded-chip bg-amber-500/15 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 text-[10px] font-medium leading-none">
+            <span className="rounded-chip bg-amber-500/15 text-amber-600 px-1.5 py-0.5 text-[10px] font-medium leading-none">
               未保存
             </span>
           )}
@@ -930,7 +930,7 @@ function EditorShell({
             </span>
           )}
           {dirty && (
-            <span className="rounded-chip bg-amber-500/15 text-amber-600 dark:text-amber-400 px-1.5 py-0.5 text-[10px] font-medium leading-none">
+            <span className="rounded-chip bg-amber-500/15 text-amber-600 px-1.5 py-0.5 text-[10px] font-medium leading-none">
               未保存
             </span>
           )}

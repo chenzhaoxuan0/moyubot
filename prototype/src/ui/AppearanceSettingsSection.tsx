@@ -260,7 +260,9 @@ export function AppearanceSettingsSection() {
   const setStatusBarLocked = useShellState((s) => s.setStatusBarLocked);
 
   const chatColumnWidth = useShellState((s) => s.chatColumnWidth);
+  const chatColumnMode = useShellState((s) => s.chatColumnMode);
   const setChatColumnWidth = useShellState((s) => s.setChatColumnWidth);
+  const setChatColumnMode = useShellState((s) => s.setChatColumnMode);
 
   const { mode, resolvedAppearance, activeProfile, art, wallpaper, logo, presetId } = store;
   const followsTheme = activeProfile.transparency === null;
@@ -904,30 +906,49 @@ export function AppearanceSettingsSection() {
           <div className="mt-2 sm:col-span-2">
             <p
               className="mb-2 text-body-sm text-ink"
-              title="时间线阅读列与输入框共用的最大宽度（默认 900 ≈ ZCode）。用户气泡最宽跟列同宽，调宽即变宽。"
+              title="时间线阅读列与输入框共用的最大宽度。标准档取 Codex 真值 768px，超宽档为本项目旧默认 900px。"
             >
               对话列宽
             </p>
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={640}
-                max={1440}
-                step={40}
-                value={chatColumnWidth}
-                onChange={(e) => setChatColumnWidth(Number(e.target.value))}
-                className="flex-1 accent-teal"
-                aria-label="对话列宽（像素）"
-              />
-              <span className="tnum w-14 shrink-0 text-right text-caption text-graphite">{chatColumnWidth}px</span>
-              <button
-                type="button"
-                onClick={() => setChatColumnWidth(900)}
-                className="shrink-0 rounded-btn border border-line px-2 py-0.5 text-caption text-graphite hover:bg-surface-hover hover:text-ink"
-              >
-                默认
-              </button>
+            <div className="flex gap-2">
+              {([
+                { id: "standard", label: "标准 · 768", hint: "Codex 阅读档" },
+                { id: "wide", label: "超宽 · 900", hint: "旧默认" },
+                { id: "custom", label: "自定义", hint: `${chatColumnWidth}px` },
+              ] as const).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setChatColumnMode(opt.id)}
+                  aria-pressed={chatColumnMode === opt.id}
+                  className={cn(
+                    "rounded-btn border px-3 py-1 text-body-sm transition",
+                    chatColumnMode === opt.id
+                      ? "border-teal-edge bg-teal-tint font-medium text-teal"
+                      : "border-line text-graphite hover:bg-surface-hover hover:text-ink",
+                  )}
+                >
+                  {opt.label}
+                  <span className="ml-1.5 text-[10px] text-ash">{opt.hint}</span>
+                </button>
+              ))}
             </div>
+            {/* 自定义档才出滑杆：预设档的宽度由常量锁定，不允许半预设半拖动 */}
+            {chatColumnMode === "custom" && (
+              <div className="mt-2 flex items-center gap-3">
+                <input
+                  type="range"
+                  min={640}
+                  max={1440}
+                  step={40}
+                  value={chatColumnWidth}
+                  onChange={(e) => setChatColumnWidth(Number(e.target.value))}
+                  className="flex-1 accent-teal"
+                  aria-label="对话列宽（像素）"
+                />
+                <span className="tnum w-14 shrink-0 text-right text-caption text-graphite">{chatColumnWidth}px</span>
+              </div>
+            )}
           </div>
           <SliderField
             label="表面不透明度 opacity"

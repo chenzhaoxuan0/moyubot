@@ -203,7 +203,7 @@ export function ChatViewport({
       <div
         style={{ maxWidth: chatColumnWidth }}
         className={cn(
-          "mx-auto w-full px-4 py-6 @min-[560px]:px-6 @min-[720px]:px-8 @min-[720px]:py-8",
+          "mx-auto w-full px-4 py-6 @min-[560px]:px-6 @min-[720px]:px-8 @min-[720px]:pt-[33px] @min-[720px]:pb-8",
         )}
       >
         {/* 沉淀单元区域 */}
@@ -392,13 +392,15 @@ function WorkGroupRow({
   }, [entries]);
 
   return (
-    <div className="rounded-input border border-line/70 bg-rail/15 px-3 py-2 transition">
+    /* Codex 披露行形态：与思考行同语言（无边框无底色）；展开的工具明细走
+       左侧细线缩进，工具卡本身仍是卡片 */
+    <div>
       <button
         type="button"
         onClick={toggleOpen}
         aria-expanded={open}
         className={cn(
-          "flex w-full cursor-pointer items-center gap-1.5 text-left text-caption transition select-none",
+          "group flex w-full cursor-pointer items-center gap-1.5 -ml-1 rounded-btn px-1 py-1 text-left text-caption transition select-none",
           running ? "text-graphite" : "text-ash hover:text-graphite",
         )}
       >
@@ -431,7 +433,7 @@ function WorkGroupRow({
       {/* 展开的详细执行流。file.diff / deliverable 不逐条渲染——底部已聚合成
           一张交付摘要卡，逐条再画一遍是同一信息两份 */}
       {open && (
-        <div className="mt-2.5 space-y-2 border-l border-line/70 pl-3">
+        <div className="mt-1.5 ml-[18px] space-y-2 border-l border-line/70 pl-3">
           {entries
             .filter((e) => e.kind !== "file.diff" && e.kind !== "deliverable")
             .map((e) => (
@@ -440,6 +442,7 @@ function WorkGroupRow({
                 item={e}
                 busy={busy}
                 lastUserTurnId={lastUserTurnId}
+                process
               />
             ))}
 
@@ -461,10 +464,13 @@ function SingleItemRow({
   item,
   busy,
   lastUserTurnId,
+  process = false,
 }: {
   item: GroupedItem;
   busy: boolean;
   lastUserTurnId: string | number | undefined;
+  /** 工作组内的过程语境：中间叙述不渲染 meta 行（Codex 逻辑） */
+  process?: boolean;
 }) {
   switch (item.kind) {
     case "session.start":
@@ -489,7 +495,6 @@ function SingleItemRow({
           origin={typeof item.data.origin === "string" ? item.data.origin : undefined}
           isLatestUserTurn={item.id === lastUserTurnId}
           busy={busy}
-          at={item.at}
         />
       );
 
@@ -503,14 +508,12 @@ function SingleItemRow({
       return (
         <AssistantMessageBlock
           text={item.data.text}
-          at={item.at}
           messageId={typeof item.data.messageId === "string" ? item.data.messageId : ""}
           sessionId={typeof item.data.sessionId === "string" ? item.data.sessionId : ""}
           streaming={item.data.streaming === true}
-          usage={item.data.usage}
           busy={busy}
           turnStartedAt={item.data.turnStartedAt}
-          durationMs={item.data.durationMs}
+          variant={process ? "process" : "final"}
         />
       );
 
@@ -565,7 +568,7 @@ function SingleItemRow({
       return <ErrorRow message={item.data.message} />;
 
     case "system.notice":
-      return <SystemNoticeRow event={item.data} at={item.at} />;
+      return <SystemNoticeRow event={item.data} />;
 
     default:
       return null;
