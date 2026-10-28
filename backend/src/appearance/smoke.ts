@@ -167,13 +167,20 @@ try {
   const emptyThemes = await listThemes(home);
   check("初始状态无自定义主题", emptyThemes.length === 0);
 
+  // 最小可用档案：listThemes 的 looksLikeProfileSide 要求至少一侧带非空 palette
+  //（此前这里给空对象，列表检查一直是 FAIL——smoke 是手动脚本，坏了一段没被发现）
+  const smokeProfile = {
+    palette: { background: "#0d0d12", accent: "#00e5ff", text: "#e8e8f0" },
+    surface: { radius: 12 },
+    transparency: null,
+  };
   const customPreset = {
     id: "neon-cyber",
     name: "赛博霓虹",
     desc: "高对比暗夜荧光",
     mode: "dark" as const,
-    light: {},
-    dark: {},
+    light: smokeProfile,
+    dark: smokeProfile,
     defaultChatStyle: "glass",
   };
   const savedTheme = await saveTheme(home, customPreset);
@@ -187,6 +194,20 @@ try {
 
   const afterDelete = await listThemes(home);
   check("删除后主题列表归零", afterDelete.length === 0);
+
+  // 7b. 内置主题 override（选中即编辑模型）：saveTheme 允许内置 id，同 id 覆盖写
+  //     themes/<id>.json；前端 allPresets 把它合并进内置卡片并标「已修改」，
+  //     deleteTheme 删掉该文件即「恢复初始」
+  const builtinOverride = { ...customPreset, id: "parchment", name: "温润羊皮纸（已改）" };
+  const savedOverride = await saveTheme(home, builtinOverride);
+  check("内置 id 的 override 可保存（不再被保留字拒绝）", savedOverride.id === "parchment");
+  const listedOverride = await listThemes(home);
+  check(
+    "override 出现在主题列表（builtin:false，前端负责合并进内置卡片）",
+    listedOverride.length === 1 && listedOverride[0]?.id === "parchment" && listedOverride[0]?.builtin === false,
+  );
+  const deletedOverride = await deleteTheme(home, "parchment");
+  check("删除 override 文件即恢复初始", deletedOverride === true && (await listThemes(home)).length === 0);
 } finally {
   await rm(home, { recursive: true, force: true });
 }

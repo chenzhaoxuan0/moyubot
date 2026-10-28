@@ -16,6 +16,7 @@ import {
   Download,
   Trash2,
   Plus,
+  Pencil,
   Smartphone,
   Laptop,
   PanelBottom,
@@ -30,7 +31,6 @@ import { useLayoutStore } from "./mobile/useIsMobile.ts";
 import { useShell as useShellState } from "../store/useShell.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import {
-  APPEARANCE_PRESETS,
   contrastRatio,
   DEFAULT_TRANSPARENCY,
   WALLPAPER_DEFAULT_TRANSPARENCY,
@@ -238,9 +238,9 @@ const PALETTE_FIELDS: readonly { key: PaletteKey; label: string; hint: string }[
   { key: "accentAlt", label: "强调次色 accentAlt", hint: "强调色悬停态" },
   { key: "secondary", label: "次要 secondary", hint: "终端蓝系" },
   { key: "highlight", label: "高亮 highlight", hint: "终端品红系" },
-  { key: "text", label: "正文 text", hint: "主文字" },
   { key: "muted", label: "弱化 muted", hint: "次级文字" },
   { key: "line", label: "线条 line", hint: "发丝线与边框" },
+  { key: "glass", label: "玻璃 glass", hint: "液态玻璃卡片底色" },
 ];
 
 export function AppearanceSettingsSection() {
@@ -256,6 +256,9 @@ export function AppearanceSettingsSection() {
   const [newThemeDesc, setNewThemeDesc] = useState("");
   const [newThemeError, setNewThemeError] = useState<string | null>(null);
   const [savingTheme, setSavingTheme] = useState(false);
+  /** 正在 inline 改名的主题卡片 id（自定义主题专属） */
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
 
   const layoutPref = useLayoutStore((s) => s.preference);
   const setLayoutPref = useLayoutStore((s) => s.setPreference);
@@ -297,7 +300,8 @@ export function AppearanceSettingsSection() {
     }
   };
 
-  const textContrast = contrastRatio(activeProfile.palette.text, activeProfile.palette.background);
+  // 正文对比度按全局文字色（ink）算——它才是真正落到 --color-ink 的值
+  const textContrast = contrastRatio(store.ink[resolvedAppearance], activeProfile.palette.background);
   const mutedContrast = contrastRatio(activeProfile.palette.muted, activeProfile.palette.background);
 
   /**
@@ -320,7 +324,7 @@ export function AppearanceSettingsSection() {
       <SectionCard
         icon={<Palette size={16} />}
         title="预设主题"
-        desc="一键换十组配色。所有自定义预设均以独立 JSON 文件存放在 ~/.agent-workbench/themes/ 目录下，方便 Agent 随时直接读取或修改定制。"
+        desc="一键切换完整外观档案（配色 / 表面 / 透明度）。选中主题后在外观设置里的每次修改都会自动保存回该主题：内置主题改过会标「已修改」并可一键恢复初始，自定义主题可改名、可删除。所有主题以独立 JSON 文件存放在 ~/.agent-workbench/themes/，Agent 可直接读取或修改。"
         action={
           <button
             type="button"
@@ -330,20 +334,20 @@ export function AppearanceSettingsSection() {
               setNewThemeError(null);
               setNewThemeOpen(true);
             }}
-            className="flex shrink-0 items-center gap-1.5 rounded-btn bg-teal px-2.5 py-1 text-caption font-medium text-canvas hover:bg-teal-hover transition cursor-pointer"
+            className="flex shrink-0 items-center gap-1.5 rounded-btn bg-teal px-2.5 py-1 text-caption font-medium text-on-accent hover:bg-teal-hover transition cursor-pointer"
           >
             <Plus size={13} strokeWidth={2.5} />
-            <span>保存当前为新预设</span>
+            <span>新建主题</span>
           </button>
         }
       >
-        {/* 新建保存主题卡片 */}
+        {/* 新建主题卡片 */}
         {newThemeOpen && (
           <div className="mb-4 rounded-card border border-teal-edge/60 bg-teal-tint/15 p-4 space-y-3">
             <div className="flex items-center justify-between">
               <span className="text-body-sm font-semibold text-ink flex items-center gap-1.5">
                 <Palette size={14} className="text-teal" />
-                保存当前调色与设置为独立预设主题
+                新建主题
               </span>
               <button
                 type="button"
@@ -354,11 +358,11 @@ export function AppearanceSettingsSection() {
               </button>
             </div>
             <p className="text-caption text-graphite">
-              主题将保存为独立 JSON 配置文件存放在 <code className="font-mono bg-canvas px-1.5 py-0.5 rounded border border-line">~/.agent-workbench/themes/&lt;id&gt;.json</code>。保存后方便让 Agent 直接阅读或批量微调。
+              新主题从<b>默认主题的出厂设置</b>起步，创建后立即选中；之后在外观设置里的每次修改（配色、表面、透明度等）都会自动保存进这个主题。主题文件存放在 <code className="font-mono bg-canvas px-1.5 py-0.5 rounded border border-line">~/.agent-workbench/themes/&lt;id&gt;.json</code>，可随时让 Agent 直接阅读或批量微调。
             </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div>
-                <label className="block text-caption text-ink font-medium mb-1">预设名称 *</label>
+                <label className="block text-caption text-ink font-medium mb-1">主题名称 *</label>
                 <input
                   type="text"
                   value={newThemeName}
@@ -397,36 +401,39 @@ export function AppearanceSettingsSection() {
                 disabled={savingTheme}
                 onClick={async () => {
                   if (!newThemeName.trim()) {
-                    setNewThemeError("请填写预设名称");
+                    setNewThemeError("请填写主题名称");
                     return;
                   }
                   setSavingTheme(true);
                   try {
-                    await store.saveAsPreset(newThemeName.trim(), newThemeDesc.trim());
+                    await store.createTheme(newThemeName.trim(), newThemeDesc.trim());
                     setNewThemeOpen(false);
                   } catch (err) {
-                    setNewThemeError(err instanceof Error ? err.message : "保存预设失败");
+                    setNewThemeError(err instanceof Error ? err.message : "创建主题失败");
                   } finally {
                     setSavingTheme(false);
                   }
                 }}
-                className="rounded-btn bg-teal px-3 py-1 text-body-sm font-medium text-canvas hover:bg-teal-hover transition cursor-pointer disabled:opacity-50"
+                className="rounded-btn bg-teal px-3 py-1 text-body-sm font-medium text-on-accent hover:bg-teal-hover transition cursor-pointer disabled:opacity-50"
               >
-                {savingTheme ? "正在保存..." : "确认保存主题"}
+                {savingTheme ? "正在创建..." : "创建主题"}
               </button>
             </div>
           </div>
         )}
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {[...APPEARANCE_PRESETS, ...(store.customPresets ?? [])].map((preset) => {
+          {store.allPresets().map((preset) => {
             const active = preset.id === presetId;
             const swatchProfile = preset.mode === "auto" ? preset.light : preset[preset.mode];
             const swatches = swatchProfile?.palette ?? activeProfile.palette;
+            const renaming = renamingId === preset.id;
             return (
               <div
                 key={preset.id}
-                onClick={() => store.applyPreset(preset)}
+                onClick={() => {
+                  if (!renaming) store.applyPreset(preset);
+                }}
                 className={cn(
                   "group relative rounded-card border p-3 text-left transition cursor-pointer",
                   active
@@ -443,37 +450,98 @@ export function AppearanceSettingsSection() {
                 </div>
                 <div className="flex items-center justify-between">
                   <div className="min-w-0 pr-1">
-                    <span
-                      className="block truncate text-body-sm font-medium text-ink"
-                      title={`${preset.desc || preset.name}${preset.filePath ? ` · ${preset.filePath}` : ""}`}
-                    >
-                      {preset.name}
-                    </span>
-                    {!preset.builtin && (
-                      <span className="inline-block text-[10px] text-teal font-medium">
-                        自定义
+                    {renaming ? (
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            const name = renameDraft.trim();
+                            setRenamingId(null);
+                            if (name) void store.renameTheme(preset.id, name);
+                          } else if (e.key === "Escape") {
+                            e.preventDefault();
+                            setRenamingId(null);
+                          }
+                        }}
+                        onBlur={() => {
+                          const name = renameDraft.trim();
+                          setRenamingId(null);
+                          if (name && name !== preset.name) void store.renameTheme(preset.id, name);
+                        }}
+                        aria-label={`重命名主题 ${preset.name}`}
+                        className="w-full rounded-input border border-teal bg-canvas px-1.5 py-0.5 text-body-sm text-ink outline-none"
+                      />
+                    ) : (
+                      <span
+                        className="block truncate text-body-sm font-medium text-ink"
+                        title={`${preset.desc || preset.name}${preset.filePath ? ` · ${preset.filePath}` : ""}`}
+                      >
+                        {preset.name}
                       </span>
                     )}
+                    <div className="flex items-center gap-1.5">
+                      {preset.builtin && preset.modified && (
+                        <span className="inline-block text-[10px] text-highlight font-medium">已修改</span>
+                      )}
+                      {!preset.builtin && (
+                        <span className="inline-block text-[10px] text-teal font-medium">自定义</span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {!preset.builtin && (
+                    {preset.builtin && preset.modified && (
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (confirm(`确认从磁盘删除预设「${preset.name}」吗？`)) {
-                            void store.deleteCustomPreset(preset.id);
+                          if (confirm(`恢复内置主题「${preset.name}」的初始设置？当前对它的修改将被清除。`)) {
+                            void store.resetThemeToFactory(preset.id);
                           }
                         }}
-                        title="删除该自定义预设文件"
-                        aria-label={`删除预设 ${preset.name}`}
-                        className="rounded p-1 text-ash opacity-0 group-hover:opacity-100 hover:bg-loss/15 hover:text-loss transition cursor-pointer"
+                        title="恢复该内置主题的初始设置"
+                        aria-label={`恢复 ${preset.name} 初始设置`}
+                        className="rounded p-1 text-ash opacity-0 group-hover:opacity-100 hover:bg-surface-hover hover:text-ink transition cursor-pointer"
                       >
-                        <Trash2 size={12} />
+                        <RotateCcw size={12} />
                       </button>
                     )}
+                    {!preset.builtin && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setRenameDraft(preset.name);
+                            setRenamingId(preset.id);
+                          }}
+                          title="重命名该主题"
+                          aria-label={`重命名 ${preset.name}`}
+                          className="rounded p-1 text-ash opacity-0 group-hover:opacity-100 hover:bg-surface-hover hover:text-ink transition cursor-pointer"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (confirm(`确认从磁盘删除主题「${preset.name}」吗？`)) {
+                              void store.deleteTheme(preset.id);
+                            }
+                          }}
+                          title="删除该主题文件"
+                          aria-label={`删除主题 ${preset.name}`}
+                          className="rounded p-1 text-ash opacity-0 group-hover:opacity-100 hover:bg-loss/15 hover:text-loss transition cursor-pointer"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </>
+                    )}
                     {active && (
-                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-teal text-canvas">
+                      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-teal text-on-accent">
                         <Check size={11} strokeWidth={3} />
                       </span>
                     )}
@@ -664,11 +732,43 @@ export function AppearanceSettingsSection() {
         </div>
       </SectionCard>
 
+      {/* ---------------------------------------------------- 文字颜色 */}
+      <SectionCard
+        icon={<Palette size={16} />}
+        title="文字颜色"
+        desc="全局正文文字色，亮 / 暗档各一份，独立于主题——切换任何主题都不变，恢复默认即回到近黑 / 近白。"
+        action={
+          <button
+            type="button"
+            onClick={() => store.resetInk()}
+            className="flex shrink-0 items-center gap-1.5 rounded-btn border border-line px-2.5 py-1 text-body-sm text-graphite hover:bg-surface-hover hover:text-ink"
+          >
+            <RotateCcw size={12} />
+            恢复默认
+          </button>
+        }
+      >
+        <div className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+          <ColorField
+            label="浅色档文字"
+            hint="浅色外观下的正文颜色（出厂近黑 #26251e）"
+            value={store.ink.light}
+            onChange={(next) => store.setInk("light", next)}
+          />
+          <ColorField
+            label="深色档文字"
+            hint="深色外观下的正文颜色（出厂近白 #faf9f6）"
+            value={store.ink.dark}
+            onChange={(next) => store.setInk("dark", next)}
+          />
+        </div>
+      </SectionCard>
+
       {/* ---------------------------------------------------- 配色 */}
       <SectionCard
         icon={<Sparkles size={16} />}
         title="配色"
-        desc="十组颜色，键名与 DS 的 theme.json.colors 完全一致，方便日后与 DS 主题包互通。"
+        desc="主题调色板（正文文字色是全局独立设置，见上一节；玻璃色是液态玻璃卡片的专用底色）。键名与 DS 的 theme.json.colors 对应，方便主题包互通。"
         action={
           <button
             type="button"
@@ -798,16 +898,16 @@ export function AppearanceSettingsSection() {
               <div>
                 <span
                   className="text-body-sm font-medium text-ink"
-                  title="控制气泡与输入卡片的背景漫反射模糊。支持最小拉到 0（无模糊），默认 14px 对齐素雅薄玻璃质感。"
+                  title="控制气泡与输入卡片的背景漫反射模糊。默认 0px（无模糊、零合成层开销）；调高后每块玻璃都会建立合成层，长会话注意性能。"
                 >
                   薄玻璃模糊度 (Glass Blur)
                 </span>
                 <p className="text-caption text-graphite">
-                  卡片底色的柔和漫反射程度。最小可拉至 0（完全无模糊），上限 32px 柔光。
+                  卡片底色的柔和漫反射程度。默认 0px 完全无模糊，上限 32px 柔光。
                 </p>
               </div>
               <span className="font-mono text-body-sm font-semibold text-teal px-2 py-0.5 rounded-btn bg-teal-tint/30">
-                {store.glassBlur ?? 14}px {(store.glassBlur ?? 14) === 0 ? "· 无模糊" : ""}
+                {store.glassBlur ?? 0}px {(store.glassBlur ?? 0) === 0 ? "· 无模糊" : ""}
               </span>
             </div>
             <div className="flex items-center gap-3 pt-1">
@@ -817,20 +917,20 @@ export function AppearanceSettingsSection() {
                 min={0}
                 max={32}
                 step={1}
-                value={store.glassBlur ?? 14}
+                value={store.glassBlur ?? 0}
                 onChange={(e) => store.setGlassBlur(Number(e.target.value))}
                 className="flex-1 accent-teal cursor-pointer"
                 aria-label="薄玻璃模糊度（像素）"
               />
               <span className="text-caption text-ash shrink-0">朦胧 32px</span>
             </div>
-            {(store.glassBlur ?? 14) !== 14 && (
+            {(store.glassBlur ?? 0) !== 0 && (
               <button
                 type="button"
-                onClick={() => store.setGlassBlur(14)}
+                onClick={() => store.setGlassBlur(0)}
                 className="rounded-btn border border-line px-2.5 py-1 text-caption text-graphite hover:bg-surface-hover hover:text-ink cursor-pointer"
               >
-                恢复推荐（14px 薄玻璃）
+                恢复默认（0px 无模糊）
               </button>
             )}
           </div>

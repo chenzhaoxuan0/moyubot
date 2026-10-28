@@ -85,6 +85,8 @@ export function serializeAppearance(state: AppearanceState): string {
       mode: state.mode,
       presetId: state.presetId,
       profiles: state.profiles,
+      // 全局文字色（亮/暗各一，独立于主题调色板）：切主题不变，重置回出厂黑白
+      ink: state.ink,
       art: state.art,
       avatarFrame: state.avatarFrame,
       logo: {

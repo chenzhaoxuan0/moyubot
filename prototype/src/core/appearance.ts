@@ -150,6 +150,7 @@ export const PALETTE_KEYS = [
   "text",
   "muted",
   "line",
+  "glass",
 ] as const;
 
 export type PaletteKey = (typeof PALETTE_KEYS)[number];
@@ -268,14 +269,19 @@ export interface AppearanceState {
   logo: LogoSettings;
   /** bot 头像框形态（全局，不分亮暗档案） */
   avatarFrame: AvatarFrame;
-  /** 当前选中的预设 id，null = 用户已手工改过 */
+  /** 当前选中的主题 id（内置或自定义）。选中即编辑：改动会自动保存回该主题 */
   presetId: string | null;
   /** 对话视图形态：classic=经典无气泡平铺，glass=液态毛玻璃卡片（特别适合带壁纸） */
   chatStyle: ChatStyle;
-  /** 薄玻璃模糊度 0..32px，默认 14px */
+  /** 薄玻璃模糊度 0..32px，默认 0px（不为零时每块玻璃都建合成层，长会话注意性能） */
   glassBlur: number;
   /** 对话区画布遮罩不透明度 0..100%，默认 35%（开壁纸时压暗背景，提高正文对比度） */
   chatBgOpacity: number;
+  /**
+   * 全局文字色（独立于主题调色板，亮/暗各一）：切任何主题都不变，重置回出厂黑白。
+   * 主题调色板的 text 降级为「主题缺省文字色」，仅作旧数据迁移来源与主题包导出兜底。
+   */
+  ink: { light: string; dark: string };
 }
 
 /* --------------------------------------------------------------------------- 默认值 */
@@ -332,8 +338,10 @@ export interface AppearancePreset {
   readonly dark: AppearanceProfile;
   /** 预设推荐对话风格（如有，切换预设时自动启用） */
   readonly defaultChatStyle?: ChatStyle;
-  /** 是否为内置预设（内置不可删除） */
+  /** 是否为内置预设（内置不可删除/改名） */
   readonly builtin?: boolean;
+  /** 内置预设被编辑过（存在 override 文件，可一键恢复初始） */
+  readonly modified?: boolean;
   /** 磁盘保存路径（仅自定义预设拥有） */
   readonly filePath?: string;
 }
@@ -379,6 +387,7 @@ export const PRESET_PARCHMENT: AppearancePreset = {
       text: "#26251e",
       muted: "#84847e",
       line: "#cdcdc9",
+      glass: "#cdcdc9",
     },
     surface: DEFAULT_SURFACE,
     transparency: null,
@@ -397,6 +406,7 @@ export const PRESET_PARCHMENT: AppearancePreset = {
       text: "#faf9f6",
       muted: "#b4b4b2",
       line: "#222221",
+      glass: "#222221",
     },
     surface: DEFAULT_SURFACE,
     transparency: null,
@@ -434,6 +444,7 @@ export const PRESET_TWILIGHT: AppearancePreset = {
       text: "#f5efff",
       muted: "#b7c5ea",
       line: "#d89be8",
+      glass: "#d89be8",
     },
     surface: DEFAULT_SURFACE,
     transparency: null,
@@ -465,8 +476,13 @@ export function defaultAppearanceState(): AppearanceState {
     avatarFrame: "rounded",
     presetId: PRESET_PARCHMENT.id,
     chatStyle: "classic",
-    glassBlur: 14,
+    glassBlur: 0,
     chatBgOpacity: 35,
+    // 全局文字色出厂 = 亮近黑 / 暗近白（旧调色板 text 的原值）
+    ink: {
+      light: PRESET_PARCHMENT.light.palette.text,
+      dark: PRESET_OBSIDIAN.dark.palette.text,
+    },
   };
 }
 
@@ -478,6 +494,29 @@ function cloneProfile(profile: AppearanceProfile): AppearanceProfile {
     overlayTransparency: profile.overlayTransparency,
     terminalTransparency: profile.terminalTransparency,
   };
+}
+
+/** 两份档案是否逐字段一致（palette 按 PALETTE_KEYS、surface 全字段、三项透明度）。
+ * 主题自动保存用它判断「真的改了没」——没改就不写盘，免得选中内置主题
+ * 凭空落一个与出厂一致的 override 文件、卡片被假标「已修改」。 */
+export function profileEquals(a: AppearanceProfile, b: AppearanceProfile): boolean {
+  for (const key of PALETTE_KEYS) {
+    if (a.palette[key] !== b.palette[key]) return false;
+  }
+  const s = a.surface;
+  const t = b.surface;
+  if (
+    s.radius !== t.radius || s.opacity !== t.opacity || s.blur !== t.blur ||
+    s.borderAlpha !== t.borderAlpha || s.shadow !== t.shadow || s.fontFamily !== t.fontFamily ||
+    s.fontScale !== t.fontScale || s.density !== t.density || s.motion !== t.motion
+  ) {
+    return false;
+  }
+  return (
+    a.transparency === b.transparency &&
+    a.overlayTransparency === b.overlayTransparency &&
+    a.terminalTransparency === b.terminalTransparency
+  );
 }
 
 /* --------------------------------------------------------------------------- 推导 */
@@ -594,8 +633,11 @@ export function deriveCssVariables(
   profile: AppearanceProfile,
   art: ArtSettings,
   wallpaper: WallpaperSettings,
+  /** 全局文字色覆盖（state.ink[resolved]）：缺省回落主题调色板 text */
+  inkOverride?: string,
 ): Record<string, string> {
   const p = profile.palette;
+  const ink = typeof inkOverride === "string" && isValidColor(inkOverride) ? inkOverride : p.text;
   const surface = profile.surface;
   const hasWallpaper = wallpaper.enabled && Boolean(wallpaper.source);
   /**
@@ -618,7 +660,7 @@ export function deriveCssVariables(
   vars["--aw-terminal-bg-alpha"] = String(clamp(1 - profile.terminalTransparency / 100, 0, 1));
 
   /* ---- 文字层：永不受透明度影响 ---- */
-  vars["--color-ink"] = p.text;
+  vars["--color-ink"] = ink;
   vars["--color-graphite"] = p.muted;
   vars["--color-ash"] = withAlpha(p.muted, 0.85);
 
@@ -635,6 +677,10 @@ export function deriveCssVariables(
   vars["--color-line"] = withAlpha(p.line, surface.borderAlpha * 4);
   vars["--color-line-soft"] = withAlpha(p.line, surface.borderAlpha * 2);
   vars["--color-surface-hover"] = withAlpha(p.panelAlt, alpha);
+
+  /* ---- 液态玻璃底色：独立配色（glass），此前派生自 line —— styles.css 的
+   * --aw-glass-card-bg 以它为 tint，拖动 line 不再牵动玻璃颜色 ---- */
+  vars["--aw-glass-tint"] = p.glass;
 
   /* ---- 状态色跟随明暗，保证 diff / 错误在两套主题下都可读 ---- */
   const isLight = relativeLuminance(p.background) > 0.5;
@@ -655,11 +701,11 @@ export function deriveCssVariables(
   vars["--aw-surface-blur"] = `${surface.blur}px`;
   vars["--aw-motion-duration"] = `${motionDurationMs(surface.motion)}ms`;
   vars["--aw-density-scale"] = String(densityMultiplier(surface.density));
-  vars["--shadow-subtle"] = shadowValue(surface.shadow, p.text);
+  vars["--shadow-subtle"] = shadowValue(surface.shadow, ink);
   vars["--shadow-xs"] =
     surface.shadow === "none"
       ? "none"
-      : `0 1px 2px 0 color-mix(in srgb, ${toHex(p.text)} 6%, transparent)`;
+      : `0 1px 2px 0 color-mix(in srgb, ${toHex(ink)} 6%, transparent)`;
 
   /* ---- 浏览器 chrome ---- */
   vars["--color-selection"] = withAlpha(p.accent, ACCENT_SELECTION_ALPHA);
@@ -683,7 +729,7 @@ export function deriveCssVariables(
   vars["--ds-theme-color-accent-alt"] = p.accentAlt;
   vars["--ds-theme-color-secondary"] = p.secondary;
   vars["--ds-theme-color-highlight"] = p.highlight;
-  vars["--ds-theme-color-text"] = p.text;
+  vars["--ds-theme-color-text"] = ink;
   vars["--ds-theme-color-muted"] = p.muted;
   vars["--ds-theme-color-line"] = p.line;
   vars["--ds-theme-surface-radius"] = `${surface.radius}px`;
@@ -809,6 +855,22 @@ export function sanitizeAppearanceState(raw: unknown): AppearanceState {
   const light = sanitizeProfile(input.profiles?.light, fallback.profiles.light);
   const dark = sanitizeProfile(input.profiles?.dark, fallback.profiles.dark);
 
+  // 全局文字色：优先专用字段；旧文件没有时从旧调色板 text 迁移（用户调过的文字色不丢），再退出厂
+  const inkInput = input.ink && typeof input.ink === "object" ? (input.ink as Record<string, unknown>) : {};
+  const legacyText = (side: "light" | "dark"): string | null => {
+    const rawProfile = (input.profiles as Record<string, unknown> | undefined)?.[side] as
+      | { palette?: { text?: unknown } }
+      | undefined;
+    const t = rawProfile?.palette?.text;
+    return typeof t === "string" && isValidColor(t) ? t : null;
+  };
+  const pickInk = (value: unknown, legacy: string | null, def: string): string =>
+    typeof value === "string" && isValidColor(value) ? value : (legacy ?? def);
+  const ink = {
+    light: pickInk(inkInput.light, legacyText("light"), fallback.ink.light),
+    dark: pickInk(inkInput.dark, legacyText("dark"), fallback.ink.dark),
+  };
+
   return {
     schemaVersion: 1,
     mode,
@@ -836,10 +898,14 @@ export function sanitizeAppearanceState(raw: unknown): AppearanceState {
       source: null,
     },
     avatarFrame: input.avatarFrame === "square" ? "square" : "rounded",
-    presetId: typeof input.presetId === "string" ? input.presetId : null,
+    // 旧编辑模型的 "__custom__" 哨兵（表示「脱离预设的手工态」）已废弃：
+    // 选中即编辑模型下 presetId 永远指向一个真实主题，遗留值回落默认主题
+    presetId:
+      typeof input.presetId === "string" && input.presetId !== "__custom__" ? input.presetId : fallback.presetId,
     chatStyle: input.chatStyle === "glass" ? "glass" : "classic",
-    glassBlur: typeof input.glassBlur === "number" && Number.isFinite(input.glassBlur) ? clamp(Math.round(input.glassBlur), 0, 32) : 14,
+    glassBlur: typeof input.glassBlur === "number" && Number.isFinite(input.glassBlur) ? clamp(Math.round(input.glassBlur), 0, 32) : 0,
     chatBgOpacity: typeof input.chatBgOpacity === "number" && Number.isFinite(input.chatBgOpacity) ? clamp(Math.round(input.chatBgOpacity), 0, 100) : 35,
+    ink,
   };
 }
 
@@ -940,9 +1006,9 @@ export function toDreamSkinTheme(
       safeArea: state.art.safeArea === "auto" ? "none" : state.art.safeArea,
       taskMode: state.art.taskMode === "auto" ? "ambient" : state.art.taskMode,
     },
-    colors: { ...profile.palette },
+    colors: { ...profile.palette, text: state.ink[resolved] },
     chatStyle: state.chatStyle ?? "classic",
-    glassBlur: state.glassBlur ?? 14,
+    glassBlur: state.glassBlur ?? 0,
     chatBgOpacity: state.chatBgOpacity ?? 35,
   };
 }

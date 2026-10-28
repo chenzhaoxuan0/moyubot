@@ -5,6 +5,7 @@ import {
   clamp,
   defaultAppearanceState,
   deriveCssVariables,
+  profileEquals,
   resolveFocusX,
   resolveFocusY,
   toDreamSkinTheme,
@@ -142,7 +143,7 @@ function applyToDom(state: AppearanceState): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   const resolved = resolveAppearance(state);
-  const vars = deriveCssVariables(state.profiles[resolved], state.art, state.wallpaper);
+  const vars = deriveCssVariables(state.profiles[resolved], state.art, state.wallpaper, state.ink?.[resolved]);
 
   // 壁纸图走 blob URL：deriveCssVariables 给出的是完整 data URL，超长会被 Chrome 丢掉
   const wallpaperUrl =
@@ -161,7 +162,7 @@ function applyToDom(state: AppearanceState): void {
   // blur 归零必须输出 none 而不是 blur(0px)：后者仍会为每个玻璃区块建合成层、
   // 采样背后内容，长会话上百个 backdrop 区域白付性能。styles.css 里消费模糊的
   // glass 规则统一读 --aw-glass-blur-filter（none 或 blur(Npx)）
-  const glassBlur = clamp(Math.round(state.glassBlur ?? 14), 0, 32);
+  const glassBlur = clamp(Math.round(state.glassBlur ?? 0), 0, 32);
   root.style.setProperty("--aw-glass-blur", `${glassBlur}px`);
   root.style.setProperty("--aw-glass-blur-filter", glassBlur > 0 ? `blur(${glassBlur}px)` : "none");
   root.style.setProperty("--aw-chat-bg-opacity", `${state.chatBgOpacity ?? 35}%`);
@@ -278,11 +279,61 @@ function persist(next: AppearanceState): void {
       lastSource = "file";
       // 写成功即文件已接管：立刻翻掉可能挂着的「daemon 没连上」警告，不等下一轮轮询
       useAppearance.setState({ source: "file", filePath: result.path } as Partial<AppearanceStore>);
+      // 选中即编辑：appearance.json 落盘成功后，把改动防抖回写到当前主题文件
+      scheduleThemeAutosave();
     })
     .catch(() => {
       // 写失败（daemon 没起 / hash 冲突 / 磁盘满）：界面已经变了，不回滚，
       // 但也不能让这条链卡死 —— catch 吞掉，后面的写继续排队
     });
+}
+
+/* --------------------------------------------------------------------------- 主题自动保存 */
+
+/** 防抖窗口：表面/透明度滑杆拖动会高频触发 publish，合并成一次主题文件写 */
+const THEME_AUTOSAVE_DEBOUNCE_MS = 500;
+let themeAutosaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleThemeAutosave(): void {
+  if (typeof window === "undefined") return;
+  if (themeAutosaveTimer !== null) clearTimeout(themeAutosaveTimer);
+  themeAutosaveTimer = setTimeout(() => {
+    themeAutosaveTimer = null;
+    void flushThemeAutosave();
+  }, THEME_AUTOSAVE_DEBOUNCE_MS);
+}
+
+/**
+ * 把当前完整档案写回所选主题（内置主题以 themes/<id>.json override 形式落盘）。
+ * 与该主题的当前定义完全一致时跳过 —— 否则只是「选中」这个动作就会凭空造出
+ * override 文件、把内置卡片假标成「已修改」。
+ */
+async function flushThemeAutosave(): Promise<void> {
+  const state = useAppearance.getState();
+  const id = state.presetId;
+  if (!id) return;
+  const theme = state.allPresets().find((p) => p.id === id);
+  if (!theme) return; // id 指向的主题不存在（文件被外部删掉等）：不瞎写
+  const draft = createPresetFromState(state, theme.name, theme.desc, id);
+  if (
+    draft.mode === theme.mode &&
+    draft.defaultChatStyle === (theme.defaultChatStyle ?? "classic") &&
+    profileEquals(draft.light, theme.light) &&
+    profileEquals(draft.dark, theme.dark)
+  ) {
+    return;
+  }
+  try {
+    const res = await saveThemeRpc(draft);
+    const saved = res.preset ?? draft;
+    const nextCustom = [...useAppearance.getState().customPresets.filter((p) => p.id !== saved.id), saved];
+    useAppearance.setState({ customPresets: nextCustom } as Partial<AppearanceStore>);
+  } catch {
+    // daemon 没起 / RPC 断了：口径同删除失败——提示但不打断，下一次改动会重试
+    useAppearance.setState({
+      lastError: `主题「${theme.name}」自动保存失败：后台 daemon 未写入主题文件`,
+    } as Partial<AppearanceStore>);
+  }
 }
 
 export interface AppearanceStore extends AppearanceState {
@@ -312,14 +363,23 @@ export interface AppearanceStore extends AppearanceState {
   setChatBgOpacity: (opacity: number) => void;
   /** bot 头像框形态（全局设置，不分亮暗档案） */
   setAvatarFrame: (frame: AvatarFrame) => void;
-  /** 用户或 agent 保存的所有自定义主题预设 */
+  /** 磁盘上的主题文件（themes/*.json）：自定义主题 + 内置主题的 override（编辑过即存在） */
   customPresets: AppearancePreset[];
+  /** 合并视图：3 张内置卡（被 override 过的吸收文件定义并标 modified）+ 纯自定义主题 */
   allPresets: () => AppearancePreset[];
   applyPreset: (preset: AppearancePreset) => void;
-  /** 保存当前主题为新的独立预设文件（~/.agent-workbench/themes/<id>.json） */
-  saveAsPreset: (name: string, desc?: string, id?: string) => Promise<AppearancePreset>;
-  /** 删除指定的自定义预设主题 */
-  deleteCustomPreset: (id: string) => Promise<void>;
+  /** 新建主题：从出厂默认定义起步，创建即选中；之后的编辑由自动保存落盘 */
+  createTheme: (name: string, desc?: string) => Promise<AppearancePreset>;
+  /** 重命名主题（同 id 覆盖写盘，不动定义内容） */
+  renameTheme: (id: string, name: string) => Promise<void>;
+  /** 删除主题（自定义主题或内置主题的 override）；删的是当前选中时切回默认主题 */
+  deleteTheme: (id: string) => Promise<void>;
+  /** 内置主题恢复出厂：删除 override 文件并应用出厂定义 */
+  resetThemeToFactory: (id: string) => Promise<void>;
+  /** 全局文字色（亮/暗各一，独立于主题调色板，切主题不变） */
+  setInk: (side: ResolvedAppearance, value: string) => void;
+  /** 文字色恢复出厂（亮近黑 / 暗近白） */
+  resetInk: () => void;
   setPaletteColor: (key: PaletteKey, value: string) => void;
   resetPaletteColor: (key: PaletteKey) => void;
   resetPalette: () => void;
@@ -366,12 +426,11 @@ function withProfile(
   resolved: ResolvedAppearance,
   patch: (profile: AppearanceProfile) => AppearanceProfile,
 ): AppearanceState {
+  // 选中即编辑模型：presetId 始终指向当前主题，档案改动由主题自动保存落盘
+  // （见 scheduleThemeAutosave），不再有「改成自定义态」的哨兵翻转
   return {
     ...state,
     profiles: { ...state.profiles, [resolved]: patch(state.profiles[resolved]) },
-    // 用户手动改过就不再声称「等于某个预设」；用哨兵值而不是 null，
-    // 因为 null 还要留给「从未选过预设」的合法状态
-    presetId: "__custom__",
   };
 }
 
@@ -384,32 +443,82 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
   lastError: null,
   customPresets: [],
 
-  allPresets: () => [...APPEARANCE_PRESETS, ...get().customPresets],
+  allPresets: () => {
+    const builtinIds = new Set(APPEARANCE_PRESETS.map((p) => p.id));
+    const overrides = new Map(get().customPresets.filter((p) => builtinIds.has(p.id)).map((p) => [p.id, p]));
+    const builtins = APPEARANCE_PRESETS.map((p) => {
+      const ov = overrides.get(p.id);
+      // 内置主题被编辑过：override 文件的定义吸收进卡片（仍是内置卡，额外标 modified）
+      if (ov === undefined) return { ...p, builtin: true as const };
+      return {
+        ...p,
+        mode: ov.mode,
+        light: ov.light,
+        dark: ov.dark,
+        defaultChatStyle: ov.defaultChatStyle ?? p.defaultChatStyle,
+        builtin: true as const,
+        modified: true as const,
+        filePath: ov.filePath,
+      };
+    });
+    const customs = get().customPresets.filter((p) => !builtinIds.has(p.id));
+    return [...builtins, ...customs];
+  },
 
-  saveAsPreset: async (name: string, desc = "", id?: string) => {
-    const cur = get();
-    const preset = createPresetFromState(cur, name, desc, id);
+  createTheme: async (name, desc = "") => {
+    // 新主题一律从出厂默认定义起步（不继承当前正在用的自定义主题）
+    const preset = createPresetFromState(defaultAppearanceState(), name, desc);
     const res = await saveThemeRpc(preset);
     const saved = res.preset ?? preset;
-    const nextCustom = [...get().customPresets.filter((p) => p.id !== saved.id), saved];
-    set({ customPresets: nextCustom, presetId: saved.id });
-    persist({ ...get(), presetId: saved.id });
+    set({ customPresets: [...get().customPresets.filter((p) => p.id !== saved.id), saved] });
+    get().applyPreset(saved);
     return saved;
   },
 
-  deleteCustomPreset: async (id: string) => {
+  renameTheme: async (id, name) => {
+    const theme = get().allPresets().find((p) => p.id === id);
+    if (!theme) return;
+    const trimmed = name.trim();
+    if (trimmed === "" || trimmed === theme.name) return;
+    const renamed = { ...theme, name: trimmed };
+    const res = await saveThemeRpc(renamed);
+    const saved = res.preset ?? renamed;
+    set({ customPresets: [...get().customPresets.filter((p) => p.id !== saved.id), saved] });
+  },
+
+  deleteTheme: async (id) => {
     const deleted = await deleteThemeRpc(id);
     if (!deleted) {
-      // daemon 删盘失败（文件不在位 / daemon 没起 / RPC 断了）：本地列表不动、不 persist，
-      // 否则 4 秒后 poll 会把磁盘上的主题又读回来，界面与盘上打架。
-      // 口径照抄 importWallpaper 的失败提示（lastError，设置页「上次写入失败」条展示）
-      set({ lastError: `预设「${id}」删除失败：后台 daemon 未删除对应主题文件` });
+      // daemon 删盘失败（文件不在位 / daemon 没起 / RPC 断了）：本地列表不动，
+      // 否则 4 秒后 poll 会把磁盘上的主题又读回来，界面与盘上打架
+      set({ lastError: `主题「${id}」删除失败：后台 daemon 未删除对应主题文件` });
       return;
     }
-    const nextCustom = get().customPresets.filter((p) => p.id !== id);
-    const nextPresetId = get().presetId === id ? "__custom__" : get().presetId;
-    set({ customPresets: nextCustom, presetId: nextPresetId });
-    persist({ ...get(), presetId: nextPresetId });
+    set({ customPresets: get().customPresets.filter((p) => p.id !== id) });
+    // 删的是当前选中主题：切回第一张内置卡（它若也被改过则用其 override 定义）
+    if (get().presetId === id) {
+      const fallbackCard = get().allPresets()[0];
+      if (fallbackCard) get().applyPreset(fallbackCard);
+    }
+  },
+
+  resetThemeToFactory: async (id) => {
+    const factory = APPEARANCE_PRESETS.find((p) => p.id === id);
+    if (!factory) return;
+    // override 文件删除（不存在时 daemon 返回 false，无碍）；再应用出厂常量。
+    // 应用后状态 == 出厂定义，主题自动保存的一致性检查会跳过回写，不会假死复活
+    await deleteThemeRpc(id);
+    set({ customPresets: get().customPresets.filter((p) => p.id !== id) });
+    get().applyPreset(factory);
+  },
+
+  setInk: (side, value) => {
+    set(publish({ ...get(), ink: { ...get().ink, [side]: value } }));
+  },
+
+  resetInk: () => {
+    const def = defaultAppearanceState();
+    set(publish({ ...get(), ink: { ...def.ink } }));
   },
 
   reload: async () => {
@@ -423,7 +532,7 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
       // 下次 poll 会补上
       const probe = await loadAppearance();
       const fresh = probe.state.wallpaper.source;
-      const next = withProfile(get(), resolveAppearance(get()), (p) => ({ ...p }));
+      const next = get();
       set(
         publish({
           ...next,
@@ -483,8 +592,9 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
   },
 
   applyPreset: (preset) => {
-    // 预设 = 配色。只换十组色；用户调过的透明度/表面设置按亮暗档案各自保留，
-    // 壁纸/艺术/头像框等全局项更不动 —— 否则切一次主题自定义就被清零（实测）。
+    // 主题 = 完整档案（palette + surface + 三项透明度）。选中即编辑模型下
+    // 主题文件存的就是完整档案，切回来必须整体还原——只换配色会让「在 A 主题
+    // 调的圆角，切到 B 再切回 A」丢失。壁纸/艺术/文字色/头像框等全局项仍不动。
     const cur = get();
     // 消毒闸门（必须有，后端 listThemes 的形状兜底只是双保险）：themes/*.json 由
     // 用户/agent 手写，preset.light/dark 可能是 null、空对象或字段残缺 —— 类型断言
@@ -500,19 +610,12 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
       preset?.defaultChatStyle === "glass" || preset?.defaultChatStyle === "classic"
         ? preset.defaultChatStyle
         : cur.chatStyle ?? "classic";
-    const merge = (resolved: ResolvedAppearance, from: AppearanceProfile): AppearanceProfile => ({
-      ...cloneProfile(from),
-      surface: { ...cur.profiles[resolved].surface },
-      transparency: cur.profiles[resolved].transparency,
-      overlayTransparency: cur.profiles[resolved].overlayTransparency,
-      terminalTransparency: cur.profiles[resolved].terminalTransparency,
-    });
     const next: AppearanceState = {
       ...cur,
       mode: presetMode,
       profiles: {
-        light: merge("light", presetLight),
-        dark: merge("dark", presetDark),
+        light: cloneProfile(presetLight),
+        dark: cloneProfile(presetDark),
       },
       presetId: preset.id,
       chatStyle: presetChatStyle,
@@ -530,18 +633,16 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
   },
 
   resetPaletteColor: (key) => {
+    // 重置基准 = 对应亮/暗档的出厂定义（温润羊皮纸浅色 / 黑曜石深色），
+    // 不再按所选主题找——主题本身就是被编辑对象，重置回主题值等于没重置
     const resolved = resolveAppearance(get());
-    const preset = [...APPEARANCE_PRESETS, ...get().customPresets].find((item) => item.id === get().presetId);
-    const base = preset
-      ? preset[resolved].palette[key]
-      : defaultAppearanceState().profiles[resolved].palette[key];
+    const base = defaultAppearanceState().profiles[resolved].palette[key];
     get().setPaletteColor(key, base);
   },
 
   resetPalette: () => {
     const resolved = resolveAppearance(get());
-    const preset = [...APPEARANCE_PRESETS, ...get().customPresets].find((item) => item.id === get().presetId);
-    const base = preset ? preset[resolved] : defaultAppearanceState().profiles[resolved];
+    const base = defaultAppearanceState().profiles[resolved];
     const next = withProfile(get(), resolved, () => cloneProfile(base));
     set(publish(next));
   },

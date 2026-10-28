@@ -20,13 +20,18 @@ daemon 侧刻意**不做内存缓存**（对齐 `bots/registry.ts` 的「文件�
 {
   "$meta": { "schemaVersion": 1, "generator": "agent-workbench", "note": "…" },
   "mode": "auto",            // auto | light | dark（auto = 跟随系统）
-  "presetId": "parchment",   // 选中的预设；用户微调后变成 "__custom__"
+  "presetId": "parchment",   // 选中的主题（内置或自定义）。选中即编辑：改动自动保存回该主题
+  "ink": {                   // 全局文字色（亮/暗各一），独立于主题——切任何主题都不变
+    "light": "#26251e", "dark": "#faf9f6"
+  },
   "profiles": {
     "light": {
-      "palette": {           // 十组色，键名与 DS theme.json.colors 一字不差
+      "palette": {           // 十一键，键名与 DS theme.json.colors 对齐（glass 为本项目扩展）
         "background": "#f7f7f4", "panel": "#f2f1ed", "panelAlt": "#e6e5e0",
         "accent": "#f54e00", "accentAlt": "#e04500", "secondary": "#0d9488",
-        "highlight": "#a855f7", "text": "#26251e", "muted": "#84847e", "line": "#cdcdc9"
+        "highlight": "#a855f7", "text": "#26251e", "muted": "#84847e", "line": "#cdcdc9",
+        "glass": "#cdcdc9"   // 液态玻璃卡片底色（独立配色，此前派生自 line）
+                              // text 是主题缺省文字色：仅旧数据迁移来源，实际生效看 ink
       },
       "surface": {
         "radius": 12,        // 0..28px，按原比例联动 btn/input/card/chip 四档圆角
@@ -74,6 +79,26 @@ daemon 侧刻意**不做内存缓存**（对齐 `bots/registry.ts` 的「文件�
   塞 data URL 会把文件撑到没法编辑，也没法进 git。
 - **`art.*` 与 `image-*` 只在有壁纸时看得出效果**，没图时改它们界面不会有变化。
 
+## 主题（themes/）与「选中即编辑」
+
+外观预设主题以独立文件存放在 `<homeDir>/themes/<id>.json`，形状与
+`createPresetFromState` 的产物一致（`{$meta, id, name, desc, mode, light, dark,
+defaultChatStyle}`，light/dark 各含完整 palette + surface + 三项透明度）。
+
+- **选中即编辑**：`appearance.json` 的 `presetId` 指向当前主题。在外观设置里
+  每改一项，除 `appearance.json` 照常落盘外，还会防抖（500ms）把完整档案写回
+  该主题文件——不需要手动「保存预设」。与主题当前定义完全一致的写会被跳过
+  （免得只是选中就凭空造文件）。
+- **内置主题可编辑**：改内置主题（parchment / obsidian / twilight-mirror）以
+  同 id 的 `themes/<内置id>.json` override 落盘，卡片标「已修改」；「恢复初始」
+  = 删除该 override 文件（`appearance.theme.delete`）并应用出厂常量。
+- **新建 / 改名 / 删除**：新建主题从出厂默认定义起步；自定义主题可改名
+  （同 id 覆盖写 `name` 字段）与删除；删除当前选中的会切回默认主题。
+- **主题文件无乐观锁**：同 id 保存是 last-writer-wins 覆盖（与 appearance.json
+  的 hash 锁不同）。agent 手改 `themes/*.json` 后请顺手 touch 一下
+  `appearance.json`（或等下一次 appearance.json 变化），否则运行中的界面最长
+  4 秒轮询只在 appearance.json hash 变化时才刷新主题列表。
+
 ## 并发
 
 写入带 sha256 前 16 位的乐观锁：前端写之前把自己读到的 `hash` 带上，
@@ -103,8 +128,8 @@ daemon 没起时依次退到 `localStorage`，再退到内置默认 —— 界�
 
 | 位置 | 作用 |
 |---|---|
-| `backend/src/appearance/store.ts` | 落盘、原子写、乐观锁、壁纸目录 |
-| `backend/src/appearance/smoke.ts` | 22 项冒烟自检（`pnpm exec tsx src/appearance/smoke.ts`） |
+| `backend/src/appearance/store.ts` | 落盘、原子写、乐观锁、壁纸目录、themes/ 主题文件读写 |
+| `backend/src/appearance/smoke.ts` | 25 项冒烟自检（`pnpm exec tsx src/appearance/smoke.ts`，含内置 id override 用例） |
 | `electron/main.cjs` / `electron/preload.cjs` | 启动代读 `appearance.json` 的 mode：窗口底色 / 图标 / 首屏缓存接力 |
 | `prototype/index.html` | 首屏内联脚本：读缓存定主题、favicon 与 theme-color |
 | `prototype/src/core/appearance.ts` | 类型、取值域、默认值、色彩推导 |

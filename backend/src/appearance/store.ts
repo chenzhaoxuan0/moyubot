@@ -434,10 +434,12 @@ export interface StoredThemePreset {
 
 /**
  * 内置预设的保留字 id —— 与 prototype/src/core/appearance.ts 的 APPEARANCE_PRESETS
- * （parchment / obsidian / twilight-mirror）保持同步。自定义主题撞车保存会把
- * 内置预设的卡片顶掉（前端按 id 合并去重），这里直接拒绝。
+ * （parchment / obsidian / twilight-mirror）保持同步。它们**允许**出现在 themes/ 里：
+ * 选中即编辑模型下，内置主题被编辑就以 themes/<id>.json override 落盘，前端
+ * allPresets() 按 id 把 override 定义吸收进内置卡片并标「已修改」。此清单供
+ * 诊断与 smoke 对照用。
  */
-const BUILTIN_PRESET_IDS = new Set(["parchment", "obsidian", "twilight-mirror"]);
+export const BUILTIN_PRESET_IDS = new Set(["parchment", "obsidian", "twilight-mirror"]);
 
 /**
  * light/dark 侧的最小形状：非空对象、带非空 palette 对象。
@@ -535,12 +537,8 @@ export async function saveTheme(
   if (!id) {
     id = `theme-${Date.now().toString(36)}`;
   }
-  // 保留字：撞内置预设 id 的保存会顶掉内置卡片（前端按 id 合并），直接拒绝
-  if (BUILTIN_PRESET_IDS.has(id)) {
-    throw Object.assign(new Error(`theme id "${id}" is reserved by a builtin preset`), {
-      code: "bad_params",
-    });
-  }
+  // 内置 id（parchment 等）不再拒绝：那是内置主题的 override 文件，同 id 覆盖写，
+  // 删除该文件即「恢复初始」。真正撞车的场景由前端 allPresets 的 id 合并兜底。
 
   const dir = themesDir(homeDir);
   await mkdir(dir, { recursive: true });
