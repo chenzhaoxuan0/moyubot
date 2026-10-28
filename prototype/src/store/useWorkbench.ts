@@ -1731,33 +1731,6 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       fullPrompt = prompt.trim() ? `${prompt}\n\n${parts.join("\n")}` : parts.join("\n");
     }
 
-    const pushUserBubble = (sessionId: SessionId): number => {
-      const itemId = ++seq;
-      // 回显登记（ADR 0012 review 修复）：daemon 会把用户轮 delta 广播回来，
-      // 本地已渲染的这条登记进窗口，回显到达时消费掉 —— 只滤自己的回声，
-      // 渠道/其他端发起的用户轮不会被误杀（见 consumeEvents 的过滤）；
-      // 消费时会把 daemon 真实 messageId 回填进来（fork 锚点用，ADR 0013）
-      registerEcho(sessionId, prompt, itemId);
-      set((s) => ({
-        timeline: [
-          ...s.timeline,
-          {
-            id: itemId,
-            event: {
-              type: "message.delta",
-              sessionId,
-              messageId: `u${++seq}`,
-              role: "user" as const,
-              text: prompt,
-              attachments,
-            } as const,
-            at: Date.now(),
-          },
-        ],
-      }));
-      return itemId;
-    };
-
     // 对话分叉（ADR 0013 + docs/18 §〇）：分叉意图存在 → 下一次发送一定开新段。
     // 绕过续聊判定与 retention（分叉语义就是「回到锚点边界重来」，不该被接回旧段）。
     // HANDOFF 不单独传 —— daemon 对 fork 自动取分叉父段为交接源并带 seq 上界。
@@ -1944,7 +1917,6 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
             activeSessionId: normalized.id,
           }));
           markSessionViewed(normalized.id);
-          pushUserBubble(normalized.id);
           const currentTurnConfig = get().turnContextConfig;
           const turnManifest = resolveEffectiveTurnManifest(currentTurnConfig, unit?.contextManifest, false);
           const contextInject = turnManifest !== null ? { manifest: turnManifest } : undefined;
@@ -2015,8 +1987,6 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
 
     set((s) => ({ sessions: [...s.sessions, session], activeSessionId: session.id }));
 
-    // 用户消息是时间线的第一行（ZCode：右对齐的用户气泡）。
-    pushUserBubble(session.id);
     markSessionViewed(session.id);
   },
 

@@ -68,6 +68,8 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
   const plusMenuRef = useRef<HTMLDivElement>(null);
   const schedRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const isComposingRef = useRef(false);
+  const isSubmittingRef = useRef(false);
 
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
@@ -381,8 +383,10 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
 
   /** 提交输入内容："/" 开头的文本原样发给执行器（原生命令透传语义），支持仅带附件或图文混发。 */
   const submit = () => {
+    if (isSubmittingRef.current) return;
     const v = draft.trim();
     if (!v && attachments.length === 0) return;
+    isSubmittingRef.current = true;
     const currentAttachments = [...attachments];
     setDraft("");
     setAttachments([]);
@@ -393,7 +397,11 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
     setCursorOffset(0);
     setHistPos(null);
     histSavedDraft.current = "";
-    void run(v, { attachments: currentAttachments });
+    void Promise.resolve(run(v, { attachments: currentAttachments })).finally(() => {
+      setTimeout(() => {
+        isSubmittingRef.current = false;
+      }, 300);
+    });
   };
 
   const timeline = useWorkbench((s) => s.timeline);
@@ -605,6 +613,12 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
           <textarea
             ref={taRef}
             value={draft}
+            onCompositionStart={() => {
+              isComposingRef.current = true;
+            }}
+            onCompositionEnd={() => {
+              isComposingRef.current = false;
+            }}
             onChange={(e) => {
               setDraft(e.target.value);
               // 亲手改动 = 放弃历史浏览（保留改后的文本为当前草稿）
@@ -622,7 +636,7 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
               }
             }}
             onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing) return;
+              if (e.nativeEvent.isComposing || isComposingRef.current || e.keyCode === 229) return;
               // @ 提及菜单开着且有可选项：↑↓ 导航，Enter/Tab 选定（焦点留在输入框）
               if (mentionOpen && mention.items.length > 0) {
                 const picked = mention.items[Math.min(mentionIndex, mention.items.length - 1)];
