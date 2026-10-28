@@ -96,6 +96,13 @@ html.aw-wco-hidden {
   --text-body: 14px;
   --text-body-lg: 16px;
 
+  /* ---- Thread prose：对话正文的专属排版档 ----
+     数值来自 Codex 桌面版拆解真值（codex-clone/tokens.css）：
+     --conversation-thread-font-size .875rem / -line-height 1.375rem。
+     跟随外观设置的字号缩放，缩放后行高等比放大，节奏不变。 */
+  --text-thread: calc(0.875rem * var(--aw-font-scale, 1));
+  --text-thread--line-height: calc(1.375rem * var(--aw-font-scale, 1));
+
   /* ---- Spacing：保持原有基准与间距完全不变 ---- */
   --spacing: 0.25rem;
   --spacing-gutter: 0.5rem; /* 元素间距 8px */

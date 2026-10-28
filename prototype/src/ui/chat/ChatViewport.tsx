@@ -230,7 +230,7 @@ export function ChatViewport({
                     width: "100%",
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
-                  className="pb-4"
+                  className="pb-3"
                 >
                   <UnitRowRenderer
                     unit={u}
@@ -242,7 +242,7 @@ export function ChatViewport({
             })}
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-3">
             {settledUnits.map((u) => (
               <UnitRowRenderer
                 key={u.key}
@@ -256,7 +256,7 @@ export function ChatViewport({
 
         {/* LiveTail 独立尾插槽：非虚拟化渲染，流式极速响应与零闪烁 */}
         {liveTailUnit && (
-          <div className="mt-4">
+          <div className="mt-3">
             <UnitRowRenderer
               unit={liveTailUnit}
               busy={busy}
@@ -267,7 +267,7 @@ export function ChatViewport({
 
         {/* 忙态底部指示 */}
         {busy && (
-          <div className="mt-4 flex items-center gap-2 text-body-sm text-teal select-none">
+          <div className="mt-3 flex items-center gap-2 text-body-sm text-teal select-none">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal" aria-hidden />
             <span>{unit?.name ?? "bot"} 正在思考与执行…</span>
           </div>
@@ -392,7 +392,7 @@ function WorkGroupRow({
   }, [entries]);
 
   return (
-    <div className="rounded-card border border-line/60 bg-rail/15 px-3 py-2 shadow-2xs transition">
+    <div className="rounded-input border border-line/70 bg-rail/15 px-3 py-2 transition">
       <button
         type="button"
         onClick={toggleOpen}

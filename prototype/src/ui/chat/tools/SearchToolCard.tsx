@@ -9,7 +9,7 @@ export function SearchToolCard({ data }: { data: ToolExecutionData }) {
   const results = parseSearchResults(data.output);
 
   return (
-    <div className="overflow-hidden rounded-input border border-line bg-card shadow-xs">
+    <div className="overflow-hidden rounded-input border border-line bg-card">
       <div
         role="button"
         tabIndex={0}

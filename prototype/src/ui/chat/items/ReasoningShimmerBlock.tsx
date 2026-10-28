@@ -36,7 +36,7 @@ export function ReasoningShimmerBlock({
   const wordCount = text.length;
 
   return (
-    <div className="my-1.5 overflow-hidden rounded-input border border-line/60 bg-rail/20 shadow-2xs">
+    <div className="my-1.5 overflow-hidden rounded-input border border-line/70 bg-rail/15">
       <div
         role="button"
         tabIndex={0}
@@ -77,7 +77,7 @@ export function ReasoningShimmerBlock({
       </div>
 
       {expanded && (
-        <div className="border-t border-line/50 bg-rail/40 p-3 max-h-96 overflow-y-auto font-mono text-body-sm leading-relaxed text-graphite whitespace-pre-wrap select-text shadow-inner">
+        <div className="border-t border-line/50 bg-rail/30 p-3 max-h-96 overflow-y-auto font-mono text-[12px] leading-[1.65] text-graphite whitespace-pre-wrap select-text">
           {text}
         </div>
       )}

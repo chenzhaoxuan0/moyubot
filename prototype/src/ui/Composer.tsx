@@ -683,8 +683,8 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
             }
             aria-label="任务输入"
             className={cn(
-              "w-full resize-none overflow-y-auto bg-transparent leading-relaxed text-ink !outline-none focus:!outline-none focus-visible:!outline-none focus-visible:!ring-0 placeholder:text-graphite",
-              isMobile ? "text-body-sm min-h-[64px]" : "text-body min-h-[76px]",
+              "w-full resize-none overflow-y-auto bg-transparent text-ink !outline-none focus:!outline-none focus-visible:!outline-none focus-visible:!ring-0 placeholder:text-graphite",
+              isMobile ? "text-body-sm min-h-[64px] leading-relaxed" : "text-thread min-h-[76px]",
             )}
             style={{ height: `${inputHeight}px`, maxHeight: `${maxH}px`, outline: "none", boxShadow: "none" }}
           />

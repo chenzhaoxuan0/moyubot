@@ -66,7 +66,7 @@ export function FileDiffToolCard({ data }: { data: ToolExecutionData }) {
   };
 
   return (
-    <div className="overflow-hidden rounded-input border border-line bg-card shadow-xs">
+    <div className="overflow-hidden rounded-input border border-line bg-card">
       <div
         role="button"
         tabIndex={0}

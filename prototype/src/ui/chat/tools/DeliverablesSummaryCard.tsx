@@ -14,7 +14,7 @@ export function DeliverablesSummaryCard({
   if (files.length === 0) return null;
 
   return (
-    <div className="rounded-card border border-teal/20 bg-teal-tint/10 p-3 shadow-xs">
+    <div className="rounded-input border border-teal/20 bg-teal-tint/10 p-3">
       <div className="flex items-center gap-1.5 text-caption font-medium text-teal mb-2">
         <FileCode size={13} />
         <span>本轮修改/交付的文件 ({files.length})</span>
@@ -24,7 +24,7 @@ export function DeliverablesSummaryCard({
         {files.map((f, i) => (
           <div
             key={i}
-            className="flex items-center gap-1.5 rounded-input border border-line bg-card px-2.5 py-1 text-caption font-mono shadow-2xs hover:border-teal/50 transition group"
+            className="flex items-center gap-1.5 rounded-btn border border-line bg-card px-2.5 py-1 text-caption font-mono hover:border-teal/50 transition group"
           >
             <span className="truncate max-w-[220px] text-ink" title={f.path}>
               {f.path.split(/[\\/]/).pop()}

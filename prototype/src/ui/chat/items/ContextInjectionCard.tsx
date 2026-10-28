@@ -22,7 +22,7 @@ export function ContextInjectionCard({
   const total = totalChars ?? parts.reduce((sum, p) => sum + p.chars, 0);
 
   return (
-    <div className="my-2 overflow-hidden rounded-input border border-line-soft bg-canvas-solid/40 text-caption">
+    <div className="my-2 overflow-hidden rounded-input border border-line/70 bg-rail/15 text-caption">
       <div
         role="button"
         tabIndex={0}

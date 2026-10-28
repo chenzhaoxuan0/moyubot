@@ -19,7 +19,7 @@ export function GenericToolCard({ data }: { data: ToolExecutionData }) {
   };
 
   return (
-    <div className="overflow-hidden rounded-input border border-line bg-card shadow-xs">
+    <div className="overflow-hidden rounded-input border border-line bg-card">
       <div
         role="button"
         tabIndex={0}
@@ -72,7 +72,7 @@ export function GenericToolCard({ data }: { data: ToolExecutionData }) {
       </div>
 
       {expanded && (
-        <div className="border-t border-line/60 bg-rail/30 p-3 text-caption font-mono space-y-2 select-text">
+        <div className="border-t border-line/60 bg-rail/30 p-3 text-[12px] leading-[1.65] font-mono space-y-2 select-text">
           {data.input !== undefined && (
             <div>
               <p className="text-ash text-[10px] mb-1 font-sans">输入参数</p>

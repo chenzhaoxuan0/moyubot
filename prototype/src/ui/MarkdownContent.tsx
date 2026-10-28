@@ -76,44 +76,44 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
 }
 
 /**
- * 标题阶梯分级（对齐 mcode/TUI 的 markdownHeading 调色板与现代分级阅读）：
- * h1: 大标题 + 底部轻分割线 + 主色高光
- * h2: 二级重点分节（蓝青色，分层显著）
- * h3: 三级子议题（紫青色）
- * h4+: 紧凑加粗小标题
+ * 标题阶梯 —— 单色纪律（Codex 桌面版取向）：
+ * 不用颜色区分层级，只用字号 + 字重；所有标题都是正文同色（ink），
+ * 颜色留给链接与行内代码底色。段间距节奏对齐 Codex 真值
+ * （段落 11px / 列表项 4px），标题上间距放大做分节呼吸感。
  */
 const headingCls = [
-  "mt-6 mb-3 text-[17px] font-bold text-teal dark:text-teal-tint tracking-tight border-b border-line/60 pb-1.5 flex items-center gap-1.5", // h1
-  "mt-5 mb-2.5 text-[15px] font-bold text-sky-600 dark:text-sky-400 tracking-tight flex items-center gap-1.5", // h2
-  "mt-4 mb-2 text-[14px] font-semibold text-indigo-600 dark:text-indigo-400 tracking-tight", // h3
-  "mt-3 mb-1.5 text-[13px] font-semibold text-emerald-600 dark:text-emerald-400", // h4
-  "mt-2.5 mb-1 text-[12px] font-semibold text-graphite uppercase tracking-wider", // h5
-  "mt-2 mb-1 text-[12px] font-semibold text-ash uppercase tracking-wider", // h6
+  "mt-6 mb-2.5 text-[1.25em] font-semibold tracking-[-0.01em] text-ink", // h1
+  "mt-[22px] mb-2 text-[1.1em] font-semibold tracking-[-0.01em] text-ink", // h2
+  "mt-[18px] mb-1.5 text-[1em] font-semibold text-ink", // h3
+  "mt-3.5 mb-1 text-[0.95em] font-semibold text-ink", // h4
+  "mt-3 mb-1 text-[0.9em] font-medium text-graphite", // h5
+  "mt-3 mb-1 text-[0.9em] font-medium text-ash", // h6
 ] as const;
 
 const components: Components = {
-  h1: ({ children }) => <h1 className={headingCls[0]}><span className="h-3 w-1 rounded-full bg-teal shrink-0" aria-hidden />{children}</h1>,
-  h2: ({ children }) => <h2 className={headingCls[1]}><span className="h-2.5 w-1 rounded-full bg-sky-500 shrink-0" aria-hidden />{children}</h2>,
+  h1: ({ children }) => <h1 className={headingCls[0]}>{children}</h1>,
+  h2: ({ children }) => <h2 className={headingCls[1]}>{children}</h2>,
   h3: ({ children }) => <h3 className={headingCls[2]}>{children}</h3>,
   h4: ({ children }) => <h4 className={headingCls[3]}>{children}</h4>,
   h5: ({ children }) => <h5 className={headingCls[4]}>{children}</h5>,
   h6: ({ children }) => <h6 className={headingCls[5]}>{children}</h6>,
 
-  p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0 leading-relaxed text-ink">{children}</p>,
+  // 段落 11px 下间距（Codex .assistant p 的 0 0 11px），首尾贴边
+  p: ({ children }) => <p className="mb-[11px] leading-[inherit] text-ink last:mb-0">{children}</p>,
 
   // 有序列表用 list-inside：两位/三位编号在 overflow 容器里会被截断（ZCode 教训）
   ul: ({ children }) => (
-    <ul className="my-2 list-outside list-disc space-y-1 pl-5 marker:text-ash">{children}</ul>
+    <ul className="my-[11px] list-outside list-disc space-y-1 pl-5 marker:text-ash">{children}</ul>
   ),
   ol: ({ children }) => (
-    <ol className="my-2 list-inside list-decimal space-y-1 marker:text-ash">{children}</ol>
+    <ol className="my-[11px] list-inside list-decimal space-y-1 marker:text-ash">{children}</ol>
   ),
-  li: ({ children }) => <li className="pl-1 text-ink [&>p]:my-0">{children}</li>,
+  li: ({ children }) => <li className="pl-0.5 text-ink [&>p]:my-0">{children}</li>,
 
   blockquote: ({ children }) => (
-    <blockquote className="my-2 border-l-2 border-line pl-3 text-graphite">{children}</blockquote>
+    <blockquote className="my-[11px] border-l-2 border-line pl-3.5 text-graphite">{children}</blockquote>
   ),
-  hr: () => <hr className="my-4 border-0 border-t border-line" />,
+  hr: () => <hr className="my-5 border-0 border-t border-line" />,
   strong: ({ children }) => <strong className="font-semibold text-ink">{children}</strong>,
   del: ({ children }) => <del className="text-ash line-through">{children}</del>,
 
@@ -122,36 +122,36 @@ const components: Components = {
     <img
       {...props}
       loading="lazy"
-      className="max-w-full rounded-btn border border-line"
+      className="my-[11px] max-w-full rounded-md border border-line"
       alt={props.alt ?? ""}
     />
   ),
 
   table: ({ children }) => (
-    <div className="my-3 overflow-x-auto rounded-btn border border-line bg-card shadow-subtle">
-      <table className="w-full border-collapse text-body-sm [&_tr:last-child>td]:border-b-0">
+    <div className="my-[11px] overflow-x-auto rounded-md border border-line bg-card">
+      <table className="w-full border-collapse text-[0.855em] [&_tr:last-child>td]:border-b-0">
         {children}
       </table>
     </div>
   ),
-  thead: ({ children }) => <thead className="bg-rail">{children}</thead>,
+  thead: ({ children }) => <thead className="bg-rail/60">{children}</thead>,
   th: ({ children }) => (
-    <th className="border-b border-line px-3 py-2 text-left font-medium text-ink">{children}</th>
+    <th className="border-b border-line px-3 py-1.5 text-left font-medium text-ink">{children}</th>
   ),
   td: ({ children }) => (
-    <td className="border-b border-line/60 px-3 py-2 align-top text-graphite">{children}</td>
+    <td className="border-b border-line/50 px-3 py-1.5 align-top text-graphite">{children}</td>
   ),
 
   // 块级代码：pre 的唯一子元素是 <code className="language-xx">原文</code>
   pre: ({ children }) => <PreBlock>{children}</PreBlock>,
 
-  // 行内代码（无 language- 类名的 code）
+  // 行内代码（无 language- 类名的 code）——Codex 档：12.5px、细边框、5px 圆角
   code: ({ className, children }) => {
     if (typeof className === "string" && className.includes("language-")) {
       return <code>{children}</code>;
     }
     return (
-      <code className="rounded bg-line-soft px-1.5 py-0.5 font-mono text-[0.88em] text-ink">
+      <code className="rounded-[5px] border border-line bg-rail/60 px-[5px] py-px font-mono text-[0.875em] leading-[inherit] text-ink">
         {children}
       </code>
     );
@@ -205,13 +205,13 @@ function CodeBody({ code, lang }: { code: string; lang: string }) {
 
   if (lines === null) {
     return (
-      <pre className="overflow-x-auto p-3 text-caption font-mono leading-relaxed text-ink">
+      <pre className="overflow-x-auto p-3 text-[12px] leading-[1.7] font-mono text-ink">
         <code>{code}</code>
       </pre>
     );
   }
   return (
-    <pre className="overflow-x-auto p-3 text-caption font-mono leading-relaxed text-ink">
+    <pre className="overflow-x-auto p-3 text-[12px] leading-[1.7] font-mono text-ink">
       <code>
         {lines.map((line, i) => (
           <span key={i}>
@@ -243,8 +243,8 @@ function PreBlock({ children }: { children?: ReactNode }) {
   };
 
   return (
-    <div className="group relative my-3 overflow-hidden rounded-input border border-line bg-card shadow-subtle">
-      <div className="flex items-center justify-between border-b border-line/60 bg-rail px-3 py-1.5 text-caption font-mono text-ash">
+    <div className="group relative my-[11px] overflow-hidden rounded-md border border-line bg-card">
+      <div className="flex items-center justify-between border-b border-line/60 bg-rail/50 px-3 py-1 text-[11px] font-mono text-ash">
         <span>{lang || "code"}</span>
         <button
           onClick={copy}
@@ -281,7 +281,7 @@ export function MarkdownContent({
         isAnimating={false}
         lineNumbers={false}
         components={components}
-        className={cn("text-body leading-relaxed text-ink", className)}
+        className={cn("text-thread text-ink", className)}
       >
         {content}
       </Streamdown>

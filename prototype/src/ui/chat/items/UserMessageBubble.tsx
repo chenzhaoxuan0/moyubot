@@ -69,7 +69,7 @@ function ClampedPromptText({ text, stateKey }: { text: string; stateKey: string 
       <p
         ref={pRef}
         className={cn(
-          "whitespace-pre-wrap text-body leading-relaxed text-ink",
+          "whitespace-pre-wrap text-thread text-ink",
           // 字面量（Tailwind JIT 只扫源码里的完整类名）；与 USER_BUBBLE_CLAMP_LINES 同值
           !open && "line-clamp-6",
         )}
@@ -161,8 +161,8 @@ export function UserMessageBubble({
   // ---- 编辑态：气泡原位替换为编辑器 ----
   if (editing) {
     return (
-      <div data-turn-id={messageId} className="flex w-full flex-col items-end">
-        <div className="w-full max-w-full rounded-[16px] rounded-tr-[4px] border border-teal/40 bg-card px-3.5 py-2.5 shadow-xs focus-within:border-teal/60">
+      <div data-turn-id={messageId} className="flex w-full flex-col items-end pt-[22px]">
+        <div className="w-full max-w-full rounded-2xl border border-teal/40 bg-card px-3.5 py-2.5 shadow-xs focus-within:border-teal/60">
           <textarea
             autoFocus
             value={editDraft}
@@ -178,7 +178,7 @@ export function UserMessageBubble({
               }
             }}
             rows={Math.min(10, Math.max(2, editDraft.split("\n").length))}
-            className="w-full resize-none bg-transparent text-body leading-relaxed text-ink outline-none"
+            className="w-full resize-none bg-transparent text-thread text-ink outline-none"
           />
           <div className="mt-1.5 flex items-center gap-2">
             <span className="min-w-0 flex-1 truncate text-caption text-ash">
@@ -270,13 +270,13 @@ export function UserMessageBubble({
 
   if (parsed.isCommand) {
     return (
-      <div data-turn-id={messageId} className="group/user flex items-end justify-end gap-1.5">
+      <div data-turn-id={messageId} className="group/user flex items-end justify-end gap-1.5 pt-[22px]">
         {actionEntries}
-        <div className="flex min-w-0 flex-col items-end gap-1.5">
+        <div className="flex min-w-0 max-w-[80%] flex-col items-end gap-1.5">
           {attachments && attachments.length > 0 && (
             <AttachmentsBar attachments={[...attachments]} readOnly />
           )}
-          <div className="max-w-full rounded-[16px] rounded-tr-[4px] border border-line bg-card px-3.5 py-2.5 shadow-xs flex items-center gap-2.5">
+          <div className="max-w-full rounded-2xl border border-line bg-rail px-3.5 py-2.5 flex items-center gap-2.5">
             <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-ink text-canvas font-mono text-[11px] font-bold leading-none">
               /
             </div>
@@ -298,9 +298,9 @@ export function UserMessageBubble({
   }
 
   return (
-    <div data-turn-id={messageId} className="group/user flex items-end justify-end gap-1.5">
+    <div data-turn-id={messageId} className="group/user flex items-end justify-end gap-1.5 pt-[22px]">
       {actionEntries}
-      <div className="flex min-w-0 flex-col items-end gap-1.5">
+      <div className="flex min-w-0 max-w-[80%] flex-col items-end gap-1.5">
         {/* 定时代发徽标（docs/23）：气泡上方一枚小 pill —— 这条不是用户亲手
             发的，是定时任务到点投进来的；字段随事件进账本，回放同样可见 */}
         {origin === "automation" && (
@@ -316,7 +316,7 @@ export function UserMessageBubble({
           <AttachmentsBar attachments={[...attachments]} readOnly />
         )}
         {text.trim() && (
-          <div className="max-w-full rounded-[16px] rounded-tr-[4px] border border-line bg-card px-4 py-3 shadow-xs">
+          <div className="max-w-full rounded-2xl border border-line bg-rail px-3.5 py-2.5">
             <ClampedPromptText text={text} stateKey={messageId || `t:${text.slice(0, 60)}`} />
           </div>
         )}
