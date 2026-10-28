@@ -36,9 +36,9 @@ export function GenericToolCard({ data }: { data: ToolExecutionData }) {
               </span>
             )
           ) : (
-            <span className="flex items-center gap-1.5 text-[11px] text-ash">
+            <span className="flex items-center gap-1.5 text-[11px] text-teal">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal" />
-              <span>执行中</span>
+              <span className="animate-text-shimmer font-medium">执行中</span>
             </span>
           )}
 

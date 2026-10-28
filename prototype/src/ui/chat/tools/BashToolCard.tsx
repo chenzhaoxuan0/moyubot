@@ -32,9 +32,9 @@ export function BashToolCard({ data }: { data: ToolExecutionData }) {
 
         <div className="ml-auto flex items-center gap-2 shrink-0">
           {isRunning ? (
-            <span className="flex items-center gap-1.5 text-[11px] text-ash">
+            <span className="flex items-center gap-1.5 text-[11px] text-teal">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-teal" />
-              <span>运行中</span>
+              <span className="animate-text-shimmer font-medium">运行中</span>
             </span>
           ) : isFailed ? (
             <span className="flex items-center gap-1.5 text-[11px] text-ash">
