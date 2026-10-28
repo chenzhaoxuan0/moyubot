@@ -27,7 +27,13 @@ export interface GroupedItem {
 }
 
 export type RenderUnit =
-  | { readonly kind: "item"; readonly key: string; readonly item: GroupedItem }
+  | {
+      readonly kind: "item";
+      readonly key: string;
+      readonly item: GroupedItem;
+      /** true = 未落定轮的中间正文：按过程语境渲染（无 meta 行，Codex 逻辑） */
+      readonly itemIsProcess?: boolean;
+    }
   | {
       readonly kind: "work";
       readonly key: string;

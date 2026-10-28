@@ -394,9 +394,13 @@ export function buildWorkRuns(items: readonly GroupedItem[]): RenderUnit[] {
       flush();
     } else {
       // 末轮还在跑（或没有正文可锚）：中间正文保持可见，只折叠思考/工具链，
-      // 轮落定后的下一次重建再整体收口
+      // 轮落定后的下一次重建再整体收口。这里独立发射的正文是**中间叙述**
+      // （轮尚未以最终回复收口），标记 itemIsProcess —— 渲染层不给它 meta 行
+      // （分叉/复制/模型名只属于最终结果）
       for (const e of turn) {
         if (e.kind === "thinking" || e.kind === "tool") buf.push(e);
+        else if (e.kind === "assistant.message")
+          out.push({ kind: "item", key: String(e.id), item: e, itemIsProcess: true });
         else emitItem(e);
       }
       flush();

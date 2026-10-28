@@ -311,6 +311,7 @@ function UnitRowRenderer({
       item={unit.item}
       busy={busy}
       lastUserTurnId={lastUserTurnId}
+      process={unit.itemIsProcess === true}
     />
   );
 }
