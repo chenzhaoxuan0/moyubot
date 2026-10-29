@@ -244,10 +244,15 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
             <label className="flex cursor-pointer items-start gap-2 text-caption text-graphite">
               <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} className="mt-0.5 accent-teal" />
               <span>
-                闲时自动执行（免确认门）
+                闲时自动执行（打勾门）
                 <span className="ml-1 text-ash">
-                  用量还有富余且工作台空闲时，引擎直接派发这条待办，跑完自动验收 —— 不用心跳提议。清单（inbox）分类沉淀的任务默认就是这种。
+                  勾上 = 用量还有富余且工作台空闲时，引擎直接派发这条待办，跑完自动验收；取消 = 不再自动执行，只能手动跑或重新勾选。清单（inbox）分类沉淀的任务默认勾上。
                 </span>
+                {initial != null && auto && (
+                  <span className="mt-1 block text-amber-600">
+                    注意：编辑保存后这个勾会自动取消 —— 编辑过的任务需重新确认，保存后请到卡片上重新打勾。
+                  </span>
+                )}
               </span>
             </label>
             <Field

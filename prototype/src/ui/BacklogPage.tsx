@@ -29,6 +29,8 @@ import {
 } from "../core/backlog.ts";
 import { useBacklog } from "../store/useBacklog.ts";
 import { useWorkbench, visibleModelsFor } from "../store/useWorkbench.ts";
+import { useSidePane } from "../store/useSidePane.ts";
+import { asUnitId } from "../core/units.ts";
 import { ModelSelect } from "./ModelSelect.tsx";
 import { BacklogDialog } from "./BacklogDialog.tsx";
 import { NumField } from "./NumField.tsx";
@@ -232,6 +234,7 @@ function BacklogCard({
   const sleep = useBacklog((s) => s.sleep);
   const review = useBacklog((s) => s.review);
   const remove = useBacklog((s) => s.deleteItem);
+  const updateItem = useBacklog((s) => s.updateItem);
   const units = useWorkbench((s) => s.units);
 
   const [menuOpen, setMenuOpen] = useState(false);
@@ -239,6 +242,7 @@ function BacklogCard({
 
   const unitName = units.find((u) => u.id === item.unitId)?.name ?? item.unitName;
   const lastRun = item.lastRun;
+  const autoCheckable = item.status === "ready" || item.status === "sleeping";
 
   return (
     <div className={cn("relative flex flex-col gap-2.5 rounded-card border border-line bg-card px-4 py-3", item.status === "sleeping" && "opacity-60")}>
@@ -303,13 +307,26 @@ function BacklogCard({
           <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">{item.size === "big" ? "大" : "小"}</span>
         )}
         {item.source === "inbox" && <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">收件箱</span>}
-        {item.auto && (
-          <span
-            className="shrink-0 whitespace-nowrap rounded-chip bg-gain/10 px-2 py-0.5 text-caption text-gain"
-            title="闲时自动执行：工作台空闲且余量足够时直接派发，不进确认门，跑完自动验收"
+        {/* 打勾门：勾 = 闲时自动执行。done 收档不显示；ready/sleeping 可操作；
+            其余状态（执行中/待验收/提议挂起）显示但禁用，等回到可操作态再勾 */}
+        {item.status !== "done" && (
+          <label
+            className={cn(
+              "flex shrink-0 items-center gap-1 rounded-chip px-2 py-0.5 text-caption",
+              item.auto ? "bg-gain/10 text-gain" : "bg-line-soft text-ash",
+              autoCheckable ? "cursor-pointer" : "cursor-not-allowed opacity-70",
+            )}
+            title="闲时执行（打勾门）：勾上 = 工作台空闲且余量足够时自动派发，跑完自动验收；取消 = 不再自动执行，只能手动跑或重新勾选。任何编辑保存后会自动取消勾，需重新勾选才会再进闲时队列。"
           >
-            闲时自动执行
-          </span>
+            <input
+              type="checkbox"
+              checked={item.auto}
+              disabled={!autoCheckable}
+              onChange={(e) => void updateItem(item.id, { auto: e.target.checked })}
+              className="accent-teal"
+            />
+            闲时执行
+          </label>
         )}
         {/* != null（不是 !== null）：旧 daemon 的条目没有 targetSessionId 字段，
             undefined 漏过严格不等会让 .slice 直接掀翻整页渲染 */}
@@ -437,6 +454,25 @@ function BacklogCard({
           <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-caption text-blue-500">
             <CircleDot size={12} className="animate-pulse" />
             长任务执行中（{lastRun?.runtimeId ?? item.runtimeId}）
+            {lastRun?.sessionId != null && (
+              <button
+                onClick={() => {
+                  // 监控 tab 按 owner 过滤可见：任务可能属于别的 bot，先切过去再开
+                  const w = useWorkbench.getState();
+                  if (String(w.activeUnitId) !== String(item.unitId)) w.selectUnit(asUnitId(item.unitId));
+                  useSidePane.getState().openLiveSession({
+                    unitId: asUnitId(item.unitId),
+                    sessionId: lastRun.sessionId!,
+                    runtimeId: lastRun.runtimeId ?? item.runtimeId,
+                    title: item.title,
+                  });
+                }}
+                className="ml-1 rounded-btn px-1.5 py-0.5 text-caption text-teal underline-offset-2 hover:bg-line-soft hover:underline"
+                title="在右侧实时监控此会话（执行器挂死/卡住一眼可见）"
+              >
+                查看会话
+              </button>
+            )}
           </span>
         )}
         {item.status === "awaiting_confirm" && (
@@ -581,6 +617,18 @@ function BacklogSettings({ onClose }: { onClose: () => void }): ReactElement {
               <NumField label="提议超时（分钟）" value={hb.proposalTimeoutMinutes} min={1} max={120} inputClassName={inputCls} onSave={(n) => void save({ heartbeat: { ...hb, proposalTimeoutMinutes: n } })} />
               <NumField label="连续忽略上限（次→休眠）" value={hb.maxIgnoreCount} min={1} max={10} inputClassName={inputCls} onSave={(n) => void save({ heartbeat: { ...hb, maxIgnoreCount: n } })} />
             </div>
+            <label className="flex cursor-pointer items-start gap-1.5 text-caption text-graphite" title="默认关：取消打勾的任务不执行也不被打扰，打勾模型是主流程。打开后恢复旧的提议-确认门（空闲时心跳 agent 为未打勾任务弹提议，你确认才执行）。">
+              <input
+                type="checkbox"
+                checked={hb.proposeNonAuto}
+                disabled={busy}
+                onChange={(e) => void save({ heartbeat: { ...hb, proposeNonAuto: e.target.checked } })}
+                className="mt-0.5 accent-teal"
+              />
+              <span>
+                为未打勾的任务弹提议（旧确认门流程，默认关）—— 关闭时，取消打勾的任务完全静默，只能手动执行或重新打勾
+              </span>
+            </label>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <span className="block text-body-sm text-ink" title="建议指到有冗余的订阅执行器。">

@@ -210,6 +210,9 @@ export interface HeartbeatConfig {
   /** 心跳会话跑在哪个执行器上（用户可指到有冗余的订阅执行器 —— 以烧 token 为目的） */
   readonly runtimeId: string;
   readonly model: string | null;
+  /** 为**未打勾**（非 auto）的就绪任务弹提议（旧确认门流程）。默认关：
+   * 打勾模型是主流程 —— 取消勾 = 不执行也不打扰；想恢复旧的提议-确认门再打开。 */
+  readonly proposeNonAuto: boolean;
 }
 
 export type ProbeFormat = "zcode-quota" | "mmx-json" | "raw";
@@ -290,6 +293,7 @@ export const DEFAULT_BACKLOG_CONFIG: BacklogConfig = {
     maxIgnoreCount: 3,
     runtimeId: "",
     model: null,
+    proposeNonAuto: false,
   },
   // zcode / mcode 是本机实测过的订阅执行器（zcode quota 由用户自加，mmx 自带），
   // 预置好探针命令，其余执行器由用户按需补

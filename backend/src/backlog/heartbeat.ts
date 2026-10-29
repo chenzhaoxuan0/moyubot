@@ -403,8 +403,11 @@ export class BacklogEngine {
         return;
       }
       // 单飞与挂起提案在 phase 里已体现（executing/awaiting_confirm/awaiting_review 都不是 idle）
-      // auto 条目不进心跳候选：它们归 autopilot 托管执行，再提议一遍是打扰
-      const ready = this.deps.store.listBacklogItems().filter((i) => i.status === "ready" && !i.auto);
+      // auto 条目不进心跳候选：它们归 autopilot 托管执行，再提议一遍是打扰。
+      // 未打勾（非 auto）条目默认也不进：proposeNonAuto 开关（默认关）恢复旧的提议-确认门
+      const ready = this.deps.store
+        .listBacklogItems()
+        .filter((i) => i.status === "ready" && !i.auto && cfg.heartbeat.proposeNonAuto);
       this.saveLedger({ lastBeatAt: Date.now() });
       this.pushState(true);
       try {

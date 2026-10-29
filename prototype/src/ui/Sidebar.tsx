@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import {
   AlarmClock,
   Archive,
@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { useWorkbench, type ViewMode, type BotWriteGuards } from "../store/useWorkbench.ts";
 import { useShell } from "../store/useShell.ts";
+import { useBacklog } from "../store/useBacklog.ts";
 import { useGit } from "../store/useGit.ts";
 import { useAppearance } from "../store/useAppearance.ts";
 import { BrandLogo } from "./BrandLogo.tsx";
@@ -167,6 +168,44 @@ export function Sidebar() {
       return next;
     });
   };
+
+  // ---- 闲时托管任务的观察性（打勾门配套）------------------------------------
+  //
+  // 打勾任务派发出来的是 source=automation 的后台会话，用户不在场也可能在跑。
+  // 要求：会话一开跑，所属 bot 的历史子列表自动展开（看得见）；bot 行亮脉动蓝点
+  // （子列表收起也看得见）。只做一次性展开 —— 用户手动收起后不追着弹开。
+
+  /** 每个 unit 只自动展开一次（本次 Sidebar 生命周期内），之后的开合全归用户 */
+  const autoExpandedUnits = useRef<Set<string>>(new Set());
+  const expandUnitHistoryOnce = (unitId: string): void => {
+    if (unitId === "" || autoExpandedUnits.current.has(unitId)) return;
+    autoExpandedUnits.current.add(unitId);
+    setOpenHistoryUnits((prev) => {
+      if (prev.has(unitId)) return prev;
+      const next = new Set(prev);
+      next.add(unitId);
+      return next;
+    });
+  };
+
+  /** 托管会话启动（autopilot/心跳派发）→ 展开所属 bot 的历史 */
+  useEffect(() => {
+    const client = DaemonClient.get(defaultDaemonEndpoint());
+    const unsub = client.onEvent((e) => {
+      if (e.type !== "session.started" || e.source !== "automation") return;
+      expandUnitHistoryOnce(String(e.unitId));
+    });
+    return unsub;
+  }, []);
+
+  /** 应用打开时已经在跑的任务（app 没开着时被派发的场景）也展开 */
+  const backlogItems = useBacklog((s) => s.items);
+  useEffect(() => {
+    for (const item of backlogItems) {
+      if (item.status === "executing") expandUnitHistoryOnce(item.unitId);
+    }
+  }, [backlogItems]);
+
   const addUnit = useWorkbench((s) => s.addUnit);
   const mainView = useShell((s) => s.mainView);
 
@@ -778,6 +817,8 @@ function UnitRow({
   const timeline = useWorkbench((s) => s.timeline);
   const busy = useWorkbench((s) => s.busy);
   const mainView = useShell((s) => s.mainView);
+  /** 该 bot 名下有闲时托管任务正在执行（打勾任务跑起来，bot 行亮灯） */
+  const hasExecutingTask = useBacklog((s) => s.items.some((i) => i.status === "executing" && i.unitId === unit.id));
   /** 终端标签实例（TUI 还开着的历史行 → 点行直切那个标签，不发 resume） */
   const terminalInstances = useTerminalStore((s) => s.instances);
   const sessionStatusById = useMemo(() => {
@@ -1028,6 +1069,14 @@ function UnitRow({
         <span className="flex min-w-0 flex-1 flex-col gap-0.5 pt-0.5">
           <span className="flex items-baseline gap-1.5">
             <span className="truncate text-body-sm font-medium text-ink">{unit.name}</span>
+            {/* 闲时托管任务执行中：子列表收起也看得见（点击行展开历史可盯实时状态） */}
+            {hasExecutingTask && (
+              <span
+                aria-hidden
+                className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-blue-500"
+                title="有闲时托管任务正在执行 —— 点击行展开历史可盯实时状态"
+              />
+            )}
             {/* 上下文注入标签已移至 bot 设置页面查看，侧栏不再显示 */}
             {/* 渠道徽标 */}
             {enabledChannels.length > 0 && (

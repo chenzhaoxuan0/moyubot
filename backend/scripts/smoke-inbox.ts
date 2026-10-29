@@ -263,6 +263,32 @@ async function main(): Promise<void> {
     check("backlog.create auto=true", createdItem.auto === true, createdItem);
     check("backlog.create targetSessionId", createdItem.targetSessionId === "sess-xyz", createdItem);
 
+    // 8b. 打勾门：实质编辑即灭勾；仅勾选/原值编辑不灭
+    const edited = await rpc(ws, "backlog.update", { id: createdItem!.id, goal: "冒烟：改过目标的待办" });
+    const editedItem = (edited["result"] as { item: { auto: boolean; goal: string } }).item;
+    check("实质编辑即灭勾", editedItem.auto === false && editedItem.goal === "冒烟：改过目标的待办", editedItem);
+    const rechecked = await rpc(ws, "backlog.update", { id: createdItem!.id, auto: true });
+    check("重新打勾恢复 auto", ((rechecked["result"] as { item: { auto: boolean } }).item).auto === true);
+    const noopEdit = await rpc(ws, "backlog.update", { id: createdItem!.id, goal: "冒烟：改过目标的待办" });
+    check("原值编辑不灭勾", ((noopEdit["result"] as { item: { auto: boolean } }).item).auto === true);
+
+    // 8c. 清单侧撤销降级：条目链着的任务（清单来源+就绪+auto）随删除摘勾。
+    // 链接与来源平时由分类器事务写入，冒烟的分类器指向不存在的执行器 —— 用
+    // sqlite 夹具补上这两格再走真实 RPC，验证的是 delete 处理器的守卫本身。
+    const linkedEntry = (await rpc(ws, "inbox.add", { text: "冒烟：将被撤销的条目", category: "todo" }))["result"] as { entry: EntryShape };
+    {
+      const { DatabaseSync } = await import("node:sqlite");
+      const db = new DatabaseSync(path.join(homeDir, "state.db"));
+      db.prepare(`UPDATE inbox_entries SET task_id = ?, status = 'classified' WHERE id = ?`).run(createdItem!.id, linkedEntry.entry.id);
+      db.prepare(`UPDATE backlog_items SET source = 'inbox' WHERE id = ?`).run(createdItem!.id);
+      db.close();
+    }
+    const delLinked = await rpc(ws, "inbox.delete", { id: linkedEntry.entry.id });
+    check("删链接条目 → 任务摘勾", delLinked["ok"] === true);
+    const afterDel = (await rpc(ws, "backlog.list", null))["result"] as { items: Array<{ id: number; auto: boolean; status: string }> };
+    const demoted = afterDel.items.find((i) => i.id === createdItem!.id);
+    check("清单侧撤销 → auto=false（降级手动）", demoted !== undefined && demoted.auto === false && demoted.status === "ready", demoted);
+
     // 9. 删条目；配置关掉自动分类
     const del = await rpc(ws, "inbox.delete", { id: hintsEntry!.id });
     check("inbox.delete", del["ok"] === true && (await listEntries(ws)).every((e) => e.id !== hintsEntry!.id));

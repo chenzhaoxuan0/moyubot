@@ -52,6 +52,8 @@ export function normalizeBacklogConfig(raw: unknown): BacklogConfig {
       maxIgnoreCount: clampInt(hb["maxIgnoreCount"], 1, 10, d.heartbeat.maxIgnoreCount),
       runtimeId: str(hb["runtimeId"], ""),
       model: typeof hb["model"] === "string" && hb["model"] !== "" ? hb["model"] : null,
+      // 默认关：未打勾（非 auto）任务不进心跳候选 —— 打勾模型是主流程
+      proposeNonAuto: hb["proposeNonAuto"] === true,
     },
     runtimes,
     quotaResume: {

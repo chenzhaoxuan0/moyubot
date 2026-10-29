@@ -261,6 +261,7 @@ async function main(): Promise<void> {
     // 8. 配置归一：坏值被钳制
     const cfg = await rpc(ws, "backlog.config.set", { patch: { heartbeat: { intervalMinutes: 1 } } });
     check("config clamps interval", ((cfg["result"] as { config: { heartbeat: { intervalMinutes: number } } }).config.heartbeat.intervalMinutes) === 5, cfg["result"]);
+    check("proposeNonAuto 默认关（打勾模型主流程，未打勾任务不被提议）", ((cfg["result"] as { config: { heartbeat: { proposeNonAuto: boolean } } }).config.heartbeat.proposeNonAuto) === false, cfg["result"]);
 
     // 9. 闲时自动执行（autopilot）：mockperm 夹具不烧真实额度。空闲判定口径 =
     // 距最近活动 ≥ idleMinutes，把阈值压到 1 分钟再等拍（tick 20s 一次）

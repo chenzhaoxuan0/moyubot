@@ -142,7 +142,7 @@ import {
   ROUTING_BOT_ID,
   ROUTING_DEFAULT_RUNTIME_ID,
 } from "./inbox/routingBot.ts";
-import type { InboxSignal } from "../../prototype/src/core/inbox.ts";
+import type { InboxEntry, InboxSignal } from "../../prototype/src/core/inbox.ts";
 import { DEFAULT_INBOX_CATEGORIES, normalizeInboxHints } from "../../prototype/src/core/inbox.ts";
 import { BotRegistry } from "./bots/registry.ts";
 import { TelegramGateway } from "./channels/telegram.ts";
@@ -2752,7 +2752,10 @@ registerMethod("backlog.update", (params) => {
   const hit = store.getBacklogItem(p.id);
   if (hit === undefined) throw Object.assign(new Error(`没有这个待办：${p.id}`), { code: "unknown_item" });
   if (hit.status === "executing") throw badBacklog("执行中的待办不能编辑 —— 等它跑完或打回后再改");
-  store.updateBacklogItem(p.id, {
+  // 打勾模型的「编辑即灭勾」：实质性字段（决定任务执行内容的）发生变更时，auto
+  // 一律摘掉 —— 编辑过但没人重新确认的任务不能继续无人值守执行，回卡片重新
+  // 打勾才会再进闲时队列。用户显式传的 auto（卡片上的勾）单独 toggling 不算实质变更。
+  const patch: Parameters<typeof store.updateBacklogItem>[1] = {
     ...(typeof p.title === "string" && p.title.trim() !== "" ? { title: p.title.trim() } : {}),
     ...(typeof p.goal === "string" && p.goal.trim() !== "" ? { goal: p.goal.trim() } : {}),
     ...(typeof p.prompt === "string" && p.prompt.trim() !== "" ? { prompt: p.prompt.trim() } : {}),
@@ -2768,7 +2771,16 @@ registerMethod("backlog.update", (params) => {
     ...(p.targetSessionId !== undefined
       ? { targetSessionId: typeof p.targetSessionId === "string" && p.targetSessionId.trim() !== "" ? p.targetSessionId.trim() : null }
       : {}),
-  });
+  };
+  const SUBSTANTIVE_KEYS = [
+    "title", "goal", "prompt", "unitId", "unitName", "rootPath",
+    "runtimeId", "model", "mode", "size", "launchMode", "targetSessionId",
+  ] as const;
+  const rowRec = hit as unknown as Record<string, unknown>;
+  const patchRec = patch as unknown as Record<string, unknown>;
+  const substantiveChanged = SUBSTANTIVE_KEYS.some((k) => patchRec[k] !== undefined && patchRec[k] !== rowRec[k]);
+  if (hit.auto && substantiveChanged) patch.auto = false;
+  store.updateBacklogItem(p.id, patch);
   const item = store.getBacklogItem(p.id);
   return { item: item === undefined ? null : requireEngine().toItem(item) };
 });
@@ -2938,17 +2950,37 @@ registerMethod("inbox.update", (params) => {
         }
       : {}),
   });
+  // 换分类 = 清单侧对旧决策的撤销：同 delete/reclassify 口径摘托管旗
+  if (categoryProvided && category !== hit.category) demoteLinkedInboxTask(hit);
   const entry = store.getInboxEntry(p.id);
   broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
   return { entry: entry ?? null };
 });
 
+/** 清单侧撤销（删除条目 / 改分类 / 重分类）时，把链接任务摘掉托管旗（auto=false）。
+ * 只动「清单来源 + 就绪 + auto」的干净任务 —— 从未被人工在待办页碰过、从未跑过；
+ * 摘掉后只能手动执行或重新打勾，autopilot 不再无人值守执行被用户撤销的东西。
+ * 任务本体不动（用户编辑过/已跑过的照旧），这是删除清单条目不级联删任务的边界。 */
+function demoteLinkedInboxTask(entry: InboxEntry): void {
+  const linkedTaskId = entry.task?.id;
+  if (typeof linkedTaskId !== "number") return;
+  const linked = store.getBacklogItem(linkedTaskId);
+  if (linked === undefined || linked.status !== "ready" || !linked.auto || linked.source !== "inbox") return;
+  store.updateBacklogItem(linkedTaskId, { auto: false });
+  broadcastBacklog(wss, { kind: "items" });
+}
+
 registerMethod("inbox.delete", (params) => {
   const p = (params ?? {}) as { id?: number };
   if (typeof p.id !== "number") throw badBacklog("id is required");
+  const hit = store.getInboxEntry(p.id);
   const deleted = store.deleteInboxEntry(p.id);
   // 与 add/update/reclassify 同口径：别的窗口/客户端靠信号帧重拉，不广播就渲染僵尸行
-  if (deleted) broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
+  if (deleted) {
+    // 条目删了 = 清单侧对这条 context 的撤销：链接任务还挂着托管旗就摘掉
+    if (hit !== undefined) demoteLinkedInboxTask(hit);
+    broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
+  }
   return { deleted };
 });
 
@@ -2972,16 +3004,9 @@ registerMethod("inbox.reclassify", (params) => {
   // 打回重分类 = 旧决策整体作废：旧任务链接留着会让清单显示一个
   // 「马上要被重新决定」的幽灵任务
   store.updateInboxEntry(p.id, { status: "pending", classifiedAt: null, taskId: null });
-  // 旧决策沉淀、还没跑过的 auto 任务一并作废托管语义（auto=false 回确认门）：
-  // 不作废的话 autopilot 会把已被用户否决的旧任务照跑，重分类又沉淀新任务 —— 双份执行。
-  // 只动「清单来源 + 就绪 + auto」的干净任务；用户在待办页改过/已跑的不碰。
-  const linkedTaskId = hit.task?.id;
-  if (typeof linkedTaskId === "number") {
-    const linked = store.getBacklogItem(linkedTaskId);
-    if (linked !== undefined && linked.status === "ready" && linked.auto && linked.source === "inbox") {
-      store.updateBacklogItem(linkedTaskId, { auto: false });
-    }
-  }
+  // 旧决策沉淀的干净 auto 任务一并作废托管语义 —— 不作废的话 autopilot 会把
+  // 已被用户否决的旧任务照跑，重分类又沉淀新任务，双份执行
+  demoteLinkedInboxTask(hit);
   broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
   void inboxClassifier
     .classify()
