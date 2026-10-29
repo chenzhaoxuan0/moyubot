@@ -148,6 +148,7 @@ interface EntryShape {
   id: number;
   text: string;
   category: string | null;
+  categoryNote: string | null;
   status: string;
   hints: Record<string, unknown> | null;
   task: { id: number } | null;
@@ -158,12 +159,24 @@ async function listEntries(ws: WebSocket): Promise<EntryShape[]> {
   return (r["result"] as { entries: EntryShape[] }).entries;
 }
 
-/** 等分类器落定（classifying=false 且 lastOutcome 非空）：分类会话是异步的，轮询比等帧稳 */
-async function waitForClassifierSettled(ws: WebSocket, timeoutMs = 30000): Promise<string | null> {
+type ItemShape = { id: number; auto: boolean; status: string; source: string; unitId: string; runtimeId: string; goal: string };
+async function listItems(ws: WebSocket): Promise<ItemShape[]> {
+  const r = (await rpc(ws, "backlog.list", null))["result"] as { items: ItemShape[] };
+  return r.items;
+}
+
+async function classifierState(ws: WebSocket): Promise<{ classifying: boolean; lastOutcome: string | null; runSeq: number }> {
+  const r = (await rpc(ws, "inbox.list", null))["result"] as { classifier: { classifying: boolean; lastOutcome: string | null; runSeq: number } };
+  return r.classifier;
+}
+
+/** 等一轮新分类落定：runSeq 只增不减 —— 触发时刻**之前**先取 seq，等它前进且
+ * classifying 归 false。直接比 lastOutcome 会把上一轮的残留当本轮结果（空转断言）。 */
+async function waitForClassifierRun(ws: WebSocket, beforeSeq: number, timeoutMs = 30000): Promise<string | null> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const r = (await rpc(ws, "inbox.list", null))["result"] as { classifier: { classifying: boolean; lastOutcome: string | null } };
-    if (!r.classifier.classifying && r.classifier.lastOutcome !== null) return r.classifier.lastOutcome;
+    const st = await classifierState(ws);
+    if (!st.classifying && st.runSeq > beforeSeq) return st.lastOutcome;
     await sleep(400);
   }
   return null;
@@ -204,13 +217,14 @@ async function main(): Promise<void> {
     // 3. 写一条 → pending；inbox 信号帧到达；自动触发的分类优雅失败
     // （信号帧监听先挂上再触发 —— 广播是一瞬间的，事后等会漏帧）
     const entriesFrameP = nextMessage(ws, (f) => f["type"] === "inbox" && (f["signal"] as { kind?: string })?.kind === "entries", 8000);
+    const seqBeforeAdd = (await classifierState(ws)).runSeq;
     const added = await rpc(ws, "inbox.add", { text: "冒烟：给 README 补一节迁移指南" });
     const addedEntry = (added["result"] as { entry: EntryShape }).entry;
     check("inbox.add → pending", addedEntry !== null && addedEntry.status === "pending" && addedEntry.category === null, addedEntry);
     const entriesFrame = await entriesFrameP;
     check("inbox entries signal broadcast", entriesFrame !== undefined, entriesFrame);
     // autoClassify 的 debounce（2.5s）后分类器跑起来，unknown runtime → startSession 抛错记账
-    const outcome = await waitForClassifierSettled(ws);
+    const outcome = await waitForClassifierRun(ws, seqBeforeAdd);
     check("auto classify fails gracefully with bad runtime", outcome !== null && outcome.startsWith("failed:"), outcome);
     const stillPending = await listEntries(ws);
     check("entry survives failed classify", stillPending.length === 1 && stillPending[0]?.status === "pending", stillPending);
@@ -242,8 +256,9 @@ async function main(): Promise<void> {
     check("builtin id collision filtered", cfgResult.categories.every((c) => c.id !== "idea"), cfgResult.categories);
 
     // 7. 手动触发分类：bad runtime → 快速记账失败，条目不丢
+    const seqBeforeManual = (await classifierState(ws)).runSeq;
     await rpc(ws, "inbox.classify.run", null);
-    const clsOutcome = await waitForClassifierSettled(ws);
+    const clsOutcome = await waitForClassifierRun(ws, seqBeforeManual);
     check("manual classify records failure", clsOutcome !== null && clsOutcome.startsWith("failed:"), clsOutcome);
     check("pending entries intact", (await listEntries(ws)).filter((e) => e.status === "pending").length === 1);
 
@@ -272,22 +287,51 @@ async function main(): Promise<void> {
     const noopEdit = await rpc(ws, "backlog.update", { id: createdItem!.id, goal: "冒烟：改过目标的待办" });
     check("原值编辑不灭勾", ((noopEdit["result"] as { item: { auto: boolean } }).item).auto === true);
 
-    // 8c. 清单侧撤销降级：条目链着的任务（清单来源+就绪+auto）随删除摘勾。
-    // 链接与来源平时由分类器事务写入，冒烟的分类器指向不存在的执行器 —— 用
-    // sqlite 夹具补上这两格再走真实 RPC，验证的是 delete 处理器的守卫本身。
-    const linkedEntry = (await rpc(ws, "inbox.add", { text: "冒烟：将被撤销的条目", category: "todo" }))["result"] as { entry: EntryShape };
-    {
-      const { DatabaseSync } = await import("node:sqlite");
-      const db = new DatabaseSync(path.join(homeDir, "state.db"));
-      db.prepare(`UPDATE inbox_entries SET task_id = ?, status = 'classified' WHERE id = ?`).run(createdItem!.id, linkedEntry.entry.id);
-      db.prepare(`UPDATE backlog_items SET source = 'inbox' WHERE id = ?`).run(createdItem!.id);
-      db.close();
-    }
-    const delLinked = await rpc(ws, "inbox.delete", { id: linkedEntry.entry.id });
-    check("删链接条目 → 任务摘勾", delLinked["ok"] === true);
-    const afterDel = (await rpc(ws, "backlog.list", null))["result"] as { items: Array<{ id: number; auto: boolean; status: string }> };
-    const demoted = afterDel.items.find((i) => i.id === createdItem!.id);
+    // 8c. 成功链路（mockrouting 夹具执行器：按关键词脚本化产出决策，不烧真实
+    // 额度）—— 此前冒烟只覆盖优雅失败；落库/沉淀/链接/hints 优先/无效分类与
+    // bot 回落的全链路在这里验收
+    await rpc(ws, "inbox.config.set", { patch: { classifier: { runtimeId: "mockrouting" } } });
+    const seqBeforeBatch = (await classifierState(ws)).runSeq;
+    const ideaEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：这是一个想法，归档就好" }))["result"] as { entry: EntryShape }).entry;
+    const badCatEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：坏分类条目的目标" }))["result"] as { entry: EntryShape }).entry;
+    const badBotEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：坏bot条目的目标" }))["result"] as { entry: EntryShape }).entry;
+    const plainEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：普通待办条目" }))["result"] as { entry: EntryShape }).entry;
+    const hintedEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：带预置字段的条目", hints: { unitId: "steward", runtimeId: "mockperm" } }))["result"] as { entry: EntryShape }).entry;
+    const okOutcome = await waitForClassifierRun(ws, seqBeforeBatch, 60000);
+    check("mockrouting 分类成功记账", okOutcome !== null && okOutcome.startsWith("ok:"), okOutcome);
+    const entries8c = await listEntries(ws);
+    const entryById = (id: number | undefined): EntryShape | undefined => entries8c.find((e) => e.id === id);
+    const idea8c = entryById(ideaEntry?.id);
+    check("想法条目归档不建任务", idea8c?.status === "classified" && idea8c.category === "idea" && (idea8c.task === null || idea8c.task === undefined), idea8c);
+    const badCat8c = entryById(badCatEntry?.id);
+    check("无效分类回落 todo 且理由注明", badCat8c?.category === "todo" && (badCat8c.categoryNote ?? "").includes("无效"), badCat8c);
+    const items8c = await listItems(ws);
+    const taskOf = (e: EntryShape | undefined): ItemShape | undefined => (e?.task != null ? items8c.find((i) => i.id === e.task!.id) : undefined);
+    const badBotItem8c = taskOf(entryById(badBotEntry?.id));
+    check("未知 bot 建议不被采纳（回落真实 bot）", badBotItem8c !== undefined && badBotItem8c.unitId !== "nonexistent-bot", badBotItem8c);
+    const plainItem8c = taskOf(entryById(plainEntry?.id));
+    check("普通条目沉淀 auto 任务（source=inbox 默认打勾）", plainItem8c !== undefined && plainItem8c.auto === true && plainItem8c.source === "inbox" && plainItem8c.goal.startsWith("目标："), plainItem8c);
+    const hintedItem8c = taskOf(entryById(hintedEntry?.id));
+    check("预置字段优先（unitId/runtimeId 照 hints）", hintedItem8c !== undefined && hintedItem8c.unitId === "steward" && hintedItem8c.runtimeId === "mockperm", hintedItem8c);
+
+    // 8d. 清单侧撤销降级（真实链接，替代夹具）：删条目 → 链着的干净任务摘勾
+    const delLinked = await rpc(ws, "inbox.delete", { id: plainEntry!.id });
+    check("删链接条目", delLinked["ok"] === true);
+    const demoted = (await listItems(ws)).find((i) => i.id === plainItem8c!.id);
     check("清单侧撤销 → auto=false（降级手动）", demoted !== undefined && demoted.auto === false && demoted.status === "ready", demoted);
+
+    // 8e. 重分类：旧任务摘勾作废、重新分类沉淀新任务（不双份执行）
+    const badCatOldTaskId = badCat8c?.task?.id;
+    const seqBeforeRe = (await classifierState(ws)).runSeq;
+    await rpc(ws, "inbox.reclassify", { id: badCatEntry!.id });
+    const reOutcome = await waitForClassifierRun(ws, seqBeforeRe, 60000);
+    check("重分类完成", reOutcome !== null && reOutcome.startsWith("ok:"), reOutcome);
+    const badCatAfter = (await listEntries(ws)).find((e) => e.id === badCatEntry!.id);
+    check("重分类条目已再分类", badCatAfter?.status === "classified" && badCatAfter.task != null, badCatAfter);
+    const items8e = await listItems(ws);
+    const oldTask = items8e.find((i) => i.id === badCatOldTaskId);
+    const newTask = badCatAfter?.task != null ? items8e.find((i) => i.id === badCatAfter.task!.id) : undefined;
+    check("重分类 → 旧任务摘勾、新任务打勾", oldTask !== undefined && oldTask.auto === false && newTask !== undefined && newTask.auto === true && newTask.id !== badCatOldTaskId, { oldTask, newTask });
 
     // 9. 删条目；配置关掉自动分类
     const del = await rpc(ws, "inbox.delete", { id: hintsEntry!.id });
@@ -295,8 +339,33 @@ async function main(): Promise<void> {
     const cfgOff = await rpc(ws, "inbox.config.set", { patch: { autoClassify: false } });
     check("autoClassify toggle", ((cfgOff["result"] as { config: { autoClassify: boolean } }).config.autoClassify) === false);
 
-    // 10. 优雅退出
-    const stopResp = await rpc(ws, "daemon.stop", null);
+    // 10. 重启 sweep：带着 pending 重启 daemon → 启动 sweep（+5s）把它分掉。
+    // 顺序有讲究：autoClassify 关着时加条目（不进 debounce 队列），再打开
+    // （config 变更本身不触发调度）→ 停机时配置已落库为开 → 新进程的 sweep 生效
+    const sweepEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：重启前遗留的待分类条目" }))["result"] as { entry: EntryShape }).entry;
+    check("重启前条目 pending", sweepEntry?.status === "pending", sweepEntry);
+    await rpc(ws, "inbox.config.set", { patch: { autoClassify: true } });
+    const stop1 = await rpc(ws, "daemon.stop", null);
+    check("第一次优雅停机", stop1["ok"] === true);
+    const exit1 = await Promise.race([
+      new Promise<number | null>((resolve) => {
+        daemon?.once("exit", (c) => resolve(c));
+      }),
+      sleep(8000).then(() => "timeout" as const),
+    ]);
+    if (exit1 === "timeout") await stopDaemon();
+    startDaemon(port, homeDir);
+    check("daemon 重启 healthy", await waitHealthy(port), daemonOutput);
+    const ws2 = await wsOpen(`ws://127.0.0.1:${port}/ws`);
+    await nextMessage(ws2, (f) => f["type"] === "hello");
+    const sweepOutcome = await waitForClassifierRun(ws2, 0, 30000);
+    check("重启 sweep 分掉遗留条目", sweepOutcome !== null && sweepOutcome.startsWith("ok:"), sweepOutcome);
+    const sweepAfter = (await listEntries(ws2)).find((e) => e.id === sweepEntry?.id);
+    const sweepTask = sweepAfter?.task != null ? (await listItems(ws2)).find((i) => i.id === sweepAfter.task!.id) : undefined;
+    check("遗留条目分类并沉淀任务", sweepAfter?.status === "classified" && sweepTask !== undefined && sweepTask.auto === true, { sweepAfter, sweepTask });
+
+    // 11. 优雅退出（重启后的进程与连接）
+    const stopResp = await rpc(ws2, "daemon.stop", null);
     check("daemon.stop acks", stopResp["ok"] === true);
     const exitPromise = new Promise<number | null>((resolve) => {
       daemon?.once("exit", (code) => resolve(code));

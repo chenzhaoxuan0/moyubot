@@ -76,6 +76,9 @@ export class InboxClassifier {
   /** 单飞旗（内存态：重启时那轮分类已经死了） */
   private classifying = false;
   private lastOutcome: string | null = null;
+  /** 轮次序号：每次 setOutcome 自增。lastOutcome 跨轮残留会让「等这轮落定」的
+   * 观察方（冒烟/前端）拿旧结果当新结果 —— seq 只增不减才是可靠的新鲜度凭据 */
+  private runSeq = 0;
 
   constructor(private readonly deps: InboxClassifierDeps) {}
 
@@ -106,8 +109,8 @@ export class InboxClassifier {
     if (pending.length > 0) this.schedule(5_000);
   }
 
-  state(): { classifying: boolean; lastOutcome: string | null } {
-    return { classifying: this.classifying, lastOutcome: this.lastOutcome };
+  state(): { classifying: boolean; lastOutcome: string | null; runSeq: number } {
+    return { classifying: this.classifying, lastOutcome: this.lastOutcome, runSeq: this.runSeq };
   }
 
   // ---- 分类主流程 ---------------------------------------------------------------
@@ -405,11 +408,12 @@ export class InboxClassifier {
 
   private setOutcome(outcome: string): void {
     this.lastOutcome = outcome;
+    this.runSeq += 1;
     this.pushState();
   }
 
   private pushState(): void {
-    this.deps.broadcast({ kind: "state", classifying: this.classifying, lastOutcome: this.lastOutcome });
+    this.deps.broadcast({ kind: "state", classifying: this.classifying, lastOutcome: this.lastOutcome, runSeq: this.runSeq });
   }
 }
 

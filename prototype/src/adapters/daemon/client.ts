@@ -2045,7 +2045,7 @@ export async function runBacklogConsolidate(
 export interface InboxListResult {
   readonly entries: readonly InboxEntry[];
   readonly config: InboxConfig;
-  readonly classifier: { readonly classifying: boolean; readonly lastOutcome: string | null };
+  readonly classifier: { readonly classifying: boolean; readonly lastOutcome: string | null; readonly runSeq: number };
 }
 
 export async function fetchInbox(endpoint: string = defaultDaemonEndpoint()): Promise<InboxListResult> {

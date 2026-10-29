@@ -1155,11 +1155,16 @@ export function pickAutopilotRuntime(
   return eligible[0]?.runtimeId ?? null;
 }
 
-/** 从模型回复里抠 JSON 决策：取「从某个 { 到最后一个 }」能 parse 的第一个（从右往左试） */
-function extractJson(text: string): Record<string, unknown> | null {
+/** 从模型回复里抠 JSON 决策：取「从某个 { 到最后一个 }」能 parse 的第一个（从右往左试）。
+ * 导出供 check-inbox-classify 覆盖（心跳沉默/提议判定依赖这副解析的怪癖）。 */
+export function extractJson(text: string): Record<string, unknown> | null {
   if (text === "") return null;
   const end = text.lastIndexOf("}");
-  for (let start = text.lastIndexOf("{"); start >= 0; start = text.lastIndexOf("{", start - 1)) {
+  // 注意步进别写 lastIndexOf("{", start - 1)：String.lastIndexOf 对负 position
+  // 钳回 0 —— start 到 0 时会原地踏步，遇到「{ 开头但缺 action 键」的回复直接
+  // 死循环冻住事件循环（check-inbox-classify 的负路径用例踩出来的）。
+  let start = text.lastIndexOf("{");
+  while (start >= 0) {
     const slice = text.slice(start, end + 1);
     try {
       const v = JSON.parse(slice) as unknown;
@@ -1169,6 +1174,7 @@ function extractJson(text: string): Record<string, unknown> | null {
     } catch {
       /* 试下一个起点 */
     }
+    start = start === 0 ? -1 : text.lastIndexOf("{", start - 1);
   }
   return null;
 }

@@ -11,7 +11,8 @@
  */
 
 import { parseTask, extractJsonArray } from "../src/inbox/classifier.ts";
-import { pickAutopilotRuntime } from "../src/backlog/heartbeat.ts";
+import { extractJson, pickAutopilotRuntime } from "../src/backlog/heartbeat.ts";
+import { normalizeInboxHints } from "../../prototype/src/core/inbox.ts";
 import type { QuotaHeadroom } from "../../prototype/src/core/backlog.ts";
 
 let failures = 0;
@@ -65,6 +66,23 @@ check("未订阅执行器不参选", pickAutopilotRuntime("", [q("a", 50, false)
 check("全低于地板 → null", pickAutopilotRuntime("", [q("a", 1), q("b", 2)], 10) === null);
 check("挑剩余最多的订阅执行器", pickAutopilotRuntime("", [q("a", 40), q("b", 80)], 10) === "b");
 check("percent null 排在实际余量之后", pickAutopilotRuntime("", [q("a", null), q("b", 5)], 0) === "b");
+
+// ---- normalizeInboxHints（注入钳制：这些值会拼进 routing 的分类 prompt）------------
+
+check("hints unitId 超 100 截断", normalizeInboxHints({ unitId: "u".repeat(150) })?.unitId?.length === 100);
+check("hints launchMode 白名单外丢弃（yolo 不进）", normalizeInboxHints({ launchMode: "yolo" as never }) === null);
+check("hints 空串字段整键丢弃", normalizeInboxHints({ unitId: "  ", runtimeId: "" }) === null);
+check("hints null 原样接受（显式清除模型）", normalizeInboxHints({ model: null })?.model === null);
+check("hints 非对象 → null", normalizeInboxHints("oops" as never) === null);
+check("hints rootPath 超 1000 截断", normalizeInboxHints({ rootPath: "p".repeat(1500) })?.rootPath?.length === 1000);
+
+// ---- extractJson（心跳决策解析：从右往左试 { 起点，须含 action 键）------------------
+
+check("心跳决策可解析", extractJson('提议：{"action":"propose","itemId":1}')?.["action"] === "propose");
+check("心跳决策带尾随废话可解析", extractJson('{"action":"silence"} 以上理由省略')?.["action"] === "silence");
+check("无 action 键 → null", extractJson('{"foo":1}') === null);
+check("无花括号 → null", extractJson("我看了看，都不适合现在做。") === null);
+check("空串 → null", extractJson("") === null);
 
 // ---- classify 单飞（并发手动触发不能起两个分类会话）--------------------------------
 //

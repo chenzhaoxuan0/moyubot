@@ -128,7 +128,7 @@ export const DEFAULT_INBOX_CONFIG: InboxConfig = {
 export type InboxSignal =
   /** 清单数据变了（前端重拉 inbox.list） */
   | { readonly kind: "entries" }
-  | { readonly kind: "state"; readonly classifying: boolean; readonly lastOutcome: string | null }
+  | { readonly kind: "state"; readonly classifying: boolean; readonly lastOutcome: string | null; readonly runSeq: number }
   | { readonly kind: "notice"; readonly level: "info" | "warn" | "success"; readonly text: string };
 
 // ---------------------------------------------------------------------------

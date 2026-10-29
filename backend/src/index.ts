@@ -27,6 +27,7 @@ import { NotificationsService } from "./notifications.ts";
 import { generateImage, ImageTasks, type GenerateParams } from "./image/generate.ts";
 import { PermissionGate } from "./permissions/gate.ts";
 import { MockPermAdapter } from "./runtime/adapters/mockperm.ts";
+import { MockRoutingAdapter } from "./runtime/adapters/mockrouting.ts";
 import { ClaudeAdapter } from "./runtime/adapters/claude.ts";
 import { RuntimeHost } from "./runtime/host.ts";
 import { TraceSink } from "./runtime/trace.ts";
@@ -375,6 +376,7 @@ host.register(new GrokAdapter());
 host.register(new CursorAdapter());
 host.register(new OpenclawAdapter());
 host.register(new MockPermAdapter());
+host.register(new MockRoutingAdapter());
 // 一次性迁移（kv 防重）：导入会话的旧投影缺首条 prompt（<system-reminder> 包裹块
 // 连同正文一起被丢）与 compaction/thinking 条目——剔除旧 ext 投影记录 + 清消息，
 // 各会话下次打开时按新 reader 全量重投影。真实 host 事件（曾点击 reattach 的续聊
@@ -565,6 +567,7 @@ registerMethod("driver.catalog", () => [
   { id: "mcode", installed: true, registered: true, hint: "ACP 接入（mcode acp），权限审批走反向请求流" },
   { id: "dsh", installed: true, registered: true, hint: "ACP 接入（dsh acp），npm 全局 shim 指向源码 checkout 已失效，走桌面版 CLI" },
   { id: "mockperm", installed: true, registered: true, hint: "权限闸试金石" },
+  { id: "mockrouting", installed: true, registered: true, hint: "清单分类成功链路试金石" },
   {
     id: "opencode",
     installed: true,
