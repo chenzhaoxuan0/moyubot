@@ -2790,6 +2790,7 @@ registerMethod("inbox.update", (params) => {
   if (typeof p.id !== "number") throw badBacklog("id is required");
   const hit = store.getInboxEntry(p.id);
   if (hit === undefined) throw Object.assign(new Error(`没有这条清单条目：${p.id}`), { code: "unknown_entry" });
+  if (typeof p.text === "string" && p.text.length > 8000) throw badBacklog("text 超过 8000 字符上限 —— 长内容请拆成多条或直接给到 bot 会话");
   const categoryProvided = p.category !== undefined;
   const category = categoryProvided
     ? typeof p.category === "string" && p.category.trim() !== "" ? p.category.trim() : null
@@ -2835,7 +2836,9 @@ registerMethod("inbox.reclassify", (params) => {
   if (typeof p.id !== "number") throw badBacklog("id is required");
   const hit = store.getInboxEntry(p.id);
   if (hit === undefined) throw Object.assign(new Error(`没有这条清单条目：${p.id}`), { code: "unknown_entry" });
-  store.updateInboxEntry(p.id, { status: "pending", classifiedAt: null });
+  // 打回重分类 = 旧决策整体作废：旧任务链接留着会让清单显示一个
+  // 「马上要被重新决定」的幽灵任务
+  store.updateInboxEntry(p.id, { status: "pending", classifiedAt: null, taskId: null });
   broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
   void inboxClassifier
     .classify()

@@ -89,6 +89,24 @@ inbox.reclassify / inbox.config.get / inbox.config.set`；
 backlog auto/targetSessionId、删除。**冒烟把分类执行器指到不存在的 id**：
 routing bot 默认绑定 zcode，不这样做冒烟会真的拉起 zcode 会话烧额度。
 
+## 信任模型（必须知道的事）
+
+清单的执行链路 = 「你写的文字 → routing 分类 → auto 任务 → 无人值守执行」。
+这条链路里**贴进清单的外部文本是最大的信任边界**：一篇带恶意指令的网页摘录
+（间接提示注入）可能诱导 routing 把它分类成任务，而 auto 任务的执行会话是
+`source=automation`（权限自动放行，deny 规则仍生效）。已收敛的边界：
+
+- routing 的输出里，**会话目标（targetSessionId）、执行方式（launchMode）、
+  工作目录（rootPath）零信任** —— 解析器不收；会话与目录只来自你亲手预置的
+  hints 与单元注册表
+- routing 建议的 bot 必须在可选清单里、执行器必须真实存在，未知一律回落系统自选
+- 任务字段（goal/prompt/title）白名单截断；清单文本 8000 字符上限
+
+仍是事实的事：**auto 任务里的 prompt 会被原样执行**。给完全无人值守的自主
+执行留的总闸是待办设置里的「强制忙碌」与 autopilot 开关；不放心外部文本时，
+把它以「资料/想法」分类留存（非 actionable 分类不生成任务），或对单条任务
+关掉 auto 改走心跳确认。
+
 ## 分工口诀
 
 - 清单页 = 写；routing = 分；待办页 = 管任务；autopilot = 空闲时干。

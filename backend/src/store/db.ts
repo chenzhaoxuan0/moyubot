@@ -378,6 +378,26 @@ export class Store {
     log.info("store opened", { db: path.join(homeDir, "state.db") });
   }
 
+  /**
+   * 同步事务包裹：多表写必须同生共死时用（node:sqlite 是同步 API，直接
+   * BEGIN/COMMIT 即可，无需异步排队）。嵌套调用不支持 —— 调用方保证一层。
+   */
+  transaction<T>(fn: () => T): T {
+    this.db.exec("BEGIN");
+    try {
+      const out = fn();
+      this.db.exec("COMMIT");
+      return out;
+    } catch (err: unknown) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* BEGIN 都没成功的极端情况下无事可回滚 */
+      }
+      throw err;
+    }
+  }
+
   upsertSession(row: SessionRow): void {
     this.db
       .prepare(

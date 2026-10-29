@@ -135,19 +135,28 @@ export type InboxSignal =
 // 辅助
 // ---------------------------------------------------------------------------
 
-/** 解析 hints 的白名单归一（脏 JSON 不能掀翻清单页） */
+/** 解析 hints 的白名单归一（脏 JSON 不能掀翻清单页）；字符串按用途钳上限 ——
+ * 这些值会被拼进 routing 的分类 prompt，不设防就是存储/上下文注入放大器 */
 export function normalizeInboxHints(raw: unknown): InboxHints | null {
   if (raw === null || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
+  const capped = (v: unknown, max: number): string | undefined => {
+    const s = typeof v === "string" ? v.trim() : "";
+    return s === "" ? undefined : s.slice(0, max);
+  };
   const out: Record<string, unknown> = {};
-  if (typeof r["unitId"] === "string" && r["unitId"] !== "") out["unitId"] = r["unitId"];
-  if (typeof r["rootPath"] === "string" && r["rootPath"] !== "") out["rootPath"] = r["rootPath"];
-  if (typeof r["runtimeId"] === "string" && r["runtimeId"] !== "") out["runtimeId"] = r["runtimeId"];
-  if (typeof r["model"] === "string" && r["model"] !== "") out["model"] = r["model"];
+  const unitId = capped(r["unitId"], 100);
+  if (unitId !== undefined) out["unitId"] = unitId;
+  const rootPath = capped(r["rootPath"], 1000);
+  if (rootPath !== undefined) out["rootPath"] = rootPath;
+  const runtimeId = capped(r["runtimeId"], 100);
+  if (runtimeId !== undefined) out["runtimeId"] = runtimeId;
+  if (typeof r["model"] === "string" && r["model"].trim() !== "") out["model"] = r["model"].trim().slice(0, 200);
   if (r["model"] === null) out["model"] = null;
   const lm = r["launchMode"];
   if (lm === "terminal" || lm === "chat" || lm === "headless") out["launchMode"] = lm;
-  if (typeof r["targetSessionId"] === "string" && r["targetSessionId"] !== "") out["targetSessionId"] = r["targetSessionId"];
+  const targetSessionId = capped(r["targetSessionId"], 100);
+  if (targetSessionId !== undefined) out["targetSessionId"] = targetSessionId;
   return Object.keys(out).length > 0 ? (out as InboxHints) : null;
 }
 

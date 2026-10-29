@@ -203,28 +203,33 @@ export class InboxClassifier {
       // 执行器与 unit 同款校验：routing 编一个不存在的 id，任务会以退避节奏永久卡队列头；
       // 未知存空串 → autopilot 的余量门自己挑有余量的执行器
       const runtimeId = hints?.runtimeId ?? (adapters.some((a) => a.id === task.runtimeId) ? task.runtimeId : "");
-      const taskId = this.deps.store.createBacklogItem({
-        title: task.title !== "" ? task.title : entry.text.split(/\r?\n/)[0]!.slice(0, 40),
-        goal,
-        prompt: task.prompt !== "" ? task.prompt : draftPromptOf(goal),
-        unitId,
-        unitName: unit?.unitName ?? unitId,
-        rootPath,
-        runtimeId,
-        model: hints?.model !== undefined ? hints.model : task.model,
-        launchMode: hints?.launchMode ?? "headless",
-        auto: true,
-        // targetSessionId 只认用户亲手预置的 hints —— routing 的输出不收这个字段
-        // （间接提示注入可以把任意已有会话 id 塞进来，把任务 prompt 灌进别人的对话）
-        targetSessionId: hints?.targetSessionId ?? null,
-        source: "inbox",
-      });
-      this.deps.store.updateInboxEntry(entry.id, {
-        category: finalCategory,
-        categoryNote: note,
-        taskId,
-        status: "classified",
-        classifiedAt: Date.now(),
+      // 建任务与回写链接必须同生共死：中间被 kill 会留下孤儿 auto 任务（会被
+      // 闲时执行）+ 待分类条目，sweep 再分类就是重复任务、双份烧额度
+      const taskId = this.deps.store.transaction(() => {
+        const id = this.deps.store.createBacklogItem({
+          title: task.title !== "" ? task.title : entry.text.split(/\r?\n/)[0]!.slice(0, 40),
+          goal,
+          prompt: task.prompt !== "" ? task.prompt : draftPromptOf(goal),
+          unitId,
+          unitName: unit?.unitName ?? unitId,
+          rootPath,
+          runtimeId,
+          model: hints?.model !== undefined ? hints.model : task.model,
+          launchMode: hints?.launchMode ?? "headless",
+          auto: true,
+          // targetSessionId 只认用户亲手预置的 hints —— routing 的输出不收这个字段
+          // （间接提示注入可以把任意已有会话 id 塞进来，把任务 prompt 灌进别人的对话）
+          targetSessionId: hints?.targetSessionId ?? null,
+          source: "inbox",
+        });
+        this.deps.store.updateInboxEntry(entry.id, {
+          category: finalCategory,
+          categoryNote: note,
+          taskId: id,
+          status: "classified",
+          classifiedAt: Date.now(),
+        });
+        return id;
       });
       return { taskCreated: true };
     }
@@ -304,28 +309,42 @@ export class InboxClassifier {
     const unsubRef: { fn: (() => void) | null } = { fn: null };
     // startSession 不在 CLASSIFY_BUDGET_MS 的守护圈内（那圈只罩 awaitTurnEnd）：
     // 适配器握手挂死会把 classifying 旗永久钉死、单飞从此拒收一切新条目 ——
-    // 用看门狗竞速，输了按分类失败收场
+    // 用看门狗竞速，输了按分类失败收场。race 输掉后 startSession 仍可能在
+    // 未来某刻落定 —— abandoned 旗让迟到的订阅即挂即退，不泄漏监听器
+    let abandoned = false;
     let watchdog: NodeJS.Timeout | null = null;
-    const session = await Promise.race([
-      this.deps.host.startSession({
-        runtimeId,
-        unitId: asUnitId(ROUTING_UNIT),
-        unitName: "Routing",
-        rootPath: path.join(this.deps.homeDir, ROUTING_UNIT),
-        prompt,
-        model: model === null || model === "" ? null : asModelId(model),
-        source: "automation",
-        onSessionReady: (id) => {
-          unsubRef.fn = this.deps.host.onSessionEvent(id, "message.completed", (e) => {
-            if (e.type === "message.completed") texts.push(e.text);
-          });
-        },
-      }),
-      new Promise<never>((_, reject) => {
-        watchdog = setTimeout(() => reject(new Error(`分类会话启动超时（${Math.round(START_SESSION_BUDGET_MS / 1000)}s）`)), START_SESSION_BUDGET_MS);
-        watchdog.unref?.();
-      }),
-    ]);
+    let session: { id: string };
+    try {
+      session = await Promise.race([
+        this.deps.host.startSession({
+          runtimeId,
+          unitId: asUnitId(ROUTING_UNIT),
+          unitName: "Routing",
+          rootPath: path.join(this.deps.homeDir, ROUTING_UNIT),
+          prompt,
+          model: model === null || model === "" ? null : asModelId(model),
+          source: "automation",
+          onSessionReady: (id) => {
+            unsubRef.fn = this.deps.host.onSessionEvent(id, "message.completed", (e) => {
+              if (e.type === "message.completed") texts.push(e.text);
+            });
+            if (abandoned) {
+              // 看门狗已放弃这一轮：会话照常跑完，但不再有人读它的输出
+              unsubRef.fn?.();
+              unsubRef.fn = null;
+              log.info("inbox classify session materialized after watchdog", { sessionId: id });
+            }
+          },
+        }),
+        new Promise<never>((_, reject) => {
+          watchdog = setTimeout(() => reject(new Error(`分类会话启动超时（${Math.round(START_SESSION_BUDGET_MS / 1000)}s）`)), START_SESSION_BUDGET_MS);
+          watchdog.unref?.();
+        }),
+      ]);
+    } catch (err: unknown) {
+      abandoned = true;
+      throw err;
+    }
     try {
       await this.awaitTurnEnd(session.id, CLASSIFY_BUDGET_MS);
     } finally {
@@ -337,9 +356,12 @@ export class InboxClassifier {
 
   /** 等分类轮落定：session.ended（一次性执行器）或 status idle/failed（ACP agent-loop），加总超时兜底 */
   private awaitTurnEnd(sessionId: string, timeoutMs: number): Promise<void> {
-    // 前置检查：快执行器可能在订阅前就已 ended（订阅晚一步就永远等不到事件）
+    // 前置检查：快执行器可能在订阅前就已 ended 或已完成一轮（idle）——
+    // 订阅晚一步就永远等不到事件，只能干等超时
     const persisted = this.deps.store.getSession(sessionId);
-    if (persisted !== undefined && persisted.endedAt !== null) return Promise.resolve();
+    if (persisted !== undefined && (persisted.endedAt !== null || persisted.status === "idle" || persisted.status.startsWith("failed"))) {
+      return Promise.resolve();
+    }
     return new Promise((resolve) => {
       let done = false;
       const finish = (): void => {

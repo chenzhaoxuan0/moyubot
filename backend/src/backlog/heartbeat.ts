@@ -297,9 +297,11 @@ export class BacklogEngine {
       // 空闲判定与心跳同口径：无运行会话 + 距用户最近活动 ≥ idleMinutes
       const lastActivity = this.lastUserActivityAt();
       if (Date.now() - lastActivity < cfg.heartbeat.idleMinutes * 60_000) return;
-      const running = this.deps.host.listSessions().filter(
-        (s) => s.status === "running" || s.status === "awaiting_permission" || s.status === "awaiting_input",
-      );
+      // 用户忙 = 有**非自动化**来源的会话在跑（我们派发的托管任务自己就是
+      // running 会话，不能算用户在忙，否则 maxConcurrent 永远钉死在 1）
+      const running = this.deps.host
+        .listSessions()
+        .filter((s) => s.source !== "automation" && (s.status === "running" || s.status === "awaiting_permission" || s.status === "awaiting_input"));
       const executing = this.deps.store.listBacklogItems().filter((i) => i.status === "executing");
       if (running.length > 0 || executing.length >= Math.max(1, ap.maxConcurrent)) return;
       // 清单顺序即优先级（listBacklogItems 已按 sortPos 升序，done 沉底）——取第一条。
@@ -707,8 +709,9 @@ export class BacklogEngine {
     try {
       // 显式指定会话（清单升级的可选项）：接得上就往那个会话里发 prompt，
       // 接不上（记录缺失/换过执行器/无法续/已被另一条运行占用）回落新开 ——
-      // 指定是尽力而为不是硬约束。双占守卫：runBySession 按 sessionId 记账，
-      // 两条运行挂同一会话时后者会覆盖前者的结算映射，前者永远卡 executing。
+      // 指定是尽力而为不是硬约束。双占守卫（claim-then-send）：先原子占坑再发
+      // prompt —— 两条并发 runNow 打同一会话时，先检查后发送的窗口会让两份
+      // prompt 交错、结算映射 last-write-wins，前者永久卡 executing。
       const explicit = item.targetSessionId ?? null;
       // 时间盒续跑（docs/23）：上次失败且会话接得回来 → resume 原会话发续跑
       // 提示词，不从头开始；首跑 / 上次成功 / TUI 中断 / 换过执行器都走新开
@@ -721,11 +724,13 @@ export class BacklogEngine {
         this.explicitSessionResumable(explicit, runtimeId)
       ) {
         if (!this.deps.host.isLive(asSessionId(explicit))) this.deps.host.resumeSession(asSessionId(explicit));
+        this.runBySession.set(explicit, { runId, itemId: item.id });
         this.deps.host.sendMessage(asSessionId(explicit), item.prompt, undefined, undefined, "automation");
         sessionId = explicit;
         log.info("backlog item dispatched to specified session", { itemId: item.id, runId, sessionId });
       } else if (resumeSid !== null) {
         this.deps.host.resumeSession(asSessionId(resumeSid));
+        this.runBySession.set(resumeSid, { runId, itemId: item.id });
         this.deps.host.sendMessage(asSessionId(resumeSid), BACKLOG_RESUME_PROMPT, undefined, undefined, "automation");
         sessionId = resumeSid;
         log.info("backlog item resumed previous session", { itemId: item.id, runId, sessionId });
@@ -761,6 +766,11 @@ export class BacklogEngine {
       log.info("backlog item dispatched", { itemId: item.id, runId, sessionId, runtimeId });
       return { runId, sessionId };
     } catch (err: unknown) {
+      // 已占坑的既有会话（显式指定/续跑）要退还 —— 不然这条失败的运行把会话
+      // 占住，后续指向同一会话的派发永远被双占守卫拦下
+      for (const [sid, entry] of this.runBySession) {
+        if (entry.runId === runId) this.runBySession.delete(sid);
+      }
       const message = err instanceof Error ? err.message : String(err);
       this.deps.store.finishBacklogRun(runId, "failed", message);
       this.deps.store.updateBacklogItem(item.id, { status: "ready", lastError: message });
@@ -809,6 +819,24 @@ export class BacklogEngine {
 
   private watchTurnSettle(sessionId: string): void {
     this.turnWatchers.get(sessionId)?.();
+    // 订阅前置检查：快执行器可能在 watchTurnSettle 挂上之前就跑完了一轮
+    // （idle）或整场结束（ended）—— 事件已经发过，订阅只会白等
+    const current = this.deps.store.getSession(asSessionId(sessionId));
+    if (current !== undefined) {
+      if (current.endedAt !== null) {
+        const failed = current.status === "failed";
+        this.settleTurn(sessionId, `ended: ${current.status}`, failed);
+        return;
+      }
+      if (current.status === "idle") {
+        this.settleTurn(sessionId, "turn completed", false);
+        return;
+      }
+      if (current.status.startsWith("failed")) {
+        this.settleTurn(sessionId, `turn failed: ${current.status}`, true);
+        return;
+      }
+    }
     const unsub = this.deps.host.onSessionEvent(asSessionId(sessionId), "", (event) => {
       if (event.type === "session.ended") {
         const reason = (event as { reason?: string }).reason ?? "ended";
