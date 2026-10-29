@@ -129,6 +129,9 @@ export class Store {
         text TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
+      -- 用户最近活动判定（backlog 心跳/autopilot 每 20s tick）要 SELECT max(at)：
+      -- 没有这个索引就是对最大那张表的全表扫，tick 越跑越慢
+      CREATE INDEX IF NOT EXISTS idx_messages_at ON messages(at);
       CREATE INDEX IF NOT EXISTS idx_sessions_unit ON sessions(unit_id, started_at);
       CREATE INDEX IF NOT EXISTS idx_sessions_native_ref ON sessions(cli_ref) WHERE cli_ref IS NOT NULL AND cli_ref <> '';
       CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -218,6 +221,9 @@ export class Store {
         updated_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_inbox_entries_status ON inbox_entries(status, id);
+      -- 删待办时要反查哪些清单条目链着它（task_id 软外键），没有索引每次删除
+      -- 都是 inbox_entries 全表扫
+      CREATE INDEX IF NOT EXISTS idx_inbox_entries_task ON inbox_entries(task_id) WHERE task_id IS NOT NULL;
       -- 手动派发终端的运行记录（terminal.dispatch：经派发系统的前台 TUI）。
       -- 与 automation_runs / backlog_runs 并列 —— 手动打开没有任务行可挂，
       -- 单独建表，unit.history 三方合并成统一时间轴。
@@ -499,8 +505,17 @@ export class Store {
   }
 
   /** 最后一条消息的时间戳（0 = 一条都没有）。curator 的 idle 闸要用真实的对话活动 */
+  /** 用户最近一条消息时刻。automation 会话（分类/心跳/autopilot 派的）的消息不算
+   * 用户活动 —— 算进去 autopilot 每跑完一条就把空闲钟推到「现在」，退化成每个
+   * idleMinutes 只能跑一条。source 可为 NULL（早期会话）：三值逻辑下 <> 会把
+   * NULL 行整批排除，必须显式 IS NULL 兜住（与影子集查询同一课） */
   latestMessageAt(): number {
-    const row = this.db.prepare(`SELECT max(at) AS at FROM messages`).get() as { at?: number | null } | undefined;
+    const row = this.db
+      .prepare(
+        `SELECT max(m.at) AS at FROM messages m JOIN sessions s ON s.id = m.session_id
+         WHERE s.source IS NULL OR s.source <> 'automation'`,
+      )
+      .get() as { at?: number | null } | undefined;
     return Number(row?.at ?? 0);
   }
 
@@ -990,12 +1005,16 @@ export class Store {
   }
 
   deleteBacklogItem(id: number): boolean {
-    this.db.prepare(`DELETE FROM backlog_runs WHERE item_id = ?`).run(id);
-    // 清单条目还链着这个任务的话，链接一并断掉 —— 不然 LEFT JOIN 出 NULL 快照，
-    // inboxRow 会把它捏造成「任务 #N · 就绪」的幽灵链接
-    this.db.prepare(`UPDATE inbox_entries SET task_id = NULL, updated_at = ? WHERE task_id = ?`).run(Date.now(), id);
-    const result = this.db.prepare(`DELETE FROM backlog_items WHERE id = ?`).run(id);
-    return Number(result.changes) > 0;
+    // 三步同生共死：crash 在中间会把清单链接断掉而任务还在（或反之），断链后
+    // sweep 只认 pending 不会重链 —— 用事务收口（与 classifier 建任务同款防孤儿）
+    return this.transaction(() => {
+      this.db.prepare(`DELETE FROM backlog_runs WHERE item_id = ?`).run(id);
+      // 清单条目还链着这个任务的话，链接一并断掉 —— 不然 LEFT JOIN 出 NULL 快照，
+      // inboxRow 会把它捏造成「任务 #N · 就绪」的幽灵链接
+      this.db.prepare(`UPDATE inbox_entries SET task_id = NULL, updated_at = ? WHERE task_id = ?`).run(Date.now(), id);
+      const result = this.db.prepare(`DELETE FROM backlog_items WHERE id = ?`).run(id);
+      return Number(result.changes) > 0;
+    });
   }
 
   startBacklogRun(itemId: number, sessionId: string | null, runtimeId: string, trigger: "gtd" | "manual" | "autopilot" = "gtd"): number {
@@ -1077,14 +1096,15 @@ export class Store {
       categoryNote: r["category_note"] === null || r["category_note"] === undefined ? null : String(r["category_note"]),
       hints,
       task:
-        taskId !== null
+        taskId !== null && r["task_status"] !== null && r["task_status"] !== undefined
           ? {
               id: taskId,
               // 快照字段（title/status）由 list 时的 join 补齐 —— row 本体只存 id
               title: String(r["task_title"] ?? ""),
-              status: String(r["task_status"] ?? "ready") as BacklogStatus,
+              status: String(r["task_status"]) as BacklogStatus,
             }
-          : null,
+          : // join 没接上 = 任务已不在（脏 task_id）—— 别捏造「就绪」幽灵链接，按无任务呈现
+            null,
       status: (["pending", "classified", "failed"].includes(String(r["status"])) ? String(r["status"]) : "pending") as InboxStatus,
       createdAt: Number(r["created_at"]),
       classifiedAt: nOrNull(r["classified_at"]),

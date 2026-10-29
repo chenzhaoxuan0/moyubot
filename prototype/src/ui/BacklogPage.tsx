@@ -311,7 +311,9 @@ function BacklogCard({
             闲时自动执行
           </span>
         )}
-        {item.targetSessionId !== null && item.targetSessionId !== "" && (
+        {/* != null（不是 !== null）：旧 daemon 的条目没有 targetSessionId 字段，
+            undefined 漏过严格不等会让 .slice 直接掀翻整页渲染 */}
+        {item.targetSessionId != null && item.targetSessionId !== "" && (
           <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 font-mono text-caption text-ash" title="指定在已有会话里执行（接不上回落新开）">
             会话 {item.targetSessionId.slice(0, 10)}
           </span>

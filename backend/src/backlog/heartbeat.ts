@@ -80,6 +80,11 @@ export interface BacklogEngineDeps {
   readonly foreground?: (sessionId: string, unitId: string, runtimeId: string, cause: "backlog", title?: string) => void;
 }
 
+/** autopilot 的失败退避窗口：最近一次运行失败后这段时间内不再派发同一条
+ * （派发秒败的条目若不退避，会以 20s 一拍的节奏永远堵在队首饿死整条队列）。
+ * 模块级：失败通知文案也从它推导，改常量不该让文案说谎。 */
+const AUTOPILOT_FAILURE_BACKOFF_MS = 10 * 60_000;
+
 export class BacklogEngine {
   private readonly probe: QuotaProbe;
   private timer: NodeJS.Timeout | null = null;
@@ -180,11 +185,16 @@ export class BacklogEngine {
     this.pushState(true);
   }
 
-  /** 用户最近活动：与 curator 同口径（会话起止 + 最后一条消息的最大值）——保守方向 */
+  /** 用户最近活动：与 curator 同口径（会话起止 + 最后一条消息的最大值）——保守方向。
+   * automation 会话不算用户活动：autopilot 自己派的任务/分类会话一收尾，空闲钟
+   * 就被推到「现在」，下一个 idleMinutes 窗口内永远判不空闲 —— 持续执行承诺作废 */
   private lastUserActivityAt(): number {
     const rows = this.deps.store.listSessions();
     let max = 0;
-    for (const r of rows) max = Math.max(max, r.startedAt, r.endedAt ?? 0);
+    for (const r of rows) {
+      if (r.source === "automation") continue;
+      max = Math.max(max, r.startedAt, r.endedAt ?? 0);
+    }
     return Math.max(max, this.deps.store.latestMessageAt());
   }
 
@@ -305,9 +315,7 @@ export class BacklogEngine {
       const executing = this.deps.store.listBacklogItems().filter((i) => i.status === "executing");
       if (running.length > 0 || executing.length >= Math.max(1, ap.maxConcurrent)) return;
       // 清单顺序即优先级（listBacklogItems 已按 sortPos 升序，done 沉底）——取第一条。
-      // 失败退避：最近一次运行 10 分钟内失败的条目跳过（派发秒败的条目若不退避，
-      // 会以 20s 一次的节奏永远堵在队首，整条 auto 队列饿死）
-      const AUTOPILOT_FAILURE_BACKOFF_MS = 10 * 60_000;
+      // 失败退避：最近一次运行 10 分钟内失败的条目跳过（见 AUTOPILOT_FAILURE_BACKOFF_MS）
       const next = this.deps.store.listBacklogItems().find((i) => {
         if (i.status !== "ready" || !i.auto) return false;
         const last = this.deps.store.latestBacklogRun(i.id);
@@ -316,11 +324,17 @@ export class BacklogEngine {
       if (next === undefined) return;
       // 余量门：指定了执行器就看它，没指定就在订阅执行器里挑剩余最多的
       const quotas = await this.probe.readAll(cfg.runtimes);
-      // probe 的 await 期间 beat 可能已起跳 —— 过期旗标重查，别跟提议抢并发
+      // probe 的 await 期间世界可能变了 —— 过期旗标与空闲门一并重查：
+      // beat 起跳 / 提议挂起 / 用户回来了 / 强制忙碌 / 并发被占满，任一命中都不派发
       if (this.beating || this.activeProposal !== null) return;
+      if (this.forceBusy() || Date.now() - this.lastUserActivityAt() < cfg.heartbeat.idleMinutes * 60_000) return;
+      if (this.deps.store.listBacklogItems().filter((i) => i.status === "executing").length >= Math.max(1, ap.maxConcurrent)) return;
       const pick = pickAutopilotRuntime(next.runtimeId, quotas, ap.headroomFloorPercent);
       if (pick === null) {
-        this.saveLedger({ lastBeatOutcome: "autopilot:no-headroom" });
+        // 余量不足可能持续很多拍 —— 结果没变就不重复写 kv（20s 一拍的常态写盘没意义）
+        if (this.lastLedger.lastBeatOutcome !== "autopilot:no-headroom") {
+          this.saveLedger({ lastBeatOutcome: "autopilot:no-headroom" });
+        }
         return;
       }
       await this.dispatch(next, pick, next.model, "autopilot");
@@ -330,10 +344,12 @@ export class BacklogEngine {
       // 闲时自动执行没人盯着 —— 失败要说出去，别让队列无声饿死
       const message = err instanceof Error ? err.message : String(err);
       log.warn("backlog autopilot dispatch failed", { error: message });
-      void this.deps.notify(`【闲时自动执行失败】${message}（该任务已退避，10 分钟内不会重试）`);
+      void this.deps.notify(`【闲时自动执行失败】${message}（该任务已退避，${Math.round(AUTOPILOT_FAILURE_BACKOFF_MS / 60_000)} 分钟内不会重试）`);
     } finally {
       this.autopilotBusy = false;
-      this.pushState(true);
+      // 不 force：绝大多数 tick 什么都没发生，强推会给所有客户端每 20s 白发一帧
+      // 状态广播（前端全量 set 新对象、全体订阅者重渲染）。有真变化时变更检测照常放行。
+      this.pushState();
     }
   }
 
@@ -873,10 +889,15 @@ export class BacklogEngine {
    * auto 条目且 autopilot.autoReview 开：done 直接关闭（托管执行的语义就是
    * 无人值守跑完即结 —— 否则清单会被待验收积压卡住，闲时循环停摆）。
    */
+  /** auto 条目 + 自动验收开的判定：settleExecution 与重启恢复两处共用，口径必须一致 */
+  private isAutoReview(item: BacklogRow): boolean {
+    return item.auto && this.deps.getConfig().autopilot.autoReview;
+  }
+
   private settleExecution(itemId: number, status: "done" | "failed", detail: string): void {
     const item = this.deps.store.getBacklogItem(itemId);
     if (item === undefined || item.status !== "executing") return;
-    const autoReview = item.auto && this.deps.getConfig().autopilot.autoReview;
+    const autoReview = this.isAutoReview(item);
     if (status === "done") {
       this.deps.store.updateBacklogItem(itemId, { status: autoReview ? "done" : "awaiting_review", lastError: null });
     } else {
@@ -890,7 +911,7 @@ export class BacklogEngine {
         ? autoReview
           ? `【清单任务完成】「${title}」已自动执行完毕（闲时托管）`
           : `【待办完成待验收】「${title}」跑完了 —— 回工作台看产出并验收`
-        : `【待办失败】「${title}」：${detail}（已回就绪，下次心跳可能再提议）`,
+        : `【待办失败】「${title}」：${detail}（已回就绪，${item.auto ? "退避后闲时自动重试" : "下次心跳可能再提议"}）`,
     );
   }
 
@@ -950,9 +971,9 @@ export class BacklogEngine {
         this.deps.store.finishBacklogRun(r.runId, failed ? "failed" : "done", `ended: ${s.status}`);
         const it = this.deps.store.getBacklogItem(r.itemId);
         if (it !== undefined && it.status === "executing") {
-          // 与 settleExecution 同口径：auto 条目 + 自动验收开 = 跑完即关闭，
-          // 否则每次重启都把已完成的托管任务冲进待验收，人工清理永无止境
-          const autoDone = it.auto && this.deps.getConfig().autopilot.autoReview;
+          // 与 settleExecution 同口径（isAutoReview）：auto 条目 + 自动验收开 =
+          // 跑完即关闭，否则每次重启都把已完成的托管任务冲进待验收，人工清理永无止境
+          const autoDone = this.isAutoReview(it);
           this.deps.store.updateBacklogItem(r.itemId, failed
             ? { status: "ready", lastError: `重启前会话已失败：${s.status}` }
             : { status: autoDone ? "done" : "awaiting_review" });
@@ -988,6 +1009,9 @@ export class BacklogEngine {
       status: pass ? "done" : "ready",
       reviewNote: note,
       ...(pass ? {} : { ignoreCount: 0 }),
+      // 人工打回的 auto 条目摘掉托管旗：不摘的话 autopilot 会把用户刚否决的任务
+      // 不经任何门再跑一遍（打回-重跑循环）；摘掉后照旧可被心跳提议，但过确认门
+      ...(!pass && item.auto ? { auto: false } : {}),
     });
     this.deps.broadcast({ kind: "items" });
     this.pushState(true);

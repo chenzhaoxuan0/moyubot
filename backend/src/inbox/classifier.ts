@@ -15,7 +15,6 @@ import path from "node:path";
 import type {
   InboxConfig,
   InboxEntry,
-  InboxHints,
   InboxSignal,
 } from "../../../prototype/src/core/inbox.ts";
 import {
@@ -59,6 +58,9 @@ export interface InboxClassifierDeps {
   readonly unitsWithRoots: () => Promise<Array<{ unitId: string; unitName: string; rootPath: string }>>;
   /** routing bot 的主绑定（inbox 配置未显式指定时的兜底） */
   readonly routingBinding?: () => Promise<{ runtimeId: string; model: string | null } | null>;
+  /** 分类沉淀出任务时通知 backlog 面 —— BacklogPage/侧栏徽章只订 items 信号，
+   * 不通知的话新任务要等下一个不相干信号才出现 */
+  readonly notifyBacklogItems?: () => void;
 }
 
 interface RawDecision {
@@ -116,14 +118,17 @@ export class InboxClassifier {
     const cfg = this.deps.getConfig();
     const pending = this.deps.store.listInboxEntries().filter((e) => e.status === "pending");
     if (pending.length === 0) return result;
-    const { runtimeId, model } = await this.resolveRuntime(cfg);
-    if (runtimeId === "") {
-      this.setOutcome("failed:未配置分类执行器（inbox 设置或 routing bot 绑定其一）");
-      return result;
-    }
+    // 同步占位再 await：resolveRuntime 的首个 await 之前不占旗，并发的手动
+    // inbox.classify.run / inbox.reclassify 会双双通过单飞检查、同一批条目各建
+    // 一份 auto 任务（双发）
     this.classifying = true;
     this.pushState();
     try {
+      const { runtimeId, model } = await this.resolveRuntime(cfg);
+      if (runtimeId === "") {
+        this.setOutcome("failed:未配置分类执行器（inbox 设置或 routing bot 绑定其一）");
+        return result;
+      }
       const units = await this.deps.unitsWithRoots();
       const adapters = await this.safeAdapters();
       const answer = await this.runClassifySession(cfg, pending, units, adapters, runtimeId, model);
@@ -140,7 +145,12 @@ export class InboxClassifier {
         const id = Number(raw["id"]);
         const entry = byId.get(id);
         if (entry === undefined) continue;
-        const applied = this.applyDecision(entry, raw, units, adapters);
+        // 分类会话跑的几十秒里用户可能已手动分类/编辑：以最新状态为准，不再
+        // pending 的条目跳过 —— 用户的手动决策不被过期快照背刺，任务兜底原话
+        // 也用最新文本
+        const fresh = this.deps.store.getInboxEntry(entry.id);
+        if (fresh === undefined || fresh.status !== "pending") continue;
+        const applied = this.applyDecision(fresh, raw, units, adapters);
         if (applied) {
           result.classified++;
           if (applied.taskCreated) result.tasksCreated++;
@@ -155,6 +165,7 @@ export class InboxClassifier {
       if (result.classified > 0 || result.failed > 0) this.deps.broadcast({ kind: "entries" });
       if (result.tasksCreated > 0) {
         this.deps.broadcast({ kind: "notice", level: "success", text: `分类完成：${result.tasksCreated} 条沉淀为待办任务，空闲时自动执行` });
+        this.deps.notifyBacklogItems?.();
       }
       // 分类期间又写进来的条目不在本批快照里 —— 本轮有进益才补一轮（routing 跳了
       // 某条/零决策时不自动重试，防热循环烧额度；那条等下一次 add / 手动触发带上）
@@ -190,19 +201,22 @@ export class InboxClassifier {
 
     if (isActionableCategory(finalCategory, cfg.categories) && task !== null) {
       const hints = entry.hints;
-      // 归属：用户预置 > routing 建议（须在可选清单里）> 第一个可用 bot > routing 自己的目录
-      const validUnit = (id: string): string => (id !== "" && units.some((u) => u.unitId === id) ? id : "");
-      const unitId =
-        hints?.unitId !== undefined && hints.unitId !== ""
-          ? hints.unitId
-          : validUnit(task.unitId) || units[0]?.unitId || ROUTING_UNIT;
+      // 归属：用户预置 > routing 建议（须在可选清单里）> 第一个可用 bot > routing 自己的目录。
+      // hints 也过同一道校验（注释里说「同款校验」就得真同款）：手滑写错的 unitId /
+      // runtimeId 原样落库的话，任务会以退避节奏永久失败重试 + 通知轰炸
+      const validUnit = (id: string | undefined): string =>
+        id !== undefined && id !== "" && units.some((u) => u.unitId === id) ? id : "";
+      const hintsUnit = validUnit(hints?.unitId);
+      const unitId = hintsUnit !== "" ? hintsUnit : validUnit(task.unitId) || units[0]?.unitId || ROUTING_UNIT;
       const unit = units.find((u) => u.unitId === unitId);
       const rootPath = hints?.rootPath ?? unit?.rootPath ?? path.join(this.deps.homeDir, ROUTING_UNIT);
       // goal 兜底是用户原话全文 —— 清单允许长文本，任务目标必须钳住（prompt 会被无人值守派发）
       const goal = task.goal !== "" ? task.goal : entry.text.slice(0, 4000);
       // 执行器与 unit 同款校验：routing 编一个不存在的 id，任务会以退避节奏永久卡队列头；
-      // 未知存空串 → autopilot 的余量门自己挑有余量的执行器
-      const runtimeId = hints?.runtimeId ?? (adapters.some((a) => a.id === task.runtimeId) ? task.runtimeId : "");
+      // 未知存空串 → autopilot 的余量门自己挑有余量的执行器（hints 留空 = 未指定，routing 建议可补位）
+      const knownRuntime = (id: string | undefined): string =>
+        id !== undefined && id !== "" && adapters.some((a) => a.id === id) ? id : "";
+      const runtimeId = knownRuntime(hints?.runtimeId) || knownRuntime(task.runtimeId);
       // 建任务与回写链接必须同生共死：中间被 kill 会留下孤儿 auto 任务（会被
       // 闲时执行）+ 待分类条目，sweep 再分类就是重复任务、双份烧额度
       const taskId = this.deps.store.transaction(() => {
@@ -315,15 +329,19 @@ export class InboxClassifier {
     let watchdog: NodeJS.Timeout | null = null;
     let session: { id: string };
     try {
-      session = await Promise.race([
-        this.deps.host.startSession({
-          runtimeId,
-          unitId: asUnitId(ROUTING_UNIT),
-          unitName: "Routing",
-          rootPath: path.join(this.deps.homeDir, ROUTING_UNIT),
-          prompt,
-          model: model === null || model === "" ? null : asModelId(model),
-          source: "automation",
+        session = await Promise.race([
+          this.deps.host.startSession({
+            runtimeId,
+            unitId: asUnitId(ROUTING_UNIT),
+            unitName: "Routing",
+            rootPath: path.join(this.deps.homeDir, ROUTING_UNIT),
+            prompt,
+            model: model === null || model === "" ? null : asModelId(model),
+            // plan 模式：分类会话的 prompt 里嵌着贴进来的外部原文（间接提示注入的
+            // 首个落点），source=automation 本会自动放行全部权限 —— plan 闸兜底
+            // 自动拦截 file_write/shell，被注入的分类会话最多「说」、不能「做」
+            mode: "plan",
+            source: "automation",
           onSessionReady: (id) => {
             unsubRef.fn = this.deps.host.onSessionEvent(id, "message.completed", (e) => {
               if (e.type === "message.completed") texts.push(e.text);
@@ -422,7 +440,7 @@ export function parseTask(raw: unknown): ParsedTaskShape | null {
     title: strField("title", 80),
     unitId: strField("unitId", 100),
     runtimeId: strField("runtimeId", 100).replace(/^daemon:/, ""),
-    model: typeof r["model"] === "string" && r["model"].trim() !== "" ? r["model"].trim() : null,
+    model: typeof r["model"] === "string" && r["model"].trim() !== "" ? r["model"].trim().slice(0, 200) : null,
   };
   // 一个能用的字段都没有 = 没给 task（路由只贴了个分类标签）
   if (out.goal === "" && out.prompt === "" && out.title === "") return null;

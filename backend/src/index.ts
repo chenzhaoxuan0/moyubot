@@ -143,7 +143,7 @@ import {
   ROUTING_DEFAULT_RUNTIME_ID,
 } from "./inbox/routingBot.ts";
 import type { InboxSignal } from "../../prototype/src/core/inbox.ts";
-import { normalizeInboxHints } from "../../prototype/src/core/inbox.ts";
+import { DEFAULT_INBOX_CATEGORIES, normalizeInboxHints } from "../../prototype/src/core/inbox.ts";
 import { BotRegistry } from "./bots/registry.ts";
 import { TelegramGateway } from "./channels/telegram.ts";
 import { FeishuGateway, diagnoseLarkAccount, larkIdentities, larkProfileList, addLarkProfile } from "./channels/feishu.ts";
@@ -494,7 +494,9 @@ void ensureHeartbeatBot(config.homeDir)
 // routing bot（常驻合成 bot，对齐 steward / heartbeat 模式）：清单分类的总管 bot。
 // 项目的初始默认状态里它就是分类的执行者；用户可以在 bot 设置页换主绑定来「指定」
 // 它跑在哪个执行器上。AGENTS.md 岗位说明书随目录播种。失败不阻断启动。
-void ensureRoutingBot(config.homeDir)
+// promise 留引用：分类器创建后等它落定再补一次 sweep（启动 sweep 在 +5s，注册慢的
+// 话那轮分类会以「未配置分类执行器」收场，遗留 pending 干等下一次写入）。
+const routingBotReady = ensureRoutingBot(config.homeDir)
   .then(({ rootPath }) => {
     botRegistry.addRoot(rootPath);
     // 幂等 + 用户数据不覆盖：与 steward / heartbeat 同一套口径
@@ -1432,6 +1434,10 @@ const inboxClassifier = new InboxClassifier({
   broadcast: (signal: InboxSignal) => {
     broadcastInbox(wss, signal);
   },
+  // 分类沉淀出任务时给 backlog 面一枪：待办页/侧栏只订 items 信号，不发就停在旧列表
+  notifyBacklogItems: () => {
+    broadcastBacklog(wss, { kind: "items" });
+  },
   unitsWithRoots: async () => {
     const bots = await botRegistry.listBots();
     return bots
@@ -1452,6 +1458,12 @@ const inboxClassifier = new InboxClassifier({
 });
 // 重启 sweep：上次没分完的待分类条目补一刀
 inboxClassifier.sweep();
+// bot 注册落定再补一次（注册慢于启动 sweep 时，首轮分类因缺执行器而空转）
+void routingBotReady
+  .then(() => inboxClassifier.sweep())
+  .catch(() => {
+    /* bot 起不来时 sweep 也无济于事，安静收场 */
+  });
 // dst 启动器已并入 dsh（tuiCommand）：dsh 的 TUI 用 dst shim 拉起
 function tuiCommandFor(executorId: string | undefined): string | undefined {
   if (!executorId) return executorId;
@@ -2902,12 +2914,19 @@ registerMethod("inbox.update", (params) => {
   const hit = store.getInboxEntry(p.id);
   if (hit === undefined) throw Object.assign(new Error(`没有这条清单条目：${p.id}`), { code: "unknown_entry" });
   if (typeof p.text === "string" && p.text.length > 8000) throw badBacklog("text 超过 8000 字符上限 —— 长内容请拆成多条或直接给到 bot 会话");
+  // 与 inbox.add 同口径拒绝空文本：静默吞掉的「保存成功」比报错更坑
+  if (typeof p.text === "string" && p.text.trim() === "") throw badBacklog("text 不能为空 —— 删除条目用 inbox.delete");
   const categoryProvided = p.category !== undefined;
   const category = categoryProvided
     ? typeof p.category === "string" && p.category.trim() !== "" ? p.category.trim() : null
     : undefined;
+  if (category !== undefined && category !== null) {
+    // 手滑的未知分类不该被静默收成 classified 孤儿块（永不重试、不进任何分类）
+    const validIds = new Set([...DEFAULT_INBOX_CATEGORIES.map((c) => c.id), ...getInboxConfig(store).categories.map((c) => c.id)]);
+    if (!validIds.has(category)) throw badBacklog(`未知分类：${category}（自定义分类先在清单设置里添加）`);
+  }
   store.updateInboxEntry(p.id, {
-    ...(typeof p.text === "string" && p.text.trim() !== "" ? { text: p.text.trim() } : {}),
+    ...(typeof p.text === "string" ? { text: p.text.trim() } : {}),
     ...(category !== undefined ? { category } : {}),
     ...(p.hints !== undefined ? { hints: normalizeInboxHints(p.hints) } : {}),
     ...(categoryProvided
@@ -2927,7 +2946,10 @@ registerMethod("inbox.update", (params) => {
 registerMethod("inbox.delete", (params) => {
   const p = (params ?? {}) as { id?: number };
   if (typeof p.id !== "number") throw badBacklog("id is required");
-  return { deleted: store.deleteInboxEntry(p.id) };
+  const deleted = store.deleteInboxEntry(p.id);
+  // 与 add/update/reclassify 同口径：别的窗口/客户端靠信号帧重拉，不广播就渲染僵尸行
+  if (deleted) broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
+  return { deleted };
 });
 
 /** 手动触发一轮分类（受理即返 —— 分类会话要跑几十秒，结果从 entries/state 信号帧观察） */
@@ -2950,6 +2972,16 @@ registerMethod("inbox.reclassify", (params) => {
   // 打回重分类 = 旧决策整体作废：旧任务链接留着会让清单显示一个
   // 「马上要被重新决定」的幽灵任务
   store.updateInboxEntry(p.id, { status: "pending", classifiedAt: null, taskId: null });
+  // 旧决策沉淀、还没跑过的 auto 任务一并作废托管语义（auto=false 回确认门）：
+  // 不作废的话 autopilot 会把已被用户否决的旧任务照跑，重分类又沉淀新任务 —— 双份执行。
+  // 只动「清单来源 + 就绪 + auto」的干净任务；用户在待办页改过/已跑的不碰。
+  const linkedTaskId = hit.task?.id;
+  if (typeof linkedTaskId === "number") {
+    const linked = store.getBacklogItem(linkedTaskId);
+    if (linked !== undefined && linked.status === "ready" && linked.auto && linked.source === "inbox") {
+      store.updateBacklogItem(linkedTaskId, { auto: false });
+    }
+  }
   broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
   void inboxClassifier
     .classify()
@@ -2961,7 +2993,11 @@ registerMethod("inbox.reclassify", (params) => {
 registerMethod("inbox.config.get", () => getInboxConfig(store));
 registerMethod("inbox.config.set", (params) => {
   const p = (params ?? {}) as { patch?: unknown };
-  return { config: setInboxConfig(store, p.patch) };
+  const config = setInboxConfig(store, p.patch);
+  // 配置也是 inbox.list 拉取的一部分：别的窗口不开这一枪，autoClassify 开关 /
+  // 分类执行器 / 自定义分类会停在旧值直到下一个不相干信号
+  broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
+  return { config };
 });
 
 

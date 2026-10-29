@@ -66,8 +66,57 @@ check("全低于地板 → null", pickAutopilotRuntime("", [q("a", 1), q("b", 2)
 check("挑剩余最多的订阅执行器", pickAutopilotRuntime("", [q("a", 40), q("b", 80)], 10) === "b");
 check("percent null 排在实际余量之后", pickAutopilotRuntime("", [q("a", null), q("b", 5)], 0) === "b");
 
-if (failures > 0) {
-  console.error(`check: ${failures} check(s) FAILED`);
-  process.exit(1);
+// ---- classify 单飞（并发手动触发不能起两个分类会话）--------------------------------
+//
+// 占位必须发生在首个 await 之前：resolveRuntime 挂在 routingBinding 的文件 IO 上时，
+// 两个并发的 classify() 若都先过检查再占旗，会各自起一个会话、同一批条目建两份任务。
+
+async function singleFlightChecks(): Promise<void> {
+  const { InboxClassifier } = await import("../src/inbox/classifier.ts");
+  const { DEFAULT_INBOX_CONFIG } = await import("../../prototype/src/core/inbox.ts");
+
+  let release!: (v: { runtimeId: string; model: string | null }) => void;
+  const gate = new Promise<{ runtimeId: string; model: string | null }>((r) => (release = r));
+  let starts = 0;
+  const c = new InboxClassifier({
+    store: {
+      listInboxEntries: () => [{ id: 1, text: "x", status: "pending", hints: null }],
+      // getSession 返回已结束的会话：awaitTurnEnd 前置检查即刻命中，不用等 3 分钟预算
+      getSession: () => ({ endedAt: 1, status: "idle" }),
+      getInboxEntry: () => undefined,
+      updateInboxEntry: () => true,
+      createBacklogItem: () => 1,
+      transaction: (fn: () => unknown) => fn(),
+    } as never,
+    host: {
+      startSession: async () => {
+        starts += 1;
+        return { id: "s1" };
+      },
+      onSessionEvent: () => () => {},
+      listAdapters: async () => [],
+    } as never,
+    homeDir: "/tmp",
+    getConfig: () => DEFAULT_INBOX_CONFIG,
+    broadcast: () => {},
+    unitsWithRoots: async () => [],
+    // 首个 await 挂在这里：占位若不在此之前，并发的第二个调用会漏过单飞检查
+    routingBinding: () => gate,
+  });
+  const p1 = c.classify();
+  const p2 = c.classify();
+  release({ runtimeId: "zcode", model: null });
+  const [r1, r2] = await Promise.all([p1, p2]);
+  check("classify 单飞：并发调用恰好起一个分类会话", starts === 1, { starts });
+  // 放行的那个走完正常收卷（stub 无事件流 → 沉默收场，attempted 保持 0），
+  // 被挡的立即空手而归 —— 两者都不会建任务
+  check("放行与被挡的调用都不建任务", r1.tasksCreated === 0 && r2.tasksCreated === 0, { r1, r2 });
 }
-console.log("check: all checks passed");
+
+void singleFlightChecks().then(() => {
+  if (failures > 0) {
+    console.error(`check: ${failures} check(s) FAILED`);
+    process.exit(1);
+  }
+  console.log("check: all checks passed");
+});

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
 import {
   ChevronDown,
   CircleAlert,
@@ -22,7 +22,7 @@ import {
   type InboxEntry,
   type InboxHints,
 } from "../core/inbox.ts";
-import { formatBacklogRelative } from "../core/backlog.ts";
+import { BACKLOG_STATUS_LABEL, formatBacklogRelative, type BacklogStatus } from "../core/backlog.ts";
 import { useInbox } from "../store/useInbox.ts";
 import { useBacklog } from "../store/useBacklog.ts";
 import { useShell } from "../store/useShell.ts";
@@ -51,6 +51,8 @@ export function InboxPage(): ReactElement {
   const refresh = useInbox((s) => s.refresh);
 
   const backlogItems = useBacklog((s) => s.items);
+  // O(entries) 而不是 O(entries × items)：每行找实时任务状态走一次 Map
+  const taskById = useMemo(() => new Map(backlogItems.map((i) => [i.id, i])), [backlogItems]);
   const backlogConfig = useBacklog((s) => s.config);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -144,7 +146,7 @@ export function InboxPage(): ReactElement {
           {pending.length > 0 && (
             <Block title="待分类" count={pending.length} accent>
               {pending.map((e) => (
-                <EntryRow key={e.id} entry={e} confirmingDelete={confirmingDelete} setConfirmingDelete={setConfirmingDelete} taskItem={findTask(backlogItems, e)} />
+                <EntryRow key={e.id} entry={e} confirmingDelete={confirmingDelete} setConfirmingDelete={setConfirmingDelete} taskItem={findTask(taskById, e)} />
               ))}
             </Block>
           )}
@@ -152,7 +154,7 @@ export function InboxPage(): ReactElement {
           {blocks.map((b) => (
             <Block key={b.id} title={categoryLabel(b.id, customCategories)} count={b.items.length}>
               {b.items.map((e) => (
-                <EntryRow key={e.id} entry={e} confirmingDelete={confirmingDelete} setConfirmingDelete={setConfirmingDelete} taskItem={findTask(backlogItems, e)} />
+                <EntryRow key={e.id} entry={e} confirmingDelete={confirmingDelete} setConfirmingDelete={setConfirmingDelete} taskItem={findTask(taskById, e)} />
               ))}
             </Block>
           ))}
@@ -160,7 +162,7 @@ export function InboxPage(): ReactElement {
           {orphan.length > 0 && (
             <Block title="其他" count={orphan.length}>
               {orphan.map((e) => (
-                <EntryRow key={e.id} entry={e} confirmingDelete={confirmingDelete} setConfirmingDelete={setConfirmingDelete} taskItem={findTask(backlogItems, e)} />
+                <EntryRow key={e.id} entry={e} confirmingDelete={confirmingDelete} setConfirmingDelete={setConfirmingDelete} taskItem={findTask(taskById, e)} />
               ))}
             </Block>
           )}
@@ -194,26 +196,29 @@ function Composer(): ReactElement {
   const [text, setText] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [hints, setHints] = useState<InboxHints>({});
-  const ref = useRef<HTMLTextAreaElement>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const runtimeIds = useMemo(() => runtimes.map((r) => r.id.replace(/^daemon:/, "")), [runtimes]);
   const hintsFilled = Object.values(hints).some((v) => v !== undefined && v !== null && v !== "");
 
   const submit = (): void => {
     const t = text.trim();
-    if (t === "") return;
-    void add({ text: t, hints: hintsFilled ? hints : undefined }).then((ok) => {
-      if (ok) {
-        setText("");
-        setHints({});
-      }
-    });
+    if (t === "" || submitting) return;
+    // daemon 往返期间再按 Enter / 点按钮会重复提交同一段文字 —— 占位挡住
+    setSubmitting(true);
+    void add({ text: t, hints: hintsFilled ? hints : undefined })
+      .then((ok) => {
+        if (ok) {
+          setText("");
+          setHints({});
+        }
+      })
+      .finally(() => setSubmitting(false));
   };
 
   return (
-    <div className="rounded-card border border-line bg-card px-4 py-3">
+    <div className="rounded-card border border-line bg-card px-4 py-3 focus-within:border-teal">
       <textarea
-        ref={ref}
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
@@ -240,7 +245,7 @@ function Composer(): ReactElement {
         <span className="ml-auto text-caption text-ash">Enter 收进清单 · Shift+Enter 换行</span>
         <button
           onClick={submit}
-          disabled={text.trim() === ""}
+          disabled={text.trim() === "" || submitting}
           className="flex shrink-0 items-center gap-1.5 rounded-btn bg-ink px-3 py-1.5 text-body-sm text-canvas hover:opacity-90 active:scale-95 transition disabled:opacity-40"
         >
           {classifier?.classifying === true ? <Loader2 size={12} className="animate-spin" /> : <InboxIcon size={12} />}
@@ -346,21 +351,14 @@ const CATEGORY_CHIP: Record<string, string> = {
   later: "bg-violet-500/10 text-violet-500",
 };
 
-function findTask(backlogItems: readonly { id: number; status: string; title: string }[], entry: InboxEntry): { id: number; status: string; title: string } | null {
+function findTask(
+  taskById: ReadonlyMap<number, { id: number; status: string; title: string }>,
+  entry: InboxEntry,
+): { id: number; status: string; title: string } | null {
   if (entry.task === null) return null;
   // 实时状态优先（backlog store 常驻轮询），快照兜底
-  return backlogItems.find((i) => i.id === entry.task!.id) ?? { id: entry.task.id, status: entry.task.status, title: entry.task.title };
+  return taskById.get(entry.task.id) ?? { id: entry.task.id, status: entry.task.status, title: entry.task.title };
 }
-
-const TASK_STATUS_LABEL: Record<string, string> = {
-  draft: "草稿",
-  ready: "就绪",
-  awaiting_confirm: "待确认",
-  executing: "执行中",
-  awaiting_review: "待验收",
-  done: "已完成",
-  sleeping: "休眠",
-};
 
 function EntryRow({
   entry,
@@ -412,7 +410,7 @@ function EntryRow({
             }}
             onBlur={saveEdit}
             rows={Math.min(6, draft.split(/\r?\n/).length + 1)}
-            className="w-full resize-none rounded-input bg-rail px-2 py-1 text-body-sm leading-relaxed text-ink outline-none focus:border-teal"
+            className="w-full resize-none rounded-input border border-transparent bg-rail px-2 py-1 text-body-sm leading-relaxed text-ink outline-none focus:border-teal"
           />
         ) : (
           <button
@@ -433,7 +431,7 @@ function EntryRow({
           {taskItem !== null && (
             <button onClick={goBacklog} className="flex items-center gap-1 text-graphite hover:text-ink" title="去待办页查看/管理这个任务">
               <ListTodo size={11} />
-              任务 #{taskItem.id} · {TASK_STATUS_LABEL[taskItem.status] ?? taskItem.status}
+              任务 #{taskItem.id} · {BACKLOG_STATUS_LABEL[taskItem.status as BacklogStatus] ?? taskItem.status}
               {taskItem.status === "executing" && <Loader2 size={10} className="animate-spin text-blue-500" />}
             </button>
           )}
