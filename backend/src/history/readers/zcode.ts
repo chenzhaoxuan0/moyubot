@@ -46,14 +46,17 @@ function scanJsonArchives(): ZcodeScan[] {
   const root = path.join(homeDir(), ".zcode", "v2", "sessions");
   if (!existsSync(root)) return [];
   const files = collectFiles(root, (n) => n.endsWith(".json") && !n.includes("deleted"), 300);
-  const stamped = files.map((f) => {
+  // stat 失败的文件不入清单也不解析：{m:0,s:0} 桩会让签名在好坏间抖动，
+  // 每次抖动都是一场 300 文件全量重解析（磁盘最忙时最不该发生）
+  const stamped: { f: string; m: number; s: number }[] = [];
+  for (const f of files) {
     try {
       const st = statSync(f);
-      return { f, m: st.mtimeMs, s: st.size };
+      stamped.push({ f, m: st.mtimeMs, s: st.size });
     } catch {
-      return { f, m: 0, s: 0 };
+      /* 跳过 */
     }
-  });
+  }
   const sig = signatureOf(stamped);
   if (sig === jsonArchivesSig) return jsonArchivesCache;
   const out: ZcodeScan[] = [];
@@ -91,7 +94,9 @@ function scanJsonArchives(): ZcodeScan[] {
 }
 
 function scanAll(limit: number): ZcodeScan[] {
-  const out = scanJsonArchives();
+  // 拷贝再追加：scanJsonArchives 返回的是缓存数组本体，原地 push 会把 sqlite
+  // 兜底行灌进缓存——每次清单命中都重复追加一份，无限增长且 sessionId 重复
+  const out = [...scanJsonArchives()];
   out.push(...scanSqlite(limit, new Set(out.map((s) => s.summary.sessionId))));
   return out;
 }

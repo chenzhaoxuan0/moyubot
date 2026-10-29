@@ -438,10 +438,15 @@ export class Store {
     return rows.map((r) => this.toRow(r));
   }
 
-  /** 影子行判定集专用：非导入会话的原生引用轻量列（不搬整行做 Set） */
+  /** 影子行判定集专用：非导入会话的原生引用轻量列（不搬整行做 Set）。
+   *  source 可为 NULL（早期/常规会话，实测占大头）—— SQL 三值逻辑下
+   *  `source <> 'imported'` 会把 NULL 行整批排除，必须显式 IS NULL 兜住 */
   listSessionNativeRefs(): Array<{ runtimeId: string; cliRef: string }> {
     const rows = this.db
-      .prepare(`SELECT runtime_id, cli_ref FROM sessions WHERE source <> 'imported' AND cli_ref IS NOT NULL AND cli_ref <> ''`)
+      .prepare(
+        `SELECT runtime_id, cli_ref FROM sessions
+         WHERE (source IS NULL OR source <> 'imported') AND cli_ref IS NOT NULL AND cli_ref <> ''`,
+      )
       .all() as Array<{ runtime_id: string; cli_ref: string }>;
     return rows.map((r) => ({ runtimeId: String(r.runtime_id), cliRef: String(r.cli_ref) }));
   }

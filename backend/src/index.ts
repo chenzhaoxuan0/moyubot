@@ -1960,23 +1960,56 @@ const TERMINAL_RESUME_RETRY_MS = 10_000;
 const nativeListCache = new Map<string, { at: number; rows: readonly NativeSessionSummary[] }>();
 const nativeListInFlight = new Map<string, Promise<readonly NativeSessionSummary[]>>();
 const NATIVE_LIST_TTL_MS = 30_000;
+/** 缓存条目上限：key 是 执行器|rootPath 组合，terminal 回溯会带任意项目目录进来，
+ *  长跑 daemon 防慢增长（对齐 readers/claude.ts listCache 的封顶口径） */
+const NATIVE_LIST_CACHE_MAX = 256;
 
-function nativeListKey(executorId: string, rootPath: string | null): string {
-  return `${executorId}|${rootPath ?? ""}`;
+/** 统一去前缀：缓存键与 readerOf 只认裸执行器 id（台账/bot.json 里 daemon: 与 :yolo 混存） */
+function bareRuntime(runtimeId: string): string {
+  return runtimeId.replace(/^daemon:/, "").replace(/:yolo$/, "");
 }
 
-/** 后台刷新（单飞）：不进请求路径，扫完落缓存 */
+function nativeListKey(executorId: string, rootPath: string | null): string {
+  return `${bareRuntime(executorId)}|${rootPath ?? ""}`;
+}
+
+/**
+ * 后台刷新（单飞）。⚠ setImmediate 挪一拍再扫是必须的：reader 的 list 函数体
+ * 是同步 fs（async 声明挡不住首个真 await 前的同步执行），不挪这一拍，
+ * 「后台刷新」会在触发它的请求栈里原地跑完整场扫描，等于没挪出请求路径。
+ */
 function refreshNativeList(executorId: string, rootPath: string | null, key: string): Promise<readonly NativeSessionSummary[]> {
   const flying = nativeListInFlight.get(key);
   if (flying !== undefined) return flying;
-  const reader = readerOf(executorId);
-  const p = (reader !== null ? reader.list(rootPath, 50) : Promise.resolve([] as readonly NativeSessionSummary[]))
-    .catch(() => [] as readonly NativeSessionSummary[])
-    .then((rows) => {
-      nativeListCache.set(key, { at: Date.now(), rows });
-      nativeListInFlight.delete(key);
-      return rows;
+  const reader = readerOf(bareRuntime(executorId));
+  const p = new Promise<readonly NativeSessionSummary[]>((resolve) => {
+    setImmediate(() => {
+      if (reader === null) {
+        resolve([]);
+        return;
+      }
+      reader
+        .list(rootPath, 50)
+        .then(resolve, () => resolve(null as unknown as readonly NativeSessionSummary[]));
     });
+  }).then((rows) => {
+    // 读失败（null）不落缓存：瞬断只影响本轮，绝不把「空」当新鲜数据焐 TTL
+    // 一整个周期（已有旧条目原样保留，旧值继续可服务、下次再试）
+    if (rows !== null) nativeListCache.set(key, { at: Date.now(), rows });
+    if (nativeListCache.size > NATIVE_LIST_CACHE_MAX) {
+      let oldestKey: string | null = null;
+      let oldestAt = Infinity;
+      for (const [k, v] of nativeListCache) {
+        if (v.at < oldestAt) {
+          oldestAt = v.at;
+          oldestKey = k;
+        }
+      }
+      if (oldestKey !== null) nativeListCache.delete(oldestKey);
+    }
+    nativeListInFlight.delete(key);
+    return rows ?? (nativeListCache.get(key)?.rows ?? []);
+  });
   nativeListInFlight.set(key, p);
   return p;
 }
@@ -1986,8 +2019,8 @@ function cachedNativeList(executorId: string, rootPath: string | null): Promise<
   const hit = nativeListCache.get(key);
   if (hit !== undefined) {
     if (Date.now() - hit.at < NATIVE_LIST_TTL_MS) return Promise.resolve(hit.rows);
-    // 过期：先回旧值，扫描放到后台 —— 请求方拿到的是 ≤ TTL+一轮 的数据，
-    // 对标题兜底/endedAt 修正/终端回溯这类展示级用途足够新鲜
+    // 过期：先回旧值，扫描挪到后台 tick —— 请求方拿到的是 ≤ TTL+一轮 的数据，
+    // 对标题兜底/endedAt 修正这类展示级用途足够新鲜
     void refreshNativeList(executorId, rootPath, key);
     return Promise.resolve(hit.rows);
   }
@@ -2003,18 +2036,21 @@ function peekNativeList(executorId: string, rootPath: string | null): readonly N
 }
 
 /**
- * 终端回溯的前置闸：原生列表已有缓存（含过期旧值）才放行。
- * 冷缓存时顺手后台焐热并返回 false —— 调用方本轮直接跳过，**不烧**
- * 「结算行每进程一次」的回溯名额，下一轮请求（缓存就绪后）自然补上。
- * 否则 daemon 冷启动后的第一个 unit.history 会在请求路径里同步扫完
- * 整个原生存储（实测 4.7s），侧栏展开又被拖回秒级。
+ * 终端回溯的前置闸：原生列表**足够新鲜**才放行（≤2×TTL；自动收录每 30s
+ * 刷新一轮，正常恒新鲜）。过期或冷缓存时顺手后台焐热并返回 false ——
+ * 调用方本轮直接跳过，**不烧**「结算行每进程一次」的回溯名额。
+ * 两头都关键：冷缓存放行会让 daemon 冷启动后的第一个 unit.history 在请求
+ * 路径里同步扫完整个原生存储（实测 4.7s）；而拿过期旧值去回溯，原生会话
+ * 晚于缓存落盘的运行必然 miss，名额一烧该行的 resumeRef 本进程就永远丢了。
  */
+const NATIVE_LIST_ATTEMPT_STALE_MS = 2 * NATIVE_LIST_TTL_MS;
+
 function ensureNativeListWarm(runtimeId: string, rootPath: string): boolean {
-  const bare = runtimeId.replace(/^daemon:/, "").replace(/:yolo$/, "");
-  if (readerOf(bare) === null) return true;
-  const key = nativeListKey(bare, rootPath !== "" ? rootPath : null);
-  if (nativeListCache.has(key)) return true;
-  void refreshNativeList(bare, rootPath !== "" ? rootPath : null, key);
+  if (readerOf(bareRuntime(runtimeId)) === null) return true; // 无 reader 的执行器：回溯必然空手，别拦着烧名额（与旧行为一致）
+  const key = nativeListKey(runtimeId, rootPath !== "" ? rootPath : null);
+  const hit = nativeListCache.get(key);
+  if (hit !== undefined && Date.now() - hit.at < NATIVE_LIST_ATTEMPT_STALE_MS) return true;
+  void refreshNativeList(runtimeId, rootPath !== "" ? rootPath : null, key);
   return false;
 }
 
@@ -2110,7 +2146,9 @@ async function listBotsForHistory() {
   if (unitHistoryBotsMemo !== null && now - unitHistoryBotsMemo.at < UNIT_HISTORY_BOTS_TTL_MS) {
     return unitHistoryBotsMemo.bots;
   }
-  const bots = await botRegistry.listBots().catch(() => [] as Awaited<ReturnType<typeof botRegistry.listBots>>);
+  // 失败不记忆：瞬断只影响本次调用，别让空映射把 30s 内所有历史行的
+  // unitName/rootPath 解析打回裸 unitId
+  const bots = await botRegistry.listBots();
   unitHistoryBotsMemo = { at: now, bots };
   return bots;
 }
@@ -2305,7 +2343,10 @@ registerMethod("unit.history", async (params) => {
           }
         }
         if (title !== "" && title !== "（无标题会话）") {
-          if (sessionTitleCache.size >= SESSION_TITLE_CACHE_MAX) sessionTitleCache.clear();
+          if (sessionTitleCache.size >= SESSION_TITLE_CACHE_MAX) {
+            // 淘最旧一条（插入序），不清空 —— 清空会让下一轮请求集中重查一波 SQLite
+            sessionTitleCache.delete(sessionTitleCache.keys().next().value as string);
+          }
           sessionTitleCache.set(s.id, title);
         }
       }

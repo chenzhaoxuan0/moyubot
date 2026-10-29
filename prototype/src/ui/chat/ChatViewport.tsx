@@ -93,7 +93,7 @@ export function ChatViewport({
   // 2. 思考与工具折叠工作组聚合
   const renderUnits = useMemo(() => buildWorkRuns(items), [items]);
 
-  // 3. 提取轮次锚点（供右侧大纲导览），关联在单元列表中的下标
+  // 3. 提取轮次锚点（供左轨大纲导览），关联在单元列表中的下标
   const turnAnchors = useMemo<TurnNavAnchor[]>(() => {
     const anchors: TurnNavAnchor[] = [];
     let turnCount = 0;

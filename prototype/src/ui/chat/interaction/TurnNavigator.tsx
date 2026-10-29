@@ -79,7 +79,7 @@ export function TurnNavigator({
   return (
     <nav
       aria-label="对话轮次导航"
-      className="hidden @min-[768px]:flex absolute left-2.5 top-1/2 -translate-y-1/2 z-20 flex-col items-start py-1 select-none pointer-events-auto opacity-40 hover:opacity-100 transition-opacity duration-150"
+      className="hidden @min-[768px]:flex absolute left-2.5 top-1/2 -translate-y-1/2 z-40 flex-col items-start py-1 select-none pointer-events-auto opacity-40 hover:opacity-100 transition-opacity duration-150"
     >
       <div className="flex flex-col gap-0.5 items-start py-0.5">
         {anchors.map((a) => {
