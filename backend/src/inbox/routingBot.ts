@@ -52,9 +52,10 @@ const ROUTING_AGENTS_MD = `# Routing
 ## 输出契约（铁律）
 只输出一个 JSON 数组，每条输入对应一个元素，不要输出任何其他文字：
 [{"id":条目编号,"category":"分类id","title":"一句话短标题","reason":"一句话分类理由",
-  "task":{"goal":"可执行的目标原话","prompt":"给执行 agent 的启动提示词","unitId":"bot id 或空","runtimeId":"执行器id 或空","model":null,"launchMode":"headless","targetSessionId":null}}]
-category 取「任务」时才带 task 字段（unitId/runtimeId/model/targetSessionId 拿不准就空/null，
-launchMode 固定 headless，除非用户预置指定）。
+  "task":{"goal":"可执行的目标原话","prompt":"给执行 agent 的启动提示词","unitId":"bot id 或空","runtimeId":"执行器id 或空","model":null}}]
+category 取「任务」时才带 task 字段（unitId/runtimeId/model 拿不准就空/null）。
+不要输出 launchMode / targetSessionId / rootPath —— 执行方式由系统统一决定，会话与
+目录是用户亲手预置的权限，解析器不收这三个字段。
 
 ## 红线
 - 你只分类、只沉淀，无权启动任何任务 —— 执行是引擎的事

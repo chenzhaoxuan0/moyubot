@@ -17,6 +17,7 @@ import {
   BUILTIN_CATEGORY_ORDER,
   DEFAULT_INBOX_CATEGORIES,
   INBOX_STATUS_LABEL,
+  inboxCategoryLabel as categoryLabel,
   type InboxCategoryDef,
   type InboxEntry,
   type InboxHints,
@@ -36,6 +37,11 @@ import { cn } from "./cn.ts";
  * 直通闲时自动执行），想法/资料留在这里归档。
  */
 
+/** 轮询兜底间隔（权威同步走 inbox 信号帧，这是 daemon 不在/漏帧时的兜底） */
+const POLL_MS = 30_000;
+/** 页面级通知的自动消失时长 */
+const NOTICE_TTL_MS = 5_000;
+
 export function InboxPage(): ReactElement {
   const entries = useInbox((s) => s.entries);
   const config = useInbox((s) => s.config);
@@ -52,13 +58,13 @@ export function InboxPage(): ReactElement {
 
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), 30_000);
+    const timer = setInterval(() => void refresh(), POLL_MS);
     return () => clearInterval(timer);
   }, [refresh]);
 
   useEffect(() => {
     if (notice === null) return;
-    const t = setTimeout(() => setNotice(null), 5000);
+    const t = setTimeout(() => setNotice(null), NOTICE_TTL_MS);
     return () => clearTimeout(t);
   }, [notice, setNotice]);
 
@@ -541,6 +547,14 @@ function InboxSettings({ onClose }: { onClose: () => void }): ReactElement {
     setBusy(false);
   };
 
+  // Enter 与「添加」按钮共用的提交口：busy 守卫收在这里，两条路径都不会并发写
+  const submitNewCategory = (): void => {
+    const label = newLabel.trim();
+    if (label === "" || busy) return;
+    void save({ categories: [...config.categories, { id: label, label, actionable: newActionable }] });
+    setNewLabel("");
+  };
+
   const hbRuntimes = ["", ...runtimes.map((r) => r.id.replace(/^daemon:/, ""))];
 
   return (
@@ -645,10 +659,7 @@ function InboxSettings({ onClose }: { onClose: () => void }): ReactElement {
                 placeholder="新分类名（如「读书清单」）"
                 onChange={(e) => setNewLabel(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.nativeEvent.isComposing && newLabel.trim() !== "") {
-                    void save({ categories: [...config.categories, { id: newLabel.trim(), label: newLabel.trim(), actionable: newActionable }] });
-                    setNewLabel("");
-                  }
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing) submitNewCategory();
                 }}
                 className={inputCls}
               />
@@ -656,15 +667,7 @@ function InboxSettings({ onClose }: { onClose: () => void }): ReactElement {
                 <input type="checkbox" checked={newActionable} onChange={(e) => setNewActionable(e.target.checked)} className="accent-teal" />
                 沉淀任务
               </label>
-              <button
-                onClick={() => {
-                  if (newLabel.trim() === "") return;
-                  void save({ categories: [...config.categories, { id: newLabel.trim(), label: newLabel.trim(), actionable: newActionable }] });
-                  setNewLabel("");
-                }}
-                disabled={newLabel.trim() === "" || busy}
-                className="shrink-0 rounded-btn bg-ink px-2.5 py-1.5 text-caption text-canvas hover:opacity-90 disabled:opacity-40"
-              >
+              <button onClick={submitNewCategory} disabled={newLabel.trim() === "" || busy} className="shrink-0 rounded-btn bg-ink px-2.5 py-1.5 text-caption text-canvas hover:opacity-90 disabled:opacity-40">
                 添加
               </button>
             </div>
@@ -716,10 +719,6 @@ function HeaderBtn({ icon: Icon, label, onClick, active }: { icon: typeof Sparkl
       <Icon size={13} />
     </button>
   );
-}
-
-function categoryLabel(id: string, extra: readonly InboxCategoryDef[]): string {
-  return DEFAULT_INBOX_CATEGORIES.find((c) => c.id === id)?.label ?? extra.find((c) => c.id === id)?.label ?? id;
 }
 
 /** 去待办页（任务管理在那边） */

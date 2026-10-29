@@ -44,8 +44,9 @@ export function normalizeInboxConfig(raw: unknown): InboxConfig {
   return {
     autoClassify: r["autoClassify"] !== false,
     classifier: {
-      runtimeId: typeof cl["runtimeId"] === "string" ? cl["runtimeId"] : "",
-      model: typeof cl["model"] === "string" && cl["model"] !== "" ? cl["model"] : null,
+      // trim：' zcode ' 这种手滑空格会让 startSession 找不到适配器
+      runtimeId: typeof cl["runtimeId"] === "string" ? cl["runtimeId"].trim() : "",
+      model: typeof cl["model"] === "string" && cl["model"].trim() !== "" ? cl["model"].trim() : null,
     },
     categories: normalizeCategories(r["categories"]),
   };

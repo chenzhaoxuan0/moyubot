@@ -1617,7 +1617,8 @@ function formatHistoryTime(ts: number): string {
 /**
  * 历史行的来源标签 —— 这条会话怎么来的：
  * - 定时（automation）：trigger=manual 是用户点的「立即运行」，标「定时·手跑」；
- * - 待办（backlog）：心跳/GTD 提议确认后自动执行；手动点的一次执行标「待办·手动」；
+ * - 待办（backlog）：trigger=autopilot 是闲时自动执行（免确认门），标「待办·闲时」；
+ *   心跳/GTD 提议确认后自动执行标「待办」；手动点的一次执行标「待办·手动」；
  * - 手动（manual）：对话页手动派发的 TUI；
  * - 会话（session）：非工作台来源（飞书/手机端/自动化…）标来源；工作台自己的
  *   普通对话是默认形态，不带标签（颜色口径与 HistoryPane 的 KIND_META 一致）。
@@ -1629,6 +1630,9 @@ function historyOriginTag(entry: UnitHistoryEntry): { label: string; cls: string
       : { label: "定时", cls: "bg-teal-tint text-teal", tip: "定时任务到点自动触发" };
   }
   if (entry.kind === "backlog") {
+    if (entry.trigger === "autopilot") {
+      return { label: "待办·闲时", cls: "bg-gain/10 text-gain", tip: "清单任务 · 工作台空闲时自动执行（免确认门，跑完自动验收）" };
+    }
     return entry.trigger === "manual"
       ? { label: "待办·手动", cls: "bg-amber-500/10 text-amber-600", tip: "待办任务 · 手动点的一次执行" }
       : { label: "待办", cls: "bg-amber-500/10 text-amber-600", tip: "待办任务自动触发（心跳提议、确认后执行）" };

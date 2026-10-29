@@ -948,6 +948,9 @@ export class Store {
 
   deleteBacklogItem(id: number): boolean {
     this.db.prepare(`DELETE FROM backlog_runs WHERE item_id = ?`).run(id);
+    // 清单条目还链着这个任务的话，链接一并断掉 —— 不然 LEFT JOIN 出 NULL 快照，
+    // inboxRow 会把它捏造成「任务 #N · 就绪」的幽灵链接
+    this.db.prepare(`UPDATE inbox_entries SET task_id = NULL, updated_at = ? WHERE task_id = ?`).run(Date.now(), id);
     const result = this.db.prepare(`DELETE FROM backlog_items WHERE id = ?`).run(id);
     return Number(result.changes) > 0;
   }

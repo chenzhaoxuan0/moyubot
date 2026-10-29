@@ -2048,14 +2048,6 @@ export interface InboxListResult {
   readonly classifier: { readonly classifying: boolean; readonly lastOutcome: string | null };
 }
 
-/** BacklogWriteInput 加清单升级的两个可选项（auto / 指定会话） */
-export interface BacklogExtraInput {
-  /** 闲时自动执行（autopilot 托管，免确认门） */
-  readonly auto?: boolean;
-  /** 指定在某个已有会话里执行（null = 新开会话） */
-  readonly targetSessionId?: string | null;
-}
-
 export async function fetchInbox(endpoint: string = defaultDaemonEndpoint()): Promise<InboxListResult> {
   const client = DaemonClient.get(endpoint);
   return client.rpc<InboxListResult>("inbox.list", null, 20000);

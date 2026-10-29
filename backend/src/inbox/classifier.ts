@@ -35,6 +35,10 @@ import { log } from "../log.ts";
 const CLASSIFY_BUDGET_MS = 3 * 60_000;
 /** inbox.add 后的 debounce：用户连续写几条，凑一批一起分类 */
 const SCHEDULE_DELAY_MS = 2_500;
+/** 单飞占用时 debounce 的顺延间隔 */
+const REARM_DELAY_MS = 5_000;
+/** startSession 的看门狗：适配器握手挂死不能把 classifying 旗永久钉死 */
+const START_SESSION_BUDGET_MS = 60_000;
 
 const ROUTING_UNIT = "routing";
 
@@ -65,16 +69,6 @@ interface RawDecision {
   task?: unknown;
 }
 
-interface ParsedTask {
-  goal: string;
-  prompt: string;
-  title: string;
-  unitId: string;
-  runtimeId: string;
-  model: string | null;
-  targetSessionId: string | null;
-}
-
 export class InboxClassifier {
   private readonly timer: { current: NodeJS.Timeout | null } = { current: null };
   /** 单飞旗（内存态：重启时那轮分类已经死了） */
@@ -85,12 +79,18 @@ export class InboxClassifier {
 
   // ---- 触发 -------------------------------------------------------------------
 
-  /** inbox.add 后的 debounce 入口（autoClassify 关着就不排） */
+  /** inbox.add 后的 debounce 入口（autoClassify 关着就不排；reclassify 走 classify 直调不受此门限） */
   schedule(delayMs = SCHEDULE_DELAY_MS): void {
     if (!this.deps.getConfig().autoClassify) return;
     if (this.timer.current !== null) clearTimeout(this.timer.current);
     this.timer.current = setTimeout(() => {
       this.timer.current = null;
+      // 单飞在跑就顺延一拍：到点即弃会让 debounce 期间新写的条目丢唤醒，
+      // 只能等下一轮 add 才有机会被分到
+      if (this.classifying) {
+        this.schedule(REARM_DELAY_MS);
+        return;
+      }
       void this.classify().catch((err: unknown) =>
         log.warn("inbox classify scheduled run failed", { error: err instanceof Error ? err.message : String(err) }),
       );
@@ -129,8 +129,9 @@ export class InboxClassifier {
       const answer = await this.runClassifySession(cfg, pending, units, adapters, runtimeId, model);
       const decisions = extractJsonArray(answer);
       if (decisions === null) {
-        // 一整批沉默/解析失败：条目保持 pending，下次再试（不标 failed —— 不是条目的错）
-        this.setOutcome(`failed:分类会话没有产出有效决策（${pending.length} 条待重试）`);
+        // 一整批沉默/解析失败：条目保持 pending —— 不是条目的错，不标 failed，
+        // 也不自动重试（零进益的轮次重试只会烧额度）；下一次写入/手动触发再上
+        this.setOutcome(`failed:分类会话没有产出有效决策，${pending.length} 条保持待分类（下次写入或手动触发再试）`);
         return result;
       }
       result.attempted = pending.length;
@@ -139,7 +140,7 @@ export class InboxClassifier {
         const id = Number(raw["id"]);
         const entry = byId.get(id);
         if (entry === undefined) continue;
-        const applied = this.applyDecision(entry, raw, units);
+        const applied = this.applyDecision(entry, raw, units, adapters);
         if (applied) {
           result.classified++;
           if (applied.taskCreated) result.tasksCreated++;
@@ -155,11 +156,11 @@ export class InboxClassifier {
       if (result.tasksCreated > 0) {
         this.deps.broadcast({ kind: "notice", level: "success", text: `分类完成：${result.tasksCreated} 条沉淀为待办任务，空闲时自动执行` });
       }
-      // 分类期间又写进来的条目不在本批快照里 —— 本批全部消化完才补一轮（routing
-      // 跳了某条不补，防热循环烧额度；那条等下一次 add / 手动触发自然带上）
-      const allResolved = result.classified + result.failed === result.attempted;
+      // 分类期间又写进来的条目不在本批快照里 —— 本轮有进益才补一轮（routing 跳了
+      // 某条/零决策时不自动重试，防热循环烧额度；那条等下一次 add / 手动触发带上）
+      const progress = result.classified + result.failed;
       const remain = this.deps.store.listInboxEntries().filter((e) => e.status === "pending").length;
-      if (allResolved && remain > 0) this.schedule();
+      if (progress > 0 && remain > 0) this.schedule();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       this.setOutcome(`failed:${message}`);
@@ -176,6 +177,7 @@ export class InboxClassifier {
     entry: InboxEntry,
     raw: RawDecision,
     units: Array<{ unitId: string; unitName: string; rootPath: string }>,
+    adapters: ReadonlyArray<{ id: string }>,
   ): { taskCreated: boolean } | null {
     const cfg = this.deps.getConfig();
     const category = typeof raw["category"] === "string" ? raw["category"].trim() : "";
@@ -196,7 +198,11 @@ export class InboxClassifier {
           : validUnit(task.unitId) || units[0]?.unitId || ROUTING_UNIT;
       const unit = units.find((u) => u.unitId === unitId);
       const rootPath = hints?.rootPath ?? unit?.rootPath ?? path.join(this.deps.homeDir, ROUTING_UNIT);
-      const goal = task.goal !== "" ? task.goal : entry.text;
+      // goal 兜底是用户原话全文 —— 清单允许长文本，任务目标必须钳住（prompt 会被无人值守派发）
+      const goal = task.goal !== "" ? task.goal : entry.text.slice(0, 4000);
+      // 执行器与 unit 同款校验：routing 编一个不存在的 id，任务会以退避节奏永久卡队列头；
+      // 未知存空串 → autopilot 的余量门自己挑有余量的执行器
+      const runtimeId = hints?.runtimeId ?? (adapters.some((a) => a.id === task.runtimeId) ? task.runtimeId : "");
       const taskId = this.deps.store.createBacklogItem({
         title: task.title !== "" ? task.title : entry.text.split(/\r?\n/)[0]!.slice(0, 40),
         goal,
@@ -204,11 +210,13 @@ export class InboxClassifier {
         unitId,
         unitName: unit?.unitName ?? unitId,
         rootPath,
-        runtimeId: hints?.runtimeId ?? task.runtimeId,
+        runtimeId,
         model: hints?.model !== undefined ? hints.model : task.model,
         launchMode: hints?.launchMode ?? "headless",
         auto: true,
-        targetSessionId: hints?.targetSessionId ?? task.targetSessionId,
+        // targetSessionId 只认用户亲手预置的 hints —— routing 的输出不收这个字段
+        // （间接提示注入可以把任意已有会话 id 塞进来，把任务 prompt 灌进别人的对话）
+        targetSessionId: hints?.targetSessionId ?? null,
         source: "inbox",
       });
       this.deps.store.updateInboxEntry(entry.id, {
@@ -287,31 +295,42 @@ export class InboxClassifier {
       "对每条条目输出一个分类决策：目标/待办类给 task 字段（goal 一句话可执行目标、prompt 启动提示词、unitId/runtimeId 拿不准留空）；",
       "想法/资料类不要 task 字段。用户预置了字段的条目，task 里对应字段必须原样保留。",
       "只输出一个 JSON 数组，不要输出任何其他文字：",
-      '[{"id":条目id,"category":"分类id","title":"一句话短标题","reason":"一句话理由","task":{"goal":"…","prompt":"…","unitId":"","runtimeId":"","model":null,"targetSessionId":null}}]',
+      '[{"id":条目id,"category":"分类id","title":"一句话短标题","reason":"一句话理由","task":{"goal":"…","prompt":"…","unitId":"","runtimeId":"","model":null}}]',
     ].join("\n");
 
     const texts: string[] = [];
     // 订阅在 onSessionReady 回调里挂（startSession 返回前事件就可能到），
     // 所以用对象壳子持有退订函数 —— 直接 let 会被控制流分析收窄成 null/never
     const unsubRef: { fn: (() => void) | null } = { fn: null };
-    const session = await this.deps.host.startSession({
-      runtimeId,
-      unitId: asUnitId(ROUTING_UNIT),
-      unitName: "Routing",
-      rootPath: path.join(this.deps.homeDir, ROUTING_UNIT),
-      prompt,
-      model: model === null || model === "" ? null : asModelId(model),
-      source: "automation",
-      onSessionReady: (id) => {
-        unsubRef.fn = this.deps.host.onSessionEvent(id, "message.completed", (e) => {
-          if (e.type === "message.completed") texts.push(e.text);
-        });
-      },
-    });
+    // startSession 不在 CLASSIFY_BUDGET_MS 的守护圈内（那圈只罩 awaitTurnEnd）：
+    // 适配器握手挂死会把 classifying 旗永久钉死、单飞从此拒收一切新条目 ——
+    // 用看门狗竞速，输了按分类失败收场
+    let watchdog: NodeJS.Timeout | null = null;
+    const session = await Promise.race([
+      this.deps.host.startSession({
+        runtimeId,
+        unitId: asUnitId(ROUTING_UNIT),
+        unitName: "Routing",
+        rootPath: path.join(this.deps.homeDir, ROUTING_UNIT),
+        prompt,
+        model: model === null || model === "" ? null : asModelId(model),
+        source: "automation",
+        onSessionReady: (id) => {
+          unsubRef.fn = this.deps.host.onSessionEvent(id, "message.completed", (e) => {
+            if (e.type === "message.completed") texts.push(e.text);
+          });
+        },
+      }),
+      new Promise<never>((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error(`分类会话启动超时（${Math.round(START_SESSION_BUDGET_MS / 1000)}s）`)), START_SESSION_BUDGET_MS);
+        watchdog.unref?.();
+      }),
+    ]);
     try {
       await this.awaitTurnEnd(session.id, CLASSIFY_BUDGET_MS);
     } finally {
       unsubRef.fn?.();
+      if (watchdog !== null) clearTimeout(watchdog);
     }
     return texts.at(-1) ?? "";
   }
@@ -363,11 +382,12 @@ interface ParsedTaskShape {
   unitId: string;
   runtimeId: string;
   model: string | null;
-  targetSessionId: string | null;
 }
 
-/** task 字段归一：全字符串白名单截取，没有有效内容返回 null（当没给 task） */
-function parseTask(raw: unknown): ParsedTaskShape | null {
+/** task 字段归一：全字符串白名单截取，没有有效内容返回 null（当没给 task）。
+ * 刻意不收 launchMode / targetSessionId / rootPath —— 执行方式系统定、会话目标
+ * 只认用户亲手预置的 hints、工作目录只来自单元注册表，LLM 输出在这三处零信任。 */
+export function parseTask(raw: unknown): ParsedTaskShape | null {
   if (raw === null || typeof raw !== "object") return null;
   const r = raw as Record<string, unknown>;
   const strField = (k: string, max = 4000): string => {
@@ -381,7 +401,6 @@ function parseTask(raw: unknown): ParsedTaskShape | null {
     unitId: strField("unitId", 100),
     runtimeId: strField("runtimeId", 100).replace(/^daemon:/, ""),
     model: typeof r["model"] === "string" && r["model"].trim() !== "" ? r["model"].trim() : null,
-    targetSessionId: strField("targetSessionId", 100) || null,
   };
   // 一个能用的字段都没有 = 没给 task（路由只贴了个分类标签）
   if (out.goal === "" && out.prompt === "" && out.title === "") return null;
@@ -389,7 +408,7 @@ function parseTask(raw: unknown): ParsedTaskShape | null {
 }
 
 /** 从模型回复里抠 JSON 数组：整段 parse 不行就从第一个 [ 到最后一个 ] 试 */
-function extractJsonArray(text: string): RawDecision[] | null {
+export function extractJsonArray(text: string): RawDecision[] | null {
   const t = text.trim();
   if (t === "") return null;
   const candidates = [t, t.slice(t.indexOf("["), t.lastIndexOf("]") + 1)];

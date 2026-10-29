@@ -2763,6 +2763,8 @@ registerMethod("backlog.consolidate.run", (params) => {
 registerMethod("inbox.add", (params) => {
   const p = (params ?? {}) as { text?: string; category?: string | null; hints?: unknown };
   if (typeof p.text !== "string" || p.text.trim() === "") throw badBacklog("text is required");
+  // 清单是自由文本入口，但原话会变成分类 prompt 与任务 goal —— 钳住上限
+  if (p.text.length > 8000) throw badBacklog("text 超过 8000 字符上限 —— 长内容请拆成多条或直接给到 bot 会话");
   const cfg = getInboxConfig(store);
   const hints = normalizeInboxHints(p.hints);
   // category 直接给了就不进分类队列（用户自己分好了）
@@ -2825,7 +2827,9 @@ registerMethod("inbox.classify.run", () => {
   return { started: true };
 });
 
-/** 重新分类：把条目打回待分类并立即触发一轮 */
+/** 重新分类：把条目打回待分类并立即触发一轮。
+ * 用户动作必须真分类 —— 走 classify() 直调，不受 autoClassify 开关限制
+ * （schedule() 在开关关闭时静默返回，「让 routing 重新分类」按钮会变成无声空操作）。 */
 registerMethod("inbox.reclassify", (params) => {
   const p = (params ?? {}) as { id?: number };
   if (typeof p.id !== "number") throw badBacklog("id is required");
@@ -2833,7 +2837,10 @@ registerMethod("inbox.reclassify", (params) => {
   if (hit === undefined) throw Object.assign(new Error(`没有这条清单条目：${p.id}`), { code: "unknown_entry" });
   store.updateInboxEntry(p.id, { status: "pending", classifiedAt: null });
   broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
-  inboxClassifier.schedule(500);
+  void inboxClassifier
+    .classify()
+    .then((r) => log.info("inbox classify reclassify run", { ...r }))
+    .catch((err: unknown) => log.warn("inbox reclassify failed", { error: err instanceof Error ? err.message : String(err) }));
   return { ok: true };
 });
 

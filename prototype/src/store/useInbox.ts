@@ -33,7 +33,6 @@ interface InboxState {
   add: (input: { text: string; category?: string | null; hints?: import("../core/inbox.ts").InboxHints }) => Promise<boolean>;
   updateText: (id: number, text: string) => Promise<boolean>;
   setCategory: (id: number, category: string | null) => Promise<boolean>;
-  saveHints: (id: number, hints: import("../core/inbox.ts").InboxHints | null) => Promise<boolean>;
   remove: (id: number) => Promise<void>;
   classifyNow: () => Promise<void>;
   reclassify: (id: number) => Promise<void>;
@@ -102,17 +101,6 @@ export const useInbox = create<InboxState>((set, get) => ({
       return true;
     } catch (err: unknown) {
       set({ notice: { kind: "error", text: `改分类失败：${err instanceof Error ? err.message : String(err)}` } });
-      return false;
-    }
-  },
-
-  saveHints: async (id, hints) => {
-    try {
-      await updateInboxEntry(id, { hints: hints ?? undefined }, defaultDaemonEndpoint());
-      await get().refresh();
-      return true;
-    } catch (err: unknown) {
-      set({ notice: { kind: "error", text: `保存预置字段失败：${err instanceof Error ? err.message : String(err)}` } });
       return false;
     }
   },
