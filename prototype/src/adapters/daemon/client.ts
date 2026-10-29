@@ -35,6 +35,7 @@ import type { RuntimeEvent } from "../../core/events.ts";
 import type { WorkspacePathsResult } from "../../core/workspacePaths.ts";
 import { ruleFromCron, type Automation, type AutomationRun, type ScheduleRule } from "../../core/automation.ts";
 import type { BacklogConfig, BacklogItem, BacklogProposal, BacklogSignal, BacklogStateSnapshot, QuotaHeadroom, QuotaResumeConfig } from "../../core/backlog.ts";
+import type { InboxConfig, InboxEntry, InboxHints, InboxSignal } from "../../core/inbox.ts";
 import type { WorkUnit } from "../../core/units.ts";
 import type { SkillsInventory } from "../../core/skills.ts";
 import type {
@@ -159,6 +160,7 @@ export class DaemonClient {
   readonly #pending = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>();
   readonly #eventListeners = new Set<(e: RuntimeEvent, seq?: number) => void>();
   readonly #backlogListeners = new Set<(s: BacklogSignal) => void>();
+  readonly #inboxListeners = new Set<(s: InboxSignal) => void>();
   readonly #notificationListeners = new Set<(row: DaemonNotificationRow) => void>();
   readonly #resyncListeners = new Set<() => void>();
   readonly #generationListeners = new Set<() => void>();
@@ -336,6 +338,13 @@ export class DaemonClient {
       for (const fn of this.#backlogListeners) fn(signal);
       return;
     }
+    if (frame["type"] === "inbox") {
+      const signal = frame["signal"] as InboxSignal | undefined;
+      // 最小形状校验（与 event/backlog 帧同理）：坏帧不进监听器
+      if (signal === undefined || typeof signal !== "object" || typeof signal["kind"] !== "string") return;
+      for (const fn of this.#inboxListeners) fn(signal);
+      return;
+    }
     if (frame["type"] === "notifications") {
       const row = frame["row"] as DaemonNotificationRow | undefined;
       // 最小形状校验（与 event/backlog 同理）
@@ -402,6 +411,12 @@ export class DaemonClient {
   onBacklogSignal(fn: (s: BacklogSignal) => void): () => void {
     this.#backlogListeners.add(fn);
     return () => this.#backlogListeners.delete(fn);
+  }
+
+  /** 清单（inbox）信号：条目变化 / 分类状态 / 通知 */
+  onInboxSignal(fn: (s: InboxSignal) => void): () => void {
+    this.#inboxListeners.add(fn);
+    return () => this.#inboxListeners.delete(fn);
   }
 
   /** daemon 聚合通知推流（docs/21 P4b）；历史以 fetchNotifications 拉取为准 */
@@ -1902,6 +1917,10 @@ export interface BacklogWriteInput {
   readonly size?: string | null;
   /** 执行方式：terminal（TUI）/ chat（对话页前台）/ headless（纯后台）。缺省 = terminal */
   readonly launchMode?: "terminal" | "chat" | "headless";
+  /** 闲时自动执行（autopilot 托管，免确认门）—— 清单升级的可选项 */
+  readonly auto?: boolean;
+  /** 指定在某个已有会话里执行（null = 新开会话） */
+  readonly targetSessionId?: string | null;
 }
 
 export async function fetchBacklog(endpoint: string = defaultDaemonEndpoint()): Promise<BacklogListResult> {
@@ -2019,6 +2038,56 @@ export async function runBacklogConsolidate(
     { force },
     45000,
   );
+}
+
+// ---- 清单（inbox）RPC --------------------------------------------------------
+
+export interface InboxListResult {
+  readonly entries: readonly InboxEntry[];
+  readonly config: InboxConfig;
+  readonly classifier: { readonly classifying: boolean; readonly lastOutcome: string | null };
+}
+
+export async function fetchInbox(endpoint: string = defaultDaemonEndpoint()): Promise<InboxListResult> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<InboxListResult>("inbox.list", null, 20000);
+}
+
+export async function addInboxEntry(
+  input: { text: string; category?: string | null; hints?: InboxHints },
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<{ id: number; entry: InboxEntry | null }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ id: number; entry: InboxEntry | null }>("inbox.add", input, 15000);
+}
+
+export async function updateInboxEntry(
+  id: number,
+  patch: { text?: string; category?: string | null; hints?: InboxHints | null },
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<{ entry: InboxEntry | null }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ entry: InboxEntry | null }>("inbox.update", { id, ...patch }, 15000);
+}
+
+export async function deleteInboxEntry(id: number, endpoint: string = defaultDaemonEndpoint()): Promise<{ deleted: boolean }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ deleted: boolean }>("inbox.delete", { id }, 15000);
+}
+
+export async function runInboxClassify(endpoint: string = defaultDaemonEndpoint()): Promise<{ started: boolean }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ started: boolean }>("inbox.classify.run", null, 15000);
+}
+
+export async function reclassifyInboxEntry(id: number, endpoint: string = defaultDaemonEndpoint()): Promise<{ ok: boolean }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ ok: boolean }>("inbox.reclassify", { id }, 15000);
+}
+
+export async function setInboxConfigRpc(patch: Record<string, unknown>, endpoint: string = defaultDaemonEndpoint()): Promise<{ config: InboxConfig }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ config: InboxConfig }>("inbox.config.set", { patch }, 15000);
 }
 
 // ---- 远程控制与多渠道网关 RPC ----------------------------------------------

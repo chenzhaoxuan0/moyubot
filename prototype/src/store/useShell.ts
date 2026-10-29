@@ -25,10 +25,12 @@ import type { AutomationDialogRequest } from "../ui/AutomationDialog.tsx";
  * - image（出图工作台）是本项目的扩展：与自动化同级的独立功能视图
  *   （gpt_image_playground 的移植落点）。
  * - backlog（待办/GTD）同上：目标维度的任务清单 + 心跳提议，与自动化（过程维度）相对。
+ * - inbox（清单）同上：个人 context 的唯一捕获入口 —— 文本框写任何东西，
+ *   routing bot 分类沉淀；与 backlog（任务状态机视图）是同一张表的两面。
  * - sourceControl（源代码管理）同上：激活单元仓库的分支 / 工作树管理，
  *   交互范式对齐 VSCode SCM（ADR 0008）。
  */
-export type MainView = "chat" | "automations" | "image" | "backlog" | "sourceControl";
+export type MainView = "chat" | "automations" | "image" | "backlog" | "inbox" | "sourceControl";
 
 /**
  * 会话内视图（docs/13 统一 Web 化：决策拍板「新会话默认结构化聊天」）：

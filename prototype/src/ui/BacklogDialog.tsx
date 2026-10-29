@@ -43,6 +43,9 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
   const [size, setSize] = useState<string>(initial?.size ?? "");
   // 新建默认「对话页」（与自动化口径一致）；编辑沿用定义行的值
   const [launchMode, setLaunchMode] = useState<"terminal" | "chat" | "headless">(initial?.launchMode ?? "chat");
+  // 清单升级的两个可选项：闲时自动执行（免确认门）/ 指定已有会话执行
+  const [auto, setAuto] = useState(initial?.auto ?? false);
+  const [targetSessionId, setTargetSessionId] = useState(initial?.targetSessionId ?? "");
   const [err, setErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -82,6 +85,8 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
             mode: mode === "" ? null : mode,
             size: size === "" ? null : size,
             launchMode,
+            auto,
+            targetSessionId: targetSessionId.trim() === "" ? null : targetSessionId.trim(),
           })
         : await updateItem(initial.id, {
             title: title.trim(),
@@ -95,6 +100,8 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
             mode: mode === "" ? null : mode,
             size: size === "" ? null : size,
             launchMode,
+            auto,
+            targetSessionId: targetSessionId.trim() === "" ? null : targetSessionId.trim(),
           });
     setSubmitting(false);
     if (ok) onClose();
@@ -231,6 +238,30 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
               className={cn(inputCls, "resize-y leading-relaxed")}
             />
           </Field>
+
+          {/* 清单升级的可选项：闲时自动执行 + 指定会话 */}
+          <div className="space-y-2.5 rounded-btn bg-rail px-3 py-3">
+            <label className="flex cursor-pointer items-start gap-2 text-caption text-graphite">
+              <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} className="mt-0.5 accent-teal" />
+              <span>
+                闲时自动执行（免确认门）
+                <span className="ml-1 text-ash">
+                  用量还有富余且工作台空闲时，引擎直接派发这条待办，跑完自动验收 —— 不用心跳提议。清单（inbox）分类沉淀的任务默认就是这种。
+                </span>
+              </span>
+            </label>
+            <Field
+              label="指定会话"
+              hint="填已有会话 id：接得上就往那个会话里发启动 prompt（上下文延续），接不上回落新开会话。留空 = 每次新开会话。"
+            >
+              <input
+                value={targetSessionId}
+                onChange={(e) => setTargetSessionId(e.target.value)}
+                placeholder="（留空 = 新开会话）"
+                className={cn(inputCls, "font-mono")}
+              />
+            </Field>
+          </div>
 
           {err !== null && <p className="rounded-btn bg-loss/5 px-2.5 py-2 text-caption text-loss">{err}</p>}
         </div>

@@ -15,6 +15,9 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DispatchTarget, LaunchMode, ScheduleRule } from "../../../prototype/src/core/automation.ts";
+import type { BacklogStatus } from "../../../prototype/src/core/backlog.ts";
+import type { InboxEntry, InboxHints, InboxStatus } from "../../../prototype/src/core/inbox.ts";
+import { normalizeInboxHints } from "../../../prototype/src/core/inbox.ts";
 import { log } from "../log.ts";
 
 export interface SessionRow {
@@ -82,6 +85,10 @@ export interface BacklogRow {
   size: string | null;
   /** 执行方式：terminal = 前端 TUI（缺省）；chat = 对话页前台；headless = 纯后台 host 会话 */
   launchMode: LaunchMode;
+  /** 闲时自动执行（autopilot）：true = 空闲且余量够时引擎直接派发，不进确认门 */
+  auto: boolean;
+  /** 指定在某个已有会话里执行；null = 新开会话 */
+  targetSessionId: string | null;
   status: string;
   ignoreCount: number;
   lastProposedAt: number | null;
@@ -195,6 +202,22 @@ export class Store {
         detail TEXT
       );
       CREATE INDEX IF NOT EXISTS idx_backlog_runs_item ON backlog_runs(item_id, id);
+      -- 清单（inbox）—— 个人 context 的唯一捕获入口：用户把任何东西写进这一个
+      -- 列表，routing bot 分类后 actionable 的沉淀成 backlog_items（task_id 双向
+      -- 链接），想法/资料留在本表按块归档。分类权威在 daemon（state.db 跨重启）。
+      CREATE TABLE IF NOT EXISTS inbox_entries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text TEXT NOT NULL,
+        category TEXT,
+        category_note TEXT,
+        hints_json TEXT,
+        task_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at INTEGER NOT NULL,
+        classified_at INTEGER,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_inbox_entries_status ON inbox_entries(status, id);
       -- 手动派发终端的运行记录（terminal.dispatch：经派发系统的前台 TUI）。
       -- 与 automation_runs / backlog_runs 并列 —— 手动打开没有任务行可挂，
       -- 单独建表，unit.history 三方合并成统一时间轴。
@@ -312,6 +335,10 @@ export class Store {
       `ALTER TABLE automations ADD COLUMN launch_mode TEXT`,
       // 待办同款：terminal = 前端 TUI（缺省）；headless = 纯后台
       `ALTER TABLE backlog_items ADD COLUMN launch_mode TEXT`,
+      // 清单（inbox）升级两列：auto = 闲时自动执行（免确认门，跑完自动验收）；
+      // target_session_id = 指定在已有会话里执行（接得上就 resume，接不上回落新开）
+      `ALTER TABLE backlog_items ADD COLUMN auto INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE backlog_items ADD COLUMN target_session_id TEXT`,
       `ALTER TABLE terminal_runs ADD COLUMN title TEXT`,
       `ALTER TABLE terminal_runs ADD COLUMN resume_ref TEXT`,
       `ALTER TABLE terminal_runs ADD COLUMN output_text TEXT`,
@@ -351,6 +378,26 @@ export class Store {
       // 忽略历史自愈异常
     }
     log.info("store opened", { db: path.join(homeDir, "state.db") });
+  }
+
+  /**
+   * 同步事务包裹：多表写必须同生共死时用（node:sqlite 是同步 API，直接
+   * BEGIN/COMMIT 即可，无需异步排队）。嵌套调用不支持 —— 调用方保证一层。
+   */
+  transaction<T>(fn: () => T): T {
+    this.db.exec("BEGIN");
+    try {
+      const out = fn();
+      this.db.exec("COMMIT");
+      return out;
+    } catch (err: unknown) {
+      try {
+        this.db.exec("ROLLBACK");
+      } catch {
+        /* BEGIN 都没成功的极端情况下无事可回滚 */
+      }
+      throw err;
+    }
   }
 
   upsertSession(row: SessionRow): void {
@@ -808,6 +855,8 @@ export class Store {
       mode: r["mode"] === null || r["mode"] === undefined ? null : String(r["mode"]),
       size: r["size"] === null || r["size"] === undefined ? null : String(r["size"]),
       launchMode: r["launch_mode"] === "headless" || r["launch_mode"] === "chat" ? r["launch_mode"] : "terminal",
+      auto: Number(r["auto"] ?? 0) === 1,
+      targetSessionId: r["target_session_id"] === null || r["target_session_id"] === undefined ? null : String(r["target_session_id"]),
       status: String(r["status"]),
       ignoreCount: Number(r["ignore_count"] ?? 0),
       lastProposedAt: nOrNull(r["last_proposed_at"]),
@@ -833,6 +882,8 @@ export class Store {
     mode?: string | null;
     size?: string | null;
     launchMode?: LaunchMode;
+    auto?: boolean;
+    targetSessionId?: string | null;
     source?: "manual" | "inbox";
     sortPos?: number;
   }): number {
@@ -840,8 +891,8 @@ export class Store {
     const result = this.db
       .prepare(
         `INSERT INTO backlog_items (title, goal, prompt, unit_id, unit_name, root_path, runtime_id, model, mode,
-           size, launch_mode, status, ignore_count, source, sort_pos, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 0, ?, ?, ?, ?)`,
+           size, launch_mode, auto, target_session_id, status, ignore_count, source, sort_pos, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 0, ?, ?, ?, ?)`,
       )
       .run(
         a.title,
@@ -855,6 +906,8 @@ export class Store {
         a.mode ?? null,
         a.size ?? null,
         a.launchMode ?? "terminal",
+        a.auto === true ? 1 : 0,
+        a.targetSessionId ?? null,
         a.source ?? "manual",
         a.sortPos ?? now,
         now,
@@ -891,6 +944,8 @@ export class Store {
       mode: string | null;
       size: string | null;
       launchMode: LaunchMode;
+      auto: boolean;
+      targetSessionId: string | null;
       status: string;
       ignoreCount: number;
       lastProposedAt: number | null;
@@ -917,6 +972,8 @@ export class Store {
     if (patch.mode !== undefined) put("mode", patch.mode);
     if (patch.size !== undefined) put("size", patch.size);
     if (patch.launchMode !== undefined) put("launch_mode", patch.launchMode);
+    if (patch.auto !== undefined) put("auto", patch.auto ? 1 : 0);
+    if (patch.targetSessionId !== undefined) put("target_session_id", patch.targetSessionId);
     if (patch.status !== undefined) put("status", patch.status);
     if (patch.ignoreCount !== undefined) put("ignore_count", patch.ignoreCount);
     if (patch.lastProposedAt !== undefined) put("last_proposed_at", patch.lastProposedAt);
@@ -934,11 +991,14 @@ export class Store {
 
   deleteBacklogItem(id: number): boolean {
     this.db.prepare(`DELETE FROM backlog_runs WHERE item_id = ?`).run(id);
+    // 清单条目还链着这个任务的话，链接一并断掉 —— 不然 LEFT JOIN 出 NULL 快照，
+    // inboxRow 会把它捏造成「任务 #N · 就绪」的幽灵链接
+    this.db.prepare(`UPDATE inbox_entries SET task_id = NULL, updated_at = ? WHERE task_id = ?`).run(Date.now(), id);
     const result = this.db.prepare(`DELETE FROM backlog_items WHERE id = ?`).run(id);
     return Number(result.changes) > 0;
   }
 
-  startBacklogRun(itemId: number, sessionId: string | null, runtimeId: string, trigger: "gtd" | "manual" = "gtd"): number {
+  startBacklogRun(itemId: number, sessionId: string | null, runtimeId: string, trigger: "gtd" | "manual" | "autopilot" = "gtd"): number {
     const result = this.db
       .prepare(`INSERT INTO backlog_runs (item_id, session_id, runtime_id, status, trigger, started_at) VALUES (?, ?, ?, 'running', ?, ?)`)
       .run(itemId, sessionId, runtimeId, trigger, Date.now());
@@ -997,6 +1057,119 @@ export class Store {
       runtimeId: String(r["runtime_id"]),
       startedAt: Number(r["started_at"]),
     }));
+  }
+
+  // ---- 清单（inbox）-------------------------------------------------------------
+
+  private inboxRow(r: Record<string, unknown>): InboxEntry {
+    const nOrNull = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
+    let hints: InboxHints | null = null;
+    try {
+      hints = normalizeInboxHints(r["hints_json"] === null || r["hints_json"] === undefined ? null : JSON.parse(String(r["hints_json"])));
+    } catch {
+      hints = null;
+    }
+    const taskId = nOrNull(r["task_id"]);
+    return {
+      id: Number(r["id"]),
+      text: String(r["text"]),
+      category: r["category"] === null || r["category"] === undefined ? null : String(r["category"]),
+      categoryNote: r["category_note"] === null || r["category_note"] === undefined ? null : String(r["category_note"]),
+      hints,
+      task:
+        taskId !== null
+          ? {
+              id: taskId,
+              // 快照字段（title/status）由 list 时的 join 补齐 —— row 本体只存 id
+              title: String(r["task_title"] ?? ""),
+              status: String(r["task_status"] ?? "ready") as BacklogStatus,
+            }
+          : null,
+      status: (["pending", "classified", "failed"].includes(String(r["status"])) ? String(r["status"]) : "pending") as InboxStatus,
+      createdAt: Number(r["created_at"]),
+      classifiedAt: nOrNull(r["classified_at"]),
+      updatedAt: Number(r["updated_at"]),
+    };
+  }
+
+  createInboxEntry(a: { text: string; category?: string | null; hints?: InboxHints | null; status?: InboxStatus }): number {
+    const now = Date.now();
+    const result = this.db
+      .prepare(
+        `INSERT INTO inbox_entries (text, category, hints_json, status, created_at, classified_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        a.text,
+        a.category ?? null,
+        a.hints === null || a.hints === undefined ? null : JSON.stringify(a.hints),
+        a.status ?? (a.category !== undefined && a.category !== null ? "classified" : "pending"),
+        now,
+        a.category !== undefined && a.category !== null ? now : null,
+        now,
+      );
+    return Number(result.lastInsertRowid);
+  }
+
+  /** 清单全量（task 快照 left join backlog_items，页面不用二次拼装） */
+  listInboxEntries(): InboxEntry[] {
+    const rows = this.db
+      .prepare(
+        `SELECT e.*, b.title AS task_title, b.status AS task_status
+         FROM inbox_entries e LEFT JOIN backlog_items b ON b.id = e.task_id
+         ORDER BY e.id DESC`,
+      )
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((r) => this.inboxRow(r));
+  }
+
+  getInboxEntry(id: number): InboxEntry | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT e.*, b.title AS task_title, b.status AS task_status
+         FROM inbox_entries e LEFT JOIN backlog_items b ON b.id = e.task_id WHERE e.id = ?`,
+      )
+      .get(id) as Record<string, unknown> | undefined;
+    return row === undefined ? undefined : this.inboxRow(row);
+  }
+
+  /** 局部更新（undefined = 不动）；taskTitle 走 backlog_items，这里不管 */
+  updateInboxEntry(
+    id: number,
+    patch: Partial<{
+      text: string;
+      category: string | null;
+      categoryNote: string | null;
+      hints: InboxHints | null;
+      taskId: number | null;
+      status: InboxStatus;
+      classifiedAt: number | null;
+    }>,
+  ): boolean {
+    const sets: string[] = [];
+    const values: Array<string | number | null> = [];
+    const put = (col: string, v: string | number | null): void => {
+      sets.push(`${col} = ?`);
+      values.push(v);
+    };
+    if (patch.text !== undefined) put("text", patch.text);
+    if (patch.category !== undefined) put("category", patch.category);
+    if (patch.categoryNote !== undefined) put("category_note", patch.categoryNote);
+    if (patch.hints !== undefined) put("hints_json", patch.hints === null ? null : JSON.stringify(patch.hints));
+    if (patch.taskId !== undefined) put("task_id", patch.taskId);
+    if (patch.status !== undefined) put("status", patch.status);
+    if (patch.classifiedAt !== undefined) put("classified_at", patch.classifiedAt);
+    if (sets.length === 0) return true;
+    sets.push("updated_at = ?");
+    values.push(Date.now());
+    values.push(id);
+    const result = this.db.prepare(`UPDATE inbox_entries SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+    return Number(result.changes) > 0;
+  }
+
+  deleteInboxEntry(id: number): boolean {
+    const result = this.db.prepare(`DELETE FROM inbox_entries WHERE id = ?`).run(id);
+    return Number(result.changes) > 0;
   }
 
   // ---- 手动派发终端（terminal.dispatch → unit.history 的 manual 条目）----------

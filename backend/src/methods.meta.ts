@@ -136,12 +136,12 @@ export const METHOD_META: Record<string, MethodMeta> = {
   // ---- 待办（GTD）与自动化 ------------------------------------------------------
   "backlog.list": { description: "拉待办全量视图：条目、提议、状态、配置、配额", paramsHint: "null" },
   "backlog.create": {
-    description: "新建待办项并落库（launchMode：terminal=TUI / chat=对话页前台 / headless=纯后台；prompt 无人值守口径同 automation.create）",
-    paramsHint: "{goal, unitId, rootPath, title?, prompt?, unitName?, runtimeId?, model?, mode?, size?, launchMode?}",
+    description: "新建待办项并落库（launchMode：terminal=TUI / chat=对话页前台 / headless=纯后台；auto=true 闲时自动执行免确认门；targetSessionId 指定已有会话执行；prompt 无人值守口径同 automation.create）",
+    paramsHint: "{goal, unitId, rootPath, title?, prompt?, unitName?, runtimeId?, model?, mode?, size?, launchMode?, auto?, targetSessionId?}",
   },
   "backlog.update": {
-    description: "按 id 编辑待办字段（执行中的禁改；launchMode 三选 terminal/chat/headless）",
-    paramsHint: "{id, title?, goal?, prompt?, unitId?, unitName?, rootPath?, runtimeId?, model?, mode?, size?, launchMode?}",
+    description: "按 id 编辑待办字段（执行中的禁改；launchMode 三选 terminal/chat/headless；auto/targetSessionId 同 create）",
+    paramsHint: "{id, title?, goal?, prompt?, unitId?, unitName?, rootPath?, runtimeId?, model?, mode?, size?, launchMode?, auto?, targetSessionId?}",
   },
   "backlog.delete": { description: "按 id 删待办，执行中的不可删", paramsHint: "{id}" },
   "backlog.reorder": { description: "传全量 id 数组重排待办优先级", paramsHint: "{ids}" },
@@ -157,6 +157,18 @@ export const METHOD_META: Record<string, MethodMeta> = {
   "backlog.heartbeat.force": { description: "手动触发一跳待办心跳，受理即返", paramsHint: "null" },
   "backlog.state.forceBusy": { description: "设强制忙碌开关，暂停待办自动派发", paramsHint: "{on}" },
   "backlog.consolidate.run": { description: "立即跑一次待办清单归并整理，默认强制", paramsHint: "{force?}" },
+  // ---- 清单（inbox）—— 个人 context 唯一入口，routing bot 分类 ------------------
+  "inbox.add": {
+    description: "往清单写一条：text 必填；category/hints（bot/文件夹/执行器/模型/执行方式/指定会话等预置字段）可选；autoClassify 开着会自动排 routing 分类",
+    paramsHint: "{text, category?, hints?}",
+  },
+  "inbox.list": { description: "拉清单全量视图：条目（含分类与任务链接快照）、配置、分类器状态", paramsHint: "null" },
+  "inbox.update": { description: "编辑清单条目原话或手动改分类（改分类不触发 routing 会话；category=null 打回待分类）", paramsHint: "{id, text?, category?}" },
+  "inbox.delete": { description: "删除一条清单条目（已沉淀的任务本体不动）", paramsHint: "{id}" },
+  "inbox.classify.run": { description: "手动触发一轮 routing 分类（受理即返，结果走 inbox 信号帧）", paramsHint: "null" },
+  "inbox.reclassify": { description: "把条目打回待分类并立即触发分类", paramsHint: "{id}" },
+  "inbox.config.get": { description: "读清单配置（自动分类开关/分类器执行器/自定义分类）", paramsHint: "null" },
+  "inbox.config.set": { description: "以补丁更新清单配置并落盘", paramsHint: "{patch}" },
   "quotaResume.state": { description: "读配额续跑判定快照，只读不触发探测", paramsHint: "null" },
   "notifications.list": {
     description: "通知事实源：daemon 聚合的通知行（会话终态/审批/报错/产出/git/待办，自然键去重）；已读与「你不在它面前」是客户端呈现，行里不带 read",

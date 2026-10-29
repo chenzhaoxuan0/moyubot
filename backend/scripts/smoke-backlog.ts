@@ -262,7 +262,22 @@ async function main(): Promise<void> {
     const cfg = await rpc(ws, "backlog.config.set", { patch: { heartbeat: { intervalMinutes: 1 } } });
     check("config clamps interval", ((cfg["result"] as { config: { heartbeat: { intervalMinutes: number } } }).config.heartbeat.intervalMinutes) === 5, cfg["result"]);
 
-    // 9. 优雅退出
+    // 9. 闲时自动执行（autopilot）：mockperm 夹具不烧真实额度。空闲判定口径 =
+    // 距最近活动 ≥ idleMinutes，把阈值压到 1 分钟再等拍（tick 20s 一次）
+    await rpc(ws, "backlog.config.set", { patch: { heartbeat: { idleMinutes: 1 }, autopilot: { enabled: true, maxConcurrent: 1, autoReview: true } } });
+    const autoItem = ((await rpc(ws, "backlog.create", { goal: "冒烟：闲时自动执行直达 done", unitId: "smoke-unit", unitName: "冒烟单元", rootPath: unitRoot, runtimeId: "mockperm", prompt: "请回复「冒烟完成」并结束。", launchMode: "headless", auto: true }))["result"] as { item: { id: number } }).item;
+    const manualItem = ((await rpc(ws, "backlog.create", { goal: "冒烟：非 auto 不被自动派发", unitId: "smoke-unit", unitName: "冒烟单元", rootPath: unitRoot, runtimeId: "mockperm", prompt: "请回复「冒烟完成」并结束。", launchMode: "headless" }))["result"] as { item: { id: number } }).item;
+    const autoDone = await waitForStatus(ws, autoItem.id, "done", 300000);
+    check("autopilot dispatches ready+auto straight to done (autoReview)", autoDone !== null, autoDone);
+    check("non-auto item untouched by autopilot", (await listItems(ws)).find((i) => i.id === manualItem.id)?.status === "ready");
+    const staleTarget = ((await rpc(ws, "backlog.create", { goal: "冒烟：指定死会话回落新开", unitId: "smoke-unit", unitName: "冒烟单元", rootPath: unitRoot, runtimeId: "mockperm", prompt: "请回复「冒烟完成」并结束。", launchMode: "headless", auto: true, targetSessionId: "sess-dead" }))["result"] as { item: { id: number } }).item;
+    check("stale targetSessionId falls back to new session and completes", (await waitForStatus(ws, staleTarget.id, "done", 300000)) !== null);
+    await rpc(ws, "backlog.config.set", { patch: { autopilot: { enabled: false } } });
+    const gatedItem = ((await rpc(ws, "backlog.create", { goal: "冒烟：autopilot 关闭后不动", unitId: "smoke-unit", unitName: "冒烟单元", rootPath: unitRoot, runtimeId: "mockperm", prompt: "请回复「冒烟完成」并结束。", launchMode: "headless", auto: true }))["result"] as { item: { id: number } }).item;
+    await sleep(45000);
+    check("autopilot disabled keeps auto item ready", (await listItems(ws)).find((i) => i.id === gatedItem.id)?.status === "ready");
+
+    // 10. 优雅退出
     const stopResp = await rpc(ws, "daemon.stop", null);
     check("daemon.stop acks", stopResp["ok"] === true);
     const exitPromise = new Promise<number | null>((resolve) => {
