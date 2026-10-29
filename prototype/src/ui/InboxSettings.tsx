@@ -7,7 +7,7 @@ import { inputCls } from "./WorklistBits.tsx";
 
 /**
  * 清单设置弹窗（原 InboxPage 内嵌弹窗独立成文件）。
- * 自动分类总开关已提升到页面头部（与「闲时执行」并排），这里只留分类会话
+ * 自动分类总开关在左栏清单栏头（与「立即分类」同排），这里只留分类会话
  * 执行器/模型与自定义分类。
  */
 
@@ -62,7 +62,7 @@ export function InboxSettings({ onClose }: { onClose: () => void }): ReactElemen
           <section className="space-y-2.5">
             <h3 className="text-body-sm font-medium text-ink">routing 分类</h3>
             <p className="text-[10px] leading-relaxed text-ash">
-              「自动分类」总开关在页面头部 —— 关闭时新内容停在「待分类」，可手动「立即分类」触发。
+              「自动分类」总开关在左栏清单头部 —— 关闭时新内容停在「待分类」，可手动「立即分类」触发。
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">

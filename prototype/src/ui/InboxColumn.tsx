@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactElement } from "react";
-import { FolderOpen, Inbox as InboxIcon, ListTodo, Loader2, MoreHorizontal, Pencil, RefreshCw, Trash2 } from "lucide-react";
+import { FolderOpen, Inbox as InboxIcon, ListTodo, Loader2, MoreHorizontal, Pencil, RefreshCw, Settings2, Trash2 } from "lucide-react";
 import {
   BUILTIN_CATEGORY_ORDER,
   DEFAULT_INBOX_CATEGORIES,
@@ -10,23 +10,30 @@ import {
 import { BACKLOG_STATUS_LABEL, formatBacklogRelative, type BacklogStatus } from "../core/backlog.ts";
 import { useInbox } from "../store/useInbox.ts";
 import { useBacklog } from "../store/useBacklog.ts";
-import { MenuRow } from "./WorklistBits.tsx";
+import { InboxSettings } from "./InboxSettings.tsx";
+import { HeaderBtn, MenuRow } from "./WorklistBits.tsx";
+import { Toggle } from "./Toggle.tsx";
 import { cn } from "./cn.ts";
 
 /**
  * 清单页左栏 —— 注入的 context 块。待分类置顶，其余按分类分块；
  * actionable 分类的条目由 routing 沉淀成右栏的待办任务（任务链接不再跳页，
  * 点击即滚到右栏对应卡片）。
+ *
+ * 栏头是清单这一侧的功能钮：分类器状态、「自动分类」总开关（关 = 写测试
+ * 不烧 routing 额度，新内容停在「待分类」）、「立即分类」手动触发、清单设置。
  */
 
 export function InboxColumn({ onJumpToTask }: { onJumpToTask: (taskId: number) => void }): ReactElement {
   const entries = useInbox((s) => s.entries);
   const config = useInbox((s) => s.config);
+  const classifier = useInbox((s) => s.classifier);
   const backlogItems = useBacklog((s) => s.items);
   // O(entries) 而不是 O(entries × items)：每行找实时任务状态走一次 Map
   const taskById = useMemo(() => new Map(backlogItems.map((i) => [i.id, i])), [backlogItems]);
 
   const [confirmingDelete, setConfirmingDelete] = useState<number | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const customCategories = config?.categories ?? [];
   const blockOrder = useMemo(() => [...BUILTIN_CATEGORY_ORDER, ...customCategories.map((c) => c.id)], [customCategories]);
@@ -54,12 +61,52 @@ export function InboxColumn({ onJumpToTask }: { onJumpToTask: (taskId: number) =
     />
   );
 
+  const autoClassify = config?.autoClassify ?? false;
+
   return (
     <section className="min-w-0" aria-label="清单条目">
-      <h2 className="mb-3 flex items-center gap-2">
-        <span className="text-body-sm font-medium text-ink">清单</span>
-        <span className="rounded-chip bg-line-soft px-1.5 py-0.5 text-[10px] text-ash">{entries.length} 条</span>
-      </h2>
+      {/* 栏头两行，与右栏同构同高（行1 标题+总开关、行2 状态+动作），下方列表起点对齐。
+          HEAD 不放控件，窄窗口不撞窗口钮 */}
+      <header className="mb-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="flex min-w-0 items-center gap-2 text-body-sm font-medium text-ink">
+            清单
+            <span className="shrink-0 rounded-chip bg-line-soft px-1.5 py-0.5 text-[10px] font-normal text-ash">{entries.length} 条</span>
+          </h2>
+          {/* 总开关：写测试/不想被自动处理时一关即静（不杀已在跑的分类会话） */}
+          <label
+            className="flex shrink-0 cursor-pointer items-center gap-1.5 text-caption text-graphite"
+            title="总开关：写进清单后是否自动交给 routing 分类。关闭时新内容停在「待分类」，可「立即分类」手动触发；已在跑的分类会话不受影响。"
+          >
+            <Toggle on={autoClassify} ariaLabel="自动分类总开关" onChange={(v) => void useInbox.getState().saveConfig({ autoClassify: v })} />
+            自动分类
+          </label>
+        </div>
+        <div className="mt-1 flex items-center justify-between gap-2">
+          {/* 分类器状态：分类中转圈 / 最近一轮结果（truncate，右边的动作钮不吃挤压） */}
+          <span className="min-w-0 flex-1 truncate text-caption text-ash">
+            {classifier?.classifying === true ? (
+              <span className="flex items-center gap-1.5 text-teal">
+                <Loader2 size={12} className="animate-spin" />
+                routing 分类中…
+              </span>
+            ) : (
+              (classifier?.lastOutcome ?? "").replace(/^(ok|failed):/, "")
+            )}
+          </span>
+          <div className="flex shrink-0 items-center gap-1.5">
+            {/* 文字按钮而非图标：一枚星星看不出是「触发分类」 */}
+            <button
+              onClick={() => void useInbox.getState().classifyNow()}
+              title="手动触发一轮 routing 分类（不受「自动分类」开关限制）"
+              className="flex h-8 shrink-0 items-center rounded-btn px-2.5 text-caption text-graphite hover:bg-line-soft hover:text-ink"
+            >
+              立即分类
+            </button>
+            <HeaderBtn icon={Settings2} label="清单设置" onClick={() => setSettingsOpen((v) => !v)} active={settingsOpen} />
+          </div>
+        </div>
+      </header>
 
       <div className="space-y-5">
         {/* 待分类块置顶 —— routing 还没分拣的 */}
@@ -92,6 +139,8 @@ export function InboxColumn({ onJumpToTask }: { onJumpToTask: (taskId: number) =
           </p>
         </div>
       )}
+
+      {settingsOpen && <InboxSettings onClose={() => setSettingsOpen(false)} />}
     </section>
   );
 }

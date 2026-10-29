@@ -9,7 +9,7 @@ import { railInputCls } from "./WorklistBits.tsx";
 import { cn } from "./cn.ts";
 
 /** 待办设置弹窗（心跳 / 余量 / 统合 / 飞书，原 BacklogPage 内嵌弹窗独立成文件）。
- * 闲时自动执行（autopilot）的启用开关已提升到页面头部，这里只留参数。 */
+ * 闲时自动执行（autopilot）的启用开关在右栏待办栏头，这里只留参数。 */
 
 export function BacklogSettings({ onClose }: { onClose: () => void }): ReactElement {
   const config = useBacklog((s) => s.config);
@@ -133,7 +133,7 @@ export function BacklogSettings({ onClose }: { onClose: () => void }): ReactElem
             <h3 className="flex items-center gap-2 text-body-sm font-medium text-ink">
               <Zap size={13} className="text-teal" />
               闲时自动执行
-              <span className="ml-auto text-[10px] text-ash">启用开关在页面头部「闲时执行」</span>
+              <span className="ml-auto text-[10px] text-ash">启用开关在右栏待办头部「闲时执行」</span>
             </h3>
             <div className="grid grid-cols-2 gap-3">
               <NumField

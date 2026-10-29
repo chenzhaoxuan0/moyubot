@@ -12,6 +12,7 @@ import {
   MoreHorizontal,
   Pencil,
   Play,
+  Settings2,
   Trash2,
   Zap,
 } from "lucide-react";
@@ -29,12 +30,18 @@ import { useBacklog } from "../store/useBacklog.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { asUnitId } from "../core/units.ts";
+import { BacklogDialog } from "./BacklogDialog.tsx";
+import { BacklogSettings } from "./BacklogSettings.tsx";
 import { HeaderBtn, MenuRow } from "./WorklistBits.tsx";
+import { Toggle } from "./Toggle.tsx";
 import { cn } from "./cn.ts";
 
 /**
  * 清单页右栏 —— 待办任务状态机（原待办页主体）。WorkPhase 状态行 + 过滤 chips +
  * 卡片列表；左栏点任务链接时 highlightId 命中的卡片滚动进入视野并短暂高亮。
+ *
+ * 栏头是待办这一侧的功能钮：「闲时执行」总开关（关 = 空闲不再派发 auto 任务，
+ * 手动「立即执行」不受影响）、待办设置、强制忙碌、跳一跳、新建。
  */
 
 type Filter = "active" | BacklogStatus;
@@ -58,15 +65,7 @@ const PHASE_DOT: Record<WorkPhase, string> = {
   awaiting_review: "bg-violet-500",
 };
 
-export function BacklogColumn({
-  onCreate,
-  onEdit,
-  highlightId,
-}: {
-  onCreate: () => void;
-  onEdit: (item: BacklogItem) => void;
-  highlightId: number | null;
-}): ReactElement {
+export function BacklogColumn({ highlightId }: { highlightId: number | null }): ReactElement {
   const items = useBacklog((s) => s.items);
   const state = useBacklog((s) => s.state);
   const config = useBacklog((s) => s.config);
@@ -74,6 +73,8 @@ export function BacklogColumn({
 
   const [filter, setFilter] = useState<Filter>("active");
   const [confirmingDelete, setConfirmingDelete] = useState<number | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [dialog, setDialog] = useState<{ mode: "create" } | { mode: "edit"; item: BacklogItem } | null>(null);
 
   // 左栏「定位任务」：滚到命中卡片（高亮 ring 由 highlightId 传进卡片渲染）
   useEffect(() => {
@@ -86,6 +87,7 @@ export function BacklogColumn({
     [items, filter],
   );
   const activeCount = items.filter((i) => isActiveStatus(i.status)).length;
+  const autopilotOn = config?.autopilot.enabled ?? false;
 
   const move = (id: number, dir: -1 | 1): void => {
     const order = items.filter((i) => isActiveStatus(i.status)).map((i) => i.id);
@@ -98,22 +100,57 @@ export function BacklogColumn({
 
   return (
     <section className="min-w-0" aria-label="待办任务">
-      <header className="mb-3 flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h2 className="flex items-center gap-2 text-body-sm font-medium text-ink">
-            <span className={cn("h-2 w-2 rounded-full", PHASE_DOT[state?.phase ?? "busy"])} />
-            {WORK_PHASE_LABEL[state?.phase ?? "busy"]}
-            <span className="text-caption font-normal text-ash">待办 · {activeCount} 条活跃</span>
+      {/* 栏头两行，与左栏同构同高（行1 标题+总开关、行2 状态+动作），下方列表起点对齐。
+          HEAD 不放控件，窄窗口不撞窗口钮 */}
+      <header className="mb-3">
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="flex min-w-0 items-center gap-2 text-body-sm font-medium text-ink">
+            <span className={cn("h-2 w-2 shrink-0 rounded-full", PHASE_DOT[state?.phase ?? "busy"])} />
+            <span className="truncate">{WORK_PHASE_LABEL[state?.phase ?? "busy"]}</span>
+            <span className="shrink-0 text-caption font-normal text-ash">待办 · {activeCount} 条活跃</span>
           </h2>
-          <p className="mt-0.5 text-caption text-graphite">
+          {/* 总开关：关了空闲不再派发 auto 任务（20s tick 自查生效），手动执行不受影响 */}
+          <label
+            className="flex shrink-0 cursor-pointer items-center gap-1.5 text-caption text-graphite"
+            title="总开关：工作台空闲时是否自动执行勾了「闲时执行」的待办。关闭后不再派发新任务（20 秒内生效）；手动「立即执行」与心跳确认不受影响。"
+          >
+            <Toggle
+              on={autopilotOn}
+              ariaLabel="闲时执行总开关"
+              onChange={(v) => {
+                const cfg = useBacklog.getState().config;
+                if (cfg !== null) void useBacklog.getState().saveConfig({ autopilot: { ...cfg.autopilot, enabled: v } });
+              }}
+            />
+            闲时执行
+          </label>
+        </div>
+        <div className="mt-1 flex items-center justify-between gap-2">
+          <p
+            className="min-w-0 flex-1 truncate text-caption text-graphite"
+            title={
+              `${state?.reason ?? "总状态计算中……"}` +
+              (state?.nextBeatAt != null && state.heartbeatEnabled ? ` · 下次心跳 ${formatBacklogRelative(state.nextBeatAt)}` : "") +
+              (state?.lastBeatOutcome != null ? ` · 上跳：${state.lastBeatOutcome}` : "")
+            }
+          >
             {state?.reason ?? "总状态计算中……"}
             {state?.nextBeatAt != null && state.heartbeatEnabled && ` · 下次心跳 ${formatBacklogRelative(state.nextBeatAt)}`}
             {state?.lastBeatOutcome != null && ` · 上跳：${state.lastBeatOutcome}`}
           </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <HeaderBtn icon={HeartPulse} label={state?.forceBusy ? "解除强制忙碌" : "强制忙碌"} onClick={() => void useBacklog.getState().setForceBusy(!(state?.forceBusy ?? false))} active={state?.forceBusy} />
-          <HeaderBtn icon={Zap} label="跳一跳" onClick={() => void useBacklog.getState().forceBeat()} />
+          <div className="flex shrink-0 items-center gap-1.5">
+            <HeaderBtn icon={Settings2} label="待办设置（心跳与余量）" onClick={() => setSettingsOpen((v) => !v)} active={settingsOpen} />
+            <HeaderBtn icon={HeartPulse} label={state?.forceBusy ? "解除强制忙碌" : "强制忙碌"} onClick={() => void useBacklog.getState().setForceBusy(!(state?.forceBusy ?? false))} active={state?.forceBusy} />
+            <HeaderBtn icon={Zap} label="跳一跳" onClick={() => void useBacklog.getState().forceBeat()} />
+            {/* h-8 与图标钮同高：动作带整行 32px，与左栏行2 对齐 */}
+            <button
+              onClick={() => setDialog({ mode: "create" })}
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-btn bg-ink px-3 text-body-sm text-canvas hover:opacity-90 active:scale-95 transition"
+            >
+              <ListTodo size={12} />
+              新建
+            </button>
+          </div>
         </div>
       </header>
 
@@ -136,7 +173,7 @@ export function BacklogColumn({
       </div>
 
       {visible.length === 0 ? (
-        <EmptyPanel filter={filter} onCreate={onCreate} config={config} />
+        <EmptyPanel filter={filter} onCreate={() => setDialog({ mode: "create" })} config={config} />
       ) : (
         /* 两栏布局下右栏本就半宽 —— 卡片单列排布，原两列网格由合页取代 */
         <div className="flex flex-col gap-3">
@@ -144,7 +181,7 @@ export function BacklogColumn({
             <BacklogCard
               key={item.id}
               item={item}
-              onEdit={() => onEdit(item)}
+              onEdit={() => setDialog({ mode: "edit", item })}
               confirmingDelete={confirmingDelete}
               setConfirmingDelete={setConfirmingDelete}
               onMove={move}
@@ -153,6 +190,11 @@ export function BacklogColumn({
           ))}
         </div>
       )}
+
+      {dialog !== null && (
+        <BacklogDialog key={dialog.mode === "edit" ? dialog.item.id : "new"} initial={dialog.mode === "edit" ? dialog.item : null} onClose={() => setDialog(null)} />
+      )}
+      {settingsOpen && <BacklogSettings onClose={() => setSettingsOpen(false)} />}
     </section>
   );
 }
@@ -278,7 +320,7 @@ function BacklogCard({
               item.auto ? "bg-gain/10 text-gain" : "bg-line-soft text-ash",
               autoCheckable ? "cursor-pointer" : "cursor-not-allowed opacity-70",
             )}
-            title="闲时执行（打勾门）：勾上 = 工作台空闲且余量足够时自动派发，跑完自动验收；取消 = 不再自动执行，只能手动跑或重新勾选。任何编辑保存后会自动取消勾，需重新勾选才会再进闲时队列。总开关在页面头部「闲时执行」。"
+            title="闲时执行（打勾门）：勾上 = 工作台空闲且余量足够时自动派发，跑完自动验收；取消 = 不再自动执行，只能手动跑或重新勾选。任何编辑保存后会自动取消勾，需重新勾选才会再进闲时队列。总开关在本栏头部「闲时执行」。"
           >
             <input
               type="checkbox"
