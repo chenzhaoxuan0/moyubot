@@ -3021,7 +3021,11 @@ registerMethod("inbox.reclassify", (params) => {
 registerMethod("inbox.config.get", () => getInboxConfig(store));
 registerMethod("inbox.config.set", (params) => {
   const p = (params ?? {}) as { patch?: unknown };
+  const before = getInboxConfig(store);
   const config = setInboxConfig(store, p.patch);
+  // 总开关从关到开 → 立刻补排存量待分类条目。不然开着开关攒下的 pending
+  // 要等下一次写入或重启才会被分（schedule 自带 2.5s debounce，无 pending 空转即返）
+  if (!before.autoClassify && config.autoClassify) inboxClassifier.schedule();
   // 配置也是 inbox.list 拉取的一部分：别的窗口不开这一枪，autoClassify 开关 /
   // 分类执行器 / 自定义分类会停在旧值直到下一个不相干信号
   broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);

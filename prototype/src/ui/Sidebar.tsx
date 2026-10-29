@@ -16,7 +16,6 @@ import {
   History,
   ImagePlus,
   Inbox,
-  ListTodo,
   MessageSquare,
   PanelLeftClose,
   Pencil,
@@ -325,12 +324,7 @@ export function Sidebar() {
             <IconNavBtn
               icon={Inbox}
               label="清单"
-              hint="想法 · 目标 · 待办"
-              onClick={() => useShell.getState().setMainView("inbox")}
-            />
-            <IconNavBtn
-              icon={ListTodo}
-              label="待办"
+              hint="左清单 · 右待办"
               onClick={() => useShell.getState().setMainView("backlog")}
             />
             <IconNavBtn

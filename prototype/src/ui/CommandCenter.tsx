@@ -393,6 +393,13 @@ function useCommands(): readonly Command[] {
         run: () => shell().setMainView("automations"),
       },
       {
+        id: "view-worklist",
+        label: "打开清单",
+        hint: "左栏清单 · 右栏待办",
+        group: "视图",
+        run: () => shell().setMainView("backlog"),
+      },
+      {
         id: "view-source-control",
         label: "打开源代码管理",
         hint: "激活单元仓库的分支与工作树",

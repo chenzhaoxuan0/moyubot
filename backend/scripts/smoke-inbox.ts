@@ -10,6 +10,7 @@
  *   → inbox.config.set 自定义分类
  *   → inbox.classify.run 未配执行器 → failed 记账、条目原样
  *   → backlog.create（auto + targetSessionId）→ 待办卡片带闲时自动执行字段
+ *   → 总开关（autoClassify）：关 = 写入不排分类（runSeq 不动）；开 = config.set 补排存量
  *   → inbox.delete → 优雅退出
  *
  * 用法：cd backend && npx tsx scripts/smoke-inbox.ts
@@ -333,18 +334,42 @@ async function main(): Promise<void> {
     const newTask = badCatAfter?.task != null ? items8e.find((i) => i.id === badCatAfter.task!.id) : undefined;
     check("重分类 → 旧任务摘勾、新任务打勾", oldTask !== undefined && oldTask.auto === false && newTask !== undefined && newTask.auto === true && newTask.id !== badCatOldTaskId, { oldTask, newTask });
 
-    // 9. 删条目；配置关掉自动分类
+    // 9. 删条目；配置关掉自动分类（页面头部「自动分类」总开关的落点）
     const del = await rpc(ws, "inbox.delete", { id: hintsEntry!.id });
     check("inbox.delete", del["ok"] === true && (await listEntries(ws)).every((e) => e.id !== hintsEntry!.id));
     const cfgOff = await rpc(ws, "inbox.config.set", { patch: { autoClassify: false } });
     check("autoClassify toggle", ((cfgOff["result"] as { config: { autoClassify: boolean } }).config.autoClassify) === false);
 
-    // 10. 重启 sweep：带着 pending 重启 daemon → 启动 sweep（+5s）把它分掉。
-    // 顺序有讲究：autoClassify 关着时加条目（不进 debounce 队列），再打开
-    // （config 变更本身不触发调度）→ 停机时配置已落库为开 → 新进程的 sweep 生效
-    const sweepEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：重启前遗留的待分类条目" }))["result"] as { entry: EntryShape }).entry;
-    check("重启前条目 pending", sweepEntry?.status === "pending", sweepEntry);
+    // 9b. 总开关关闭即静：写入不被排程 —— 等过 debounce 窗口（2.5s + 余量）
+    // 断言 runSeq 不动、条目停在待分类（写测试不烧 routing 额度的保证）
+    const seqBeforeGate = (await classifierState(ws)).runSeq;
+    const gatedEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：总开关关闭期间写入的条目" }))["result"] as { entry: EntryShape }).entry;
+    await sleep(3500);
+    const gatedState = await classifierState(ws);
+    const gatedList = (await listEntries(ws)).find((e) => e.id === gatedEntry?.id);
+    check("总开关关：不排分类（runSeq 不动、无会话）", gatedState.runSeq === seqBeforeGate && gatedState.classifying === false, gatedState);
+    check("总开关关：条目停在待分类", gatedList?.status === "pending", gatedList);
+
+    // 9c. 总开关打开 → config.set 补排存量待分类（不等下一次写入/重启）
+    const seqBeforeReopen = (await classifierState(ws)).runSeq;
     await rpc(ws, "inbox.config.set", { patch: { autoClassify: true } });
+    const reopenOutcome = await waitForClassifierRun(ws, seqBeforeReopen, 60000);
+    check("总开关开：补排一轮分类", reopenOutcome !== null && reopenOutcome.startsWith("ok:"), reopenOutcome);
+    const reopened = (await listEntries(ws)).find((e) => e.id === gatedEntry?.id);
+    check("总开关开：条目已分类并沉淀任务", reopened?.status === "classified" && reopened.task != null, reopened);
+
+    // 10. 重启 sweep：带着 pending 重启 daemon → 启动 sweep（+5s）把它分掉。
+    // 开关开着时直接写入会被 debounce 立刻分掉 —— 先把分类执行器指到不存在的
+    // id 让自动分类优雅失败（条目保持 pending），再指回 mockrouting 后停机：
+    // 新进程的 sweep 用 mockrouting 把它分掉
+    await rpc(ws, "inbox.config.set", { patch: { classifier: { runtimeId: "nonexistent-exec" } } });
+    const seqBeforeSweepAdd = (await classifierState(ws)).runSeq;
+    const sweepEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：重启前遗留的待分类条目" }))["result"] as { entry: EntryShape }).entry;
+    const preRestartFail = await waitForClassifierRun(ws, seqBeforeSweepAdd);
+    check("重启前：坏执行器分类失败记账", preRestartFail !== null && preRestartFail.startsWith("failed:"), preRestartFail);
+    const sweepPending = (await listEntries(ws)).find((e) => e.id === sweepEntry?.id);
+    check("重启前条目 pending", sweepPending?.status === "pending", sweepPending);
+    await rpc(ws, "inbox.config.set", { patch: { classifier: { runtimeId: "mockrouting" } } });
     const stop1 = await rpc(ws, "daemon.stop", null);
     check("第一次优雅停机", stop1["ok"] === true);
     const exit1 = await Promise.race([

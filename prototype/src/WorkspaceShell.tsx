@@ -3,8 +3,7 @@ import { PanelRightOpen } from "lucide-react";
 import { Group, Panel, Separator, type PanelImperativeHandle } from "react-resizable-panels";
 import { AutomationsPage } from "./ui/AutomationsPage.tsx";
 import { AutomationDialog } from "./ui/AutomationDialog.tsx";
-import { BacklogPage } from "./ui/BacklogPage.tsx";
-import { InboxPage } from "./ui/InboxPage.tsx";
+import { WorklistPage } from "./ui/WorklistPage.tsx";
 import { ProposalBanner } from "./ui/ProposalBanner.tsx";
 import { ImageStudioPage } from "./ui/ImageStudioPage.tsx";
 import { CommandCenter } from "./ui/CommandCenter.tsx";
@@ -307,14 +306,9 @@ function ConversationSlot() {
           <ImageStudioPage />
         </main>
       ) : mainView === "backlog" ? (
-        /* 待办清单（独立主视图） */
-        <main className="h-full min-h-0" aria-label="待办">
-          <BacklogPage />
-        </main>
-      ) : mainView === "inbox" ? (
-        /* 清单（独立主视图）：个人 context 唯一入口 —— 文本框 + routing 分类 */
+        /* 清单（单页两栏）：顶部输入 + 左清单右待办 —— 个人 context 唯一入口 */
         <main className="h-full min-h-0" aria-label="清单">
-          <InboxPage />
+          <WorklistPage />
         </main>
       ) : mainView === "sourceControl" ? (
         /* 源代码管理（独立主视图）：分支 / 工作树 */
