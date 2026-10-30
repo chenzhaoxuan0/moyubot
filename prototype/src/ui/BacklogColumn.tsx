@@ -136,6 +136,13 @@ function startOfToday(): number {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
 }
 
+/** 条目 → 所属分组（分组渲染与跳转定位共用一份映射，别长两棵） */
+function groupOfItem(i: BacklogItem, isTodayDone: (i: BacklogItem) => boolean): GroupId {
+  if (i.status === "done") return isTodayDone(i) ? "today_done" : "older_done";
+  if (i.status === "draft") return "draft";
+  return i.status as Exclude<BacklogStatus, "done" | "draft">;
+}
+
 export function BacklogColumn({ highlightId }: { highlightId: number | null }): ReactElement {
   const items = useBacklog((s) => s.items);
   const state = useBacklog((s) => s.state);
@@ -171,12 +178,6 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dialog, setDialog] = useState<{ mode: "create" } | { mode: "edit"; item: BacklogItem } | null>(null);
 
-  // 左栏「定位任务」/ 通知深链：滚到命中卡片（高亮 ring 由 highlightId 传进卡片渲染）
-  useEffect(() => {
-    if (highlightId === null) return;
-    document.getElementById(`backlog-card-${highlightId}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [highlightId]);
-
   const activeCount = items.filter((i) => i.status !== "done").length;
   const autopilotOn = config?.autopilot.enabled ?? false;
 
@@ -184,14 +185,26 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
   const today0 = startOfToday();
   const isTodayDone = (i: BacklogItem): boolean => i.status === "done" && (i.lastRun?.finishedAt ?? 0) >= today0;
 
+  // 左栏「定位任务」/ 通知深链：滚到命中卡片（高亮 ring 由 highlightId 传进卡片渲染）。
+  // 目标在折叠组里时先展开它 —— 否则卡片不在 DOM，跳转静默落空（不滚不亮无反馈）。
+  // 展开是导航动作不落盘（布局偏好归用户）；deps 带 collapsed：展开触发的重渲后
+  // 这里再跑一拍，那时卡片才真正进 DOM，scrollIntoView 才有得滚
+  useEffect(() => {
+    if (highlightId === null) return;
+    const target = items.find((i) => i.id === highlightId);
+    if (target !== undefined) {
+      const gid = groupOfItem(target, isTodayDone);
+      if (groupPrefs.collapsed[gid] ?? true) {
+        setGroupPrefs((p) => (p.collapsed[gid] ? { order: p.order, collapsed: { ...p.collapsed, [gid]: false } } : p));
+      }
+    }
+    document.getElementById(`backlog-card-${highlightId}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [highlightId, groupPrefs.collapsed, items]);
+
   const groups = useMemo(() => {
     const byGroup = new Map<GroupId, BacklogItem[]>();
     for (const g of DEFAULT_GROUP_ORDER) byGroup.set(g, []);
-    for (const i of items) {
-      if (i.status === "done") byGroup.get(isTodayDone(i) ? "today_done" : "older_done")!.push(i);
-      else if (i.status === "draft") byGroup.get("draft")!.push(i);
-      else byGroup.get(i.status as Exclude<BacklogStatus, "done" | "draft">)!.push(i);
-    }
+    for (const i of items) byGroup.get(groupOfItem(i, isTodayDone))!.push(i);
     return byGroup;
     // isTodayDone 依赖 today0（挂载日的零点）——跨天停留页面时显式刷新分组
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -311,8 +324,8 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
                     下一条
                   </span>
                 )}
-                {/* 顺序自定义：悬停浮现的上移/下移（到头禁用） */}
-                <span className="ml-auto flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+                {/* 顺序自定义：悬停/聚焦浮现的上移/下移（到头禁用） */}
+                <span className="ml-auto flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100 focus-within:opacity-100">
                   <button
                     onClick={() => moveGroup(gid, -1)}
                     disabled={gi === 0}
