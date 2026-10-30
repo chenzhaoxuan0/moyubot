@@ -155,6 +155,7 @@ interface EntryShape {
   task: { id: number } | null;
   urgent: boolean;
   urgencyHint: string | null;
+  provenance: "typed" | "pasted" | null;
 }
 
 async function listEntries(ws: WebSocket): Promise<EntryShape[]> {
@@ -301,6 +302,7 @@ async function main(): Promise<void> {
     const plainEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：普通待办条目" }))["result"] as { entry: EntryShape }).entry;
     const hintedEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：带预置字段的条目", hints: { unitId: "steward", runtimeId: "mockperm" } }))["result"] as { entry: EntryShape }).entry;
     const urgentEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：紧急条目今天要交" }))["result"] as { entry: EntryShape }).entry;
+    const pastedEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：粘贴进来的外部文本", provenance: "pasted" }))["result"] as { entry: EntryShape }).entry;
     const okOutcome = await waitForClassifierRun(ws, seqBeforeBatch, 60000);
     check("mockrouting 分类成功记账", okOutcome !== null && okOutcome.startsWith("ok:"), okOutcome);
     const entries8c = await listEntries(ws);
@@ -328,6 +330,13 @@ async function main(): Promise<void> {
     await rpc(ws, "inbox.update", { id: urgentEntry!.id, urgent: false });
     const urgentAfter = (await listEntries(ws)).find((e) => e.id === urgentEntry!.id);
     check("忽略警告：urgent 灭、任务不动", urgentAfter?.urgent === false && urgentAfter.task?.id === urgent8c?.task?.id, urgentAfter);
+
+    // 8c-3. 来源分级（docs/30）：粘贴的外部文本 → 沉淀任务不默认打勾（提示注入
+    // 落点需人工确认）；键入的 typed 默认托付（上面 plainItem8c 已验 auto=true）
+    const pasted8c = entryById(pastedEntry?.id);
+    check("粘贴条目标 provenance=pasted", pasted8c?.provenance === "pasted", pasted8c);
+    const pastedItem8c = taskOf(pasted8c);
+    check("粘贴沉淀任务不默认打勾（auto=false）", pastedItem8c !== undefined && pastedItem8c.auto === false && pastedItem8c.source === "inbox", pastedItem8c);
 
     // 8d. 清单侧撤销降级（真实链接，替代夹具）：删条目 → 链着的干净任务摘勾
     const delLinked = await rpc(ws, "inbox.delete", { id: plainEntry!.id });

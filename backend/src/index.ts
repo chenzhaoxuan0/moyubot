@@ -3053,15 +3053,20 @@ registerMethod("inbox.add", (params) => {
     hints?: unknown;
     /** 可选「提醒时间」（epoch ms）：给了就同时挂一条链接本条目的提醒（docs/30） */
     reminderAt?: number | null;
+    /** 来源分级（docs/30）：typed = 键入（默认可信）；pasted = 粘贴的外部文本（沉淀任务需人工打勾） */
+    provenance?: "typed" | "pasted" | null;
   };
   if (typeof p.text !== "string" || p.text.trim() === "") throw badBacklog("text is required");
   // 清单是自由文本入口，但原话会变成分类 prompt 与任务 goal —— 钳住上限
   if (p.text.length > 8000) throw badBacklog("text 超过 8000 字符上限 —— 长内容请拆成多条或直接给到 bot 会话");
+  if (p.provenance !== undefined && p.provenance !== null && p.provenance !== "typed" && p.provenance !== "pasted") {
+    throw badBacklog("provenance 只能是 typed 或 pasted");
+  }
   const cfg = getInboxConfig(store);
   const hints = normalizeInboxHints(p.hints);
   // category 直接给了就不进分类队列（用户自己分好了）
   const category = typeof p.category === "string" && p.category.trim() !== "" ? p.category.trim() : null;
-  const id = store.createInboxEntry({ text: p.text.trim(), category, hints });
+  const id = store.createInboxEntry({ text: p.text.trim(), category, hints, provenance: p.provenance ?? null });
   if (category === null && cfg.autoClassify) inboxClassifier.schedule();
   // 提醒是独立的一次性钟控行，不依赖分类完成 —— 到点它提醒的是这条原话
   if (typeof p.reminderAt === "number" && Number.isFinite(p.reminderAt)) {

@@ -240,9 +240,11 @@ export class InboxClassifier {
           runtimeId,
           model: hints?.model !== undefined ? hints.model : task.model,
           launchMode: hints?.launchMode ?? "headless",
-          // 紧急条目不进闲时队列：闲时执行构造性来不及，auto 任务跑完还会自动
-          // 验收 —— 迟到的执行 + 无人看见，是这条链路最坏的组合
-          auto: !urgent,
+          // 打勾门的来源分级（docs/30）：紧急条目不进闲时队列（闲时执行构造性
+          // 来不及，迟到的执行 + autoReview 无人看见是最坏组合）；粘贴的外部
+          // 文本是间接提示注入的最大落点 —— 必须人工打勾才进无人值守队列。
+          // 用户亲手键入的（typed）才默认托付。
+          auto: !urgent && entry.provenance !== "pasted",
           // targetSessionId 只认用户亲手预置的 hints —— routing 的输出不收这个字段
           // （间接提示注入可以把任意已有会话 id 塞进来，把任务 prompt 灌进别人的对话）
           targetSessionId: hints?.targetSessionId ?? null,

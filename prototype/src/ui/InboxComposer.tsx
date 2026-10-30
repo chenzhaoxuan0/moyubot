@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactElement } from "react";
+import { useMemo, useRef, useState, type ReactElement } from "react";
 import { ChevronDown, Inbox as InboxIcon, Loader2 } from "lucide-react";
 import type { InboxHints } from "../core/inbox.ts";
 import { useInbox } from "../store/useInbox.ts";
@@ -9,6 +9,10 @@ import { cn } from "./cn.ts";
 /**
  * 清单输入框 —— 个人 context 的唯一捕获入口，合页后仍在页面顶部。
  * Enter 收进清单（Shift+Enter 换行）；「可选项」预置 routing 必须尊重的字段。
+ *
+ * 来源分级（docs/30）：本条草稿粘贴过（onPaste）就按 pasted 提交 —— 粘贴的
+ * 外部文本是间接提示注入的落点，沉淀任务不默认打勾，需人工确认。粘过之后
+ * 再手改也保持 pasted（保守方向：宁可多一道勾，不给注入放行）。
  */
 
 export function InboxComposer(): ReactElement {
@@ -22,6 +26,7 @@ export function InboxComposer(): ReactElement {
   const [hints, setHints] = useState<InboxHints>({});
   const [reminderAt, setReminderAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const pastedRef = useRef(false);
 
   const runtimeIds = useMemo(() => runtimes.map((r) => r.id.replace(/^daemon:/, "")), [runtimes]);
   const hintsFilled = Object.values(hints).some((v) => v !== undefined && v !== null && v !== "");
@@ -32,14 +37,16 @@ export function InboxComposer(): ReactElement {
     // datetime-local 字符串 → epoch ms；空串 = 不挂提醒。过去时刻交 daemon 拒
     // （resolveSchedule 对 runAt 过期直接报错，不静默顺延）
     const reminderMs = reminderAt.trim() === "" ? undefined : new Date(reminderAt).getTime();
+    const provenance = pastedRef.current ? "pasted" : "typed";
     // daemon 往返期间再按 Enter / 点按钮会重复提交同一段文字 —— 占位挡住
     setSubmitting(true);
-    void add({ text: t, hints: hintsFilled ? hints : undefined, ...(Number.isFinite(reminderMs) ? { reminderAt: reminderMs as number } : {}) })
+    void add({ text: t, hints: hintsFilled ? hints : undefined, provenance, ...(Number.isFinite(reminderMs) ? { reminderAt: reminderMs as number } : {}) })
       .then((ok) => {
         if (ok) {
           setText("");
           setHints({});
           setReminderAt("");
+          pastedRef.current = false;
         }
       })
       .finally(() => setSubmitting(false));
@@ -50,6 +57,9 @@ export function InboxComposer(): ReactElement {
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
+        onPaste={() => {
+          pastedRef.current = true;
+        }}
         onKeyDown={(e) => {
           // Enter 直接收进清单（Shift+Enter 换行）；IME 组合中（拼音候选）不拦截
           if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -71,6 +81,14 @@ export function InboxComposer(): ReactElement {
           <ChevronDown size={12} className={cn("transition-transform", advanced && "rotate-180")} />
         </button>
         {hintsFilled && <span className="rounded-chip bg-teal-tint px-1.5 py-0.5 text-[10px] text-teal">已预置 {Object.keys(hints).length} 项</span>}
+        {pastedRef.current && text !== "" && (
+          <span
+            className="rounded-chip bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-600"
+            title="本条含粘贴内容 —— 沉淀的任务不会自动进闲时执行，需在右栏人工打勾（粘贴的外部文本是提示注入的落点）"
+          >
+            含粘贴 · 需打勾
+          </span>
+        )}
         <span className="ml-auto text-caption text-ash">Enter 收进清单 · Shift+Enter 换行</span>
         <button
           onClick={submit}

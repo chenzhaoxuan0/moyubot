@@ -366,6 +366,9 @@ export class Store {
       // urgency_hint 存时间线索原话（挂提醒的预填依据）
       `ALTER TABLE inbox_entries ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0`,
       `ALTER TABLE inbox_entries ADD COLUMN urgency_hint TEXT`,
+      // 来源分级（docs/30）：typed = 键入（默认可信），pasted = 粘贴的外部文本
+      // （间接提示注入的落点，沉淀任务必须人工打勾）
+      `ALTER TABLE inbox_entries ADD COLUMN provenance TEXT`,
     ]) {
       try {
         this.db.exec(stmt);
@@ -1173,6 +1176,7 @@ export class Store {
             null,
       urgent: Number(r["urgent"] ?? 0) === 1,
       urgencyHint: r["urgency_hint"] === null || r["urgency_hint"] === undefined ? null : String(r["urgency_hint"]),
+      provenance: r["provenance"] === "typed" || r["provenance"] === "pasted" ? r["provenance"] : null,
       status: (["pending", "classified", "failed"].includes(String(r["status"])) ? String(r["status"]) : "pending") as InboxStatus,
       createdAt: Number(r["created_at"]),
       classifiedAt: nOrNull(r["classified_at"]),
@@ -1180,18 +1184,19 @@ export class Store {
     };
   }
 
-  createInboxEntry(a: { text: string; category?: string | null; hints?: InboxHints | null; status?: InboxStatus }): number {
+  createInboxEntry(a: { text: string; category?: string | null; hints?: InboxHints | null; status?: InboxStatus; provenance?: "typed" | "pasted" | null }): number {
     const now = Date.now();
     const result = this.db
       .prepare(
-        `INSERT INTO inbox_entries (text, category, hints_json, status, created_at, classified_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO inbox_entries (text, category, hints_json, status, provenance, created_at, classified_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         a.text,
         a.category ?? null,
         a.hints === null || a.hints === undefined ? null : JSON.stringify(a.hints),
         a.status ?? (a.category !== undefined && a.category !== null ? "classified" : "pending"),
+        a.provenance ?? null,
         now,
         a.category !== undefined && a.category !== null ? now : null,
         now,

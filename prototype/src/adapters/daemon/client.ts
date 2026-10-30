@@ -2131,7 +2131,7 @@ export async function fetchInbox(endpoint: string = defaultDaemonEndpoint()): Pr
 }
 
 export async function addInboxEntry(
-  input: { text: string; category?: string | null; hints?: InboxHints; reminderAt?: number },
+  input: { text: string; category?: string | null; hints?: InboxHints; reminderAt?: number; provenance?: "typed" | "pasted" },
   endpoint: string = defaultDaemonEndpoint(),
 ): Promise<{ id: number; entry: InboxEntry | null }> {
   const client = DaemonClient.get(endpoint);

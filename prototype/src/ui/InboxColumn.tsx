@@ -291,6 +291,14 @@ function EntryRow({
             </button>
           )}
           {entry.hints !== null && <span className="font-mono text-[10px]" title={JSON.stringify(entry.hints)}>预置字段</span>}
+          {entry.provenance === "pasted" && (
+            <span
+              className="rounded-chip bg-amber-500/10 px-1.5 py-px text-[10px] text-amber-600"
+              title="粘贴的外部文本 —— 沉淀任务不默认进闲时执行，需在右栏人工打勾（提示注入的落点）"
+            >
+              粘贴 · 需打勾
+            </span>
+          )}
           <span>{formatBacklogRelative(entry.createdAt)}</span>
         </div>
         {/* 紧急检测（docs/30）：routing 嗅到时间压力 → 三出口（现在就跑 / 挂提醒 / 忽略）。

@@ -100,6 +100,9 @@ export interface InboxEntry {
   readonly urgent: boolean;
   /** 时间线索原话（urgent 时的展示/挂提醒预填依据），null = 无 */
   readonly urgencyHint: string | null;
+  /** 来源分级（docs/30）：typed = 用户键入（默认可信，沉淀任务自动打勾）；
+   *  pasted = 粘贴进来的外部文本（间接提示注入的落点，必须人工打勾才进闲时队列） */
+  readonly provenance: "typed" | "pasted" | null;
   readonly status: InboxStatus;
   readonly createdAt: number;
   readonly classifiedAt: number | null;
