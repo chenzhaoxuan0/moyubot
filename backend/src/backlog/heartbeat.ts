@@ -61,6 +61,8 @@ export interface BacklogEngineDeps {
   readonly homeDir: string;
   readonly getConfig: () => BacklogConfig;
   readonly broadcast: (signal: BacklogSignal) => void;
+  /** 清单信号（统合落壳条目后广播 entries——时间轴要看到；未注入=退化静默，仅测试用） */
+  readonly broadcastInbox?: (signal: unknown) => void;
   /** 出站通知（飞书）；未配置时是 no-op，实现方负责吞错 */
   readonly notify: (text: string) => Promise<void>;
   /** 收件箱统合要的 root → unit 映射 */
@@ -1072,6 +1074,8 @@ export class BacklogEngine {
     });
     if (r.created > 0 || r.duplicates > 0) {
       this.deps.broadcast({ kind: "items" });
+      // 统合现在也落壳条目（任务必有源）：时间轴侧重拉才能看到新块
+      this.deps.broadcastInbox?.({ kind: "entries" });
       this.deps.broadcast({
         kind: "notice",
         level: r.created > 0 ? "success" : "info",

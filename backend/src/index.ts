@@ -1446,6 +1446,10 @@ backlogEngine = new BacklogEngine({
     notifications.recordBacklogSignal(signal);
     broadcastBacklog(wss, signal);
   },
+  // 统合落壳条目后给清单侧的信号（时间轴重拉；types 松散是引擎侧可选注入的代价）
+  broadcastInbox: (signal: unknown) => {
+    broadcastInbox(wss, signal as InboxSignal);
+  },
   // 待办 launchMode=terminal 的 TUI 派发（与自动化共用 launchExecutorTerminal）
   launchTerminal: (o) => launchExecutorTerminal(o),
   // 待办 launchMode=chat 的前台拉起（与自动化共用 broadcastForeground）
@@ -2847,22 +2851,38 @@ registerMethod("backlog.create", (params) => {
   }
   const goal = p.goal.trim();
   const title = typeof p.title === "string" && p.title.trim() !== "" ? p.title.trim() : goal.split(/\r?\n/)[0]!.slice(0, 40);
-  const id = store.createBacklogItem({
-    title,
-    goal,
-    prompt: typeof p.prompt === "string" && p.prompt.trim() !== "" ? p.prompt.trim() : draftPromptOf(goal),
-    unitId: p.unitId,
-    unitName: typeof p.unitName === "string" ? p.unitName : p.unitId,
-    rootPath: p.rootPath,
-    runtimeId: typeof p.runtimeId === "string" ? p.runtimeId : "",
-    model: typeof p.model === "string" && p.model !== "" ? p.model : null,
-    mode: typeof p.mode === "string" && p.mode !== "" ? p.mode : null,
-    size: p.size === "big" || p.size === "small" ? p.size : null,
-    launchMode: p.launchMode === "headless" || p.launchMode === "chat" ? p.launchMode : "terminal",
-    auto: p.auto === true,
-    targetSessionId: typeof p.targetSessionId === "string" && p.targetSessionId.trim() !== "" ? p.targetSessionId.trim() : null,
-    source: "manual",
+  // 校验后的字段提为常量：transaction 回调里 TS 不保留属性的窄化
+  const { unitId, rootPath } = p;
+  // 任务必有源（docs/30 单列时间轴）：手动新建也生成壳条目——时间轴上每个任务
+  // 都挂在事件块下。任务 + 壳 + 链接同生共死（classifier 同款原子模式）；
+  // provenance=typed（用户亲手建的，勾 auto 无需再人工确认，与来源分级一致）
+  const id = store.transaction(() => {
+    const taskId = store.createBacklogItem({
+      title,
+      goal,
+      prompt: typeof p.prompt === "string" && p.prompt.trim() !== "" ? p.prompt.trim() : draftPromptOf(goal),
+      unitId,
+      unitName: typeof p.unitName === "string" ? p.unitName : unitId,
+      rootPath,
+      runtimeId: typeof p.runtimeId === "string" ? p.runtimeId : "",
+      model: typeof p.model === "string" && p.model !== "" ? p.model : null,
+      mode: typeof p.mode === "string" && p.mode !== "" ? p.mode : null,
+      size: p.size === "big" || p.size === "small" ? p.size : null,
+      launchMode: p.launchMode === "headless" || p.launchMode === "chat" ? p.launchMode : "terminal",
+      auto: p.auto === true,
+      targetSessionId: typeof p.targetSessionId === "string" && p.targetSessionId.trim() !== "" ? p.targetSessionId.trim() : null,
+      source: "manual",
+    });
+    const shellId = store.createInboxEntry({
+      text: goal.slice(0, 8000),
+      category: "todo",
+      status: "classified",
+      provenance: "typed",
+    });
+    store.updateInboxEntry(shellId, { taskId });
+    return taskId;
   });
+  broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
   const item = store.getBacklogItem(id);
   return { id, item: item === undefined ? null : requireEngine().toItem(item) };
 });
@@ -3154,14 +3174,16 @@ registerMethod("inbox.update", (params) => {
 });
 
 /** 清单侧撤销（删除条目 / 改分类 / 重分类）时，把链接任务摘掉托管旗（auto=false）。
- * 只动「清单来源 + 就绪 + auto」的干净任务 —— 从未被人工在待办页碰过、从未跑过；
- * 摘掉后只能手动执行或重新打勾，autopilot 不再无人值守执行被用户撤销的东西。
+ * 只动「就绪 + auto」的干净任务 —— 从未被人工碰过、从未跑过；摘掉后只能手动
+ * 执行或重新打勾，autopilot 不再无人值守执行被用户撤销的东西。
+ * 有链接即有壳（任务必有源，docs/30）：分类沉淀 / 手动新建的壳 / GTD 统合的壳
+ * 一视同仁——不再按 source 区分，删壳=撤销，manual 任务同样摘勾。
  * 任务本体不动（用户编辑过/已跑过的照旧），这是删除清单条目不级联删任务的边界。 */
 function demoteLinkedInboxTask(entry: InboxEntry): void {
   const linkedTaskId = entry.task?.id;
   if (typeof linkedTaskId !== "number") return;
   const linked = store.getBacklogItem(linkedTaskId);
-  if (linked === undefined || linked.status !== "ready" || !linked.auto || linked.source !== "inbox") return;
+  if (linked === undefined || linked.status !== "ready" || !linked.auto) return;
   store.updateBacklogItem(linkedTaskId, { auto: false });
   broadcastBacklog(wss, { kind: "items" });
 }

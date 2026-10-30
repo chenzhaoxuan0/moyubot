@@ -282,6 +282,11 @@ async function main(): Promise<void> {
     check("backlog.create auto=true", createdItem.auto === true, createdItem);
     check("backlog.create targetSessionId", createdItem.targetSessionId === "sess-xyz", createdItem);
 
+    // 8a-2. 任务必有源（单列时间轴，docs/30）：手动新建也生成壳条目——
+    // 链接回任务、classified、typed（用户亲手建默认可信）
+    const shell = (await listEntries(ws)).find((e) => e.task?.id === createdItem!.id);
+    check("手动新建生成壳条目", shell !== undefined && shell.status === "classified" && shell.category === "todo" && shell.provenance === "typed", shell);
+
     // 8b. 打勾门：实质编辑即灭勾；仅勾选/原值编辑不灭
     const edited = await rpc(ws, "backlog.update", { id: createdItem!.id, goal: "冒烟：改过目标的待办" });
     const editedItem = (edited["result"] as { item: { auto: boolean; goal: string } }).item;

@@ -107,14 +107,21 @@ async function consolidateRoot(
       collected.push({ entry: e, id: -1 }); // 重复的也勾掉，并标「重复」—— 否则每轮统合都再报一次
       continue;
     }
-    const id = store.createBacklogItem({
-      title: e.goal.split(/\r?\n/)[0]!.slice(0, 40),
-      goal: e.goal,
-      prompt: draftPromptOf(e.goal),
-      unitId: unit.unitId,
-      unitName: unit.unitName,
-      rootPath,
-      source: "inbox",
+    // 任务必有源（docs/30 单列时间轴）：收录也生成壳条目——时间轴上留下
+    // 「今天从 GTD.md 收了什么」的痕迹，任务挂在壳下。任务+壳+链接同生共死。
+    const id = store.transaction(() => {
+      const taskId = store.createBacklogItem({
+        title: e.goal.split(/\r?\n/)[0]!.slice(0, 40),
+        goal: e.goal,
+        prompt: draftPromptOf(e.goal),
+        unitId: unit.unitId,
+        unitName: unit.unitName,
+        rootPath,
+        source: "inbox",
+      });
+      const shellId = store.createInboxEntry({ text: e.goal.slice(0, 8000), category: "todo", status: "classified" });
+      store.updateInboxEntry(shellId, { taskId });
+      return taskId;
     });
     activeGoals.add(norm);
     created++;

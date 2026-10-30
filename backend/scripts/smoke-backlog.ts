@@ -244,6 +244,10 @@ async function main(): Promise<void> {
     check("consolidate creates inbox item", consResult.created === 1, consResult);
     const inboxItem = (await listItems(ws)).find((i) => i.title.includes("收件箱"));
     check("inbox item is ready", inboxItem?.status === "ready", inboxItem);
+    // 统合壳条目（任务必有源，docs/30）：时间轴上收录也有事件块
+    const consEntries = (await rpc(ws, "inbox.list", null))["result"] as { entries: Array<{ task?: { id: number } | null; status: string; category: string | null }> };
+    const consShell = consEntries.entries.find((e) => e.task?.id === inboxItem?.id);
+    check("consolidate creates shell entry", consShell !== undefined && consShell.status === "classified" && consShell.category === "todo", consShell);
     const afterFile = readFileSync(path.join(homeDir, "steward", "GTD.md"), "utf8");
     check("inbox file marks collected id", afterFile.includes(`已收录 #${inboxItem?.id}`), afterFile);
     // 再统合一次：已收录行不会再导入
