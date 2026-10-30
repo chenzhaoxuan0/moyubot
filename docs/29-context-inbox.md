@@ -83,9 +83,14 @@ inbox_entries（清单，state.db）          ←—— UI 按分类分块展示
 - **左栏 = 清单**：按分类分块（目标 / 待办 / 想法 / 资料 / 以后再说 / 自定义），
   待分类置顶；行内点击编辑原话、点分类 chip 改分类、routing 理由、任务链接
   （实时状态，点击滚动定位到右栏对应卡片并高亮）、重新分类 / 删除
-- **右栏 = 待办**：WorkPhase 状态行、过滤 chips、
-  任务卡片（「闲时执行」打勾门徽章与指定会话标记，单列排布）；新建/编辑
-  弹窗带 auto 与指定会话两个可选项
+- **右栏 = 待办（推进面板，2026-10-30 升级）**：过滤 chips 改为**状态分组**
+  （执行中 / 待验收 / 待确认 / 排队 / 休眠 / 草稿 / 今日完成 / 更早完成，
+  空组隐藏、后三组默认收起）；排队组队列头亮「下一条」徽章 + **前置条件行**
+  （当前判定：总开关/退避/强制忙碌/心跳让路/余量地板+重置时刻——余量轴只给
+  可验证条件，不给假 ETA）；卡片带「跑过 N 次」与运行历史展开（trigger 来源
+  闲时/手动/心跳）；栏头行1 并入今日完成计数、行2 并入**定时带**（钟控轴
+  下次发火确切时刻，双轴对照）；跳转经全局 `useTaskJump` 信箱（通知深链共用）。
+  新建/编辑弹窗带 auto 与指定会话两个可选项
 - **设置弹窗 ×2**：清单设置（分类执行器/模型、自定义分类可标「沉淀任务」；
   自动分类开关已提升到左栏栏头）；待办设置（心跳 / 余量 / 统合 / 飞书 +
   autopilot 参数；autopilot 启用开关已提升到右栏栏头）
@@ -94,14 +99,20 @@ inbox_entries（清单，state.db）          ←—— UI 按分类分块展示
 
 `inbox.add / inbox.list / inbox.update / inbox.delete / inbox.classify.run /
 inbox.reclassify / inbox.config.get / inbox.config.set`；
-`backlog.create / backlog.update` 增 `auto`、`targetSessionId`。
+`backlog.create / backlog.update` 增 `auto`、`targetSessionId`；
+`backlog.runs`（单条运行历史）。提醒 / 紧急检测 / 来源分级 / 主管日报的
+落点见 docs/30（`reminder.create`、urgent 字段、provenance 参数、
+`supervisor.*`）。
 
 ## 冒烟
 
 `pnpm -C backend smoke:inbox` —— routing bot 注册、写条目 → pending、信号帧、
 优雅失败（分类器指到不存在的执行器）、手动改分类、预置字段、自定义分类、
-backlog auto/targetSessionId、删除。**冒烟把分类执行器指到不存在的 id**：
+backlog auto/targetSessionId、删除、紧急检测（urgent 警告 / 任务不勾 / 忽略）、
+来源分级（pasted 不勾）。**冒烟把分类执行器指到不存在的 id**：
 routing bot 默认绑定 zcode，不这样做冒烟会真的拉起 zcode 会话烧额度。
+提醒闭环与主管日报的冒烟/检查见 docs/30（smoke:reminder / check:reminder-catchup /
+check:supervisor）。
 
 ## 信任模型（必须知道的事）
 
@@ -122,6 +133,14 @@ routing bot 默认绑定 zcode，不这样做冒烟会真的拉起 zcode 会话�
 时自动派发；**任何编辑保存后勾自动取消**，需重新打勾才会再进闲时队列；验收打回、
 清单侧撤销（删除条目 / 改分类 / 重分类）同样摘勾。取消勾的任务默认完全静默
 （心跳提议开关 `heartbeat.proposeNonAuto` 默认关），只能手动执行或重新勾选。
+
+**勾的默认值按「紧急 × 来源」分级（2026-10-30，docs/30）**：
+`auto = !urgent && provenance !== "pasted"` ——
+- **紧急条目**（routing 嗅到时间压力给 `urgent:true`）：闲时执行构造性来不及，
+  沉淀任务不默认勾，条目亮警告 + 三出口（现在就跑 / 挂提醒 / 忽略）；
+- **粘贴条目**（`provenance:"pasted"`，输入框 onPaste 检测、粘后再改仍算）：
+  外部文本是间接提示注入的最大落点，必须人工打勾才进无人值守队列；
+- **键入条目**（typed）：用户亲笔，默认托付（原行为）。
 
 仍是事实的事：**打勾任务的 prompt 会被原样执行**。给完全无人值守的自主执行留的
 总闸是两栏栏头的开关（**闲时执行** = autopilot，**自动分类** = autoClassify）
