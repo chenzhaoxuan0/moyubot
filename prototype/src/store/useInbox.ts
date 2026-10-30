@@ -33,6 +33,8 @@ interface InboxState {
   add: (input: { text: string; category?: string | null; hints?: import("../core/inbox.ts").InboxHints; reminderAt?: number }) => Promise<boolean>;
   updateText: (id: number, text: string) => Promise<boolean>;
   setCategory: (id: number, category: string | null) => Promise<boolean>;
+  /** 忽略紧急警告（只灭警告，任务与分类不动） */
+  dismissUrgent: (id: number) => Promise<boolean>;
   remove: (id: number) => Promise<void>;
   classifyNow: () => Promise<void>;
   reclassify: (id: number) => Promise<void>;
@@ -101,6 +103,18 @@ export const useInbox = create<InboxState>((set, get) => ({
       return true;
     } catch (err: unknown) {
       set({ notice: { kind: "error", text: `改分类失败：${err instanceof Error ? err.message : String(err)}` } });
+      return false;
+    }
+  },
+
+  /** 紧急警告的「忽略」：用户比 routing 懂轻重，只灭警告不动任务与分类 */
+  dismissUrgent: async (id) => {
+    try {
+      await updateInboxEntry(id, { urgent: false }, defaultDaemonEndpoint());
+      await get().refresh();
+      return true;
+    } catch (err: unknown) {
+      set({ notice: { kind: "error", text: `操作失败：${err instanceof Error ? err.message : String(err)}` } });
       return false;
     }
   },

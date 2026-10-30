@@ -2109,7 +2109,7 @@ export async function addInboxEntry(
 
 export async function updateInboxEntry(
   id: number,
-  patch: { text?: string; category?: string | null; hints?: InboxHints | null },
+  patch: { text?: string; category?: string | null; hints?: InboxHints | null; urgent?: boolean },
   endpoint: string = defaultDaemonEndpoint(),
 ): Promise<{ entry: InboxEntry | null }> {
   const client = DaemonClient.get(endpoint);

@@ -153,6 +153,8 @@ interface EntryShape {
   status: string;
   hints: Record<string, unknown> | null;
   task: { id: number } | null;
+  urgent: boolean;
+  urgencyHint: string | null;
 }
 
 async function listEntries(ws: WebSocket): Promise<EntryShape[]> {
@@ -298,6 +300,7 @@ async function main(): Promise<void> {
     const badBotEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：坏bot条目的目标" }))["result"] as { entry: EntryShape }).entry;
     const plainEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：普通待办条目" }))["result"] as { entry: EntryShape }).entry;
     const hintedEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：带预置字段的条目", hints: { unitId: "steward", runtimeId: "mockperm" } }))["result"] as { entry: EntryShape }).entry;
+    const urgentEntry = ((await rpc(ws, "inbox.add", { text: "冒烟：紧急条目今天要交" }))["result"] as { entry: EntryShape }).entry;
     const okOutcome = await waitForClassifierRun(ws, seqBeforeBatch, 60000);
     check("mockrouting 分类成功记账", okOutcome !== null && okOutcome.startsWith("ok:"), okOutcome);
     const entries8c = await listEntries(ws);
@@ -314,6 +317,17 @@ async function main(): Promise<void> {
     check("普通条目沉淀 auto 任务（source=inbox 默认打勾）", plainItem8c !== undefined && plainItem8c.auto === true && plainItem8c.source === "inbox" && plainItem8c.goal.startsWith("目标："), plainItem8c);
     const hintedItem8c = taskOf(entryById(hintedEntry?.id));
     check("预置字段优先（unitId/runtimeId 照 hints）", hintedItem8c !== undefined && hintedItem8c.unitId === "steward" && hintedItem8c.runtimeId === "mockperm", hintedItem8c);
+
+    // 8c-2. 紧急检测（docs/30）：mockrouting 对含「紧急」的条目给 urgent:true ——
+    // 条目亮警告（urgent + urgencyHint），沉淀任务不进闲时队列（auto=false）；
+    // 「忽略」只灭警告不动任务
+    const urgent8c = entryById(urgentEntry?.id);
+    check("紧急条目亮警告（urgent + urgencyHint）", urgent8c?.urgent === true && (urgent8c.urgencyHint ?? "") !== "", urgent8c);
+    const urgentItem8c = taskOf(urgent8c);
+    check("紧急任务不进闲时队列（auto=false）", urgentItem8c !== undefined && urgentItem8c.auto === false && urgentItem8c.source === "inbox", urgentItem8c);
+    await rpc(ws, "inbox.update", { id: urgentEntry!.id, urgent: false });
+    const urgentAfter = (await listEntries(ws)).find((e) => e.id === urgentEntry!.id);
+    check("忽略警告：urgent 灭、任务不动", urgentAfter?.urgent === false && urgentAfter.task?.id === urgent8c?.task?.id, urgentAfter);
 
     // 8d. 清单侧撤销降级（真实链接，替代夹具）：删条目 → 链着的干净任务摘勾
     const delLinked = await rpc(ws, "inbox.delete", { id: plainEntry!.id });

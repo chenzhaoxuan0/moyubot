@@ -197,6 +197,7 @@ function EntryRow({
 }): ReactElement {
   const updateText = useInbox((s) => s.updateText);
   const setCategory = useInbox((s) => s.setCategory);
+  const dismissUrgent = useInbox((s) => s.dismissUrgent);
   const reclassify = useInbox((s) => s.reclassify);
   const remove = useInbox((s) => s.remove);
   const config = useInbox((s) => s.config);
@@ -292,6 +293,43 @@ function EntryRow({
           {entry.hints !== null && <span className="font-mono text-[10px]" title={JSON.stringify(entry.hints)}>预置字段</span>}
           <span>{formatBacklogRelative(entry.createdAt)}</span>
         </div>
+        {/* 紧急检测（docs/30）：routing 嗅到时间压力 → 三出口（现在就跑 / 挂提醒 / 忽略）。
+            紧急任务不进闲时队列（构造性来不及），这里就是把「用错了象限」拦下来交给人 */}
+        {entry.urgent && (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1.5 rounded-btn bg-amber-500/10 px-2 py-1.5 text-caption">
+            <span className="flex shrink-0 items-center gap-1 font-medium text-amber-600">
+              <BellRing size={11} />
+              紧急{entry.urgencyHint !== null && entry.urgencyHint !== "" ? ` · ${entry.urgencyHint}` : ""}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-amber-600/80" title="闲时执行构造性来不及——三选一：现在就跑（右栏任务卡）、挂提醒、或忽略这条警告">
+              闲时执行来不及
+            </span>
+            {taskItem !== null && taskItem.status === "ready" && (
+              <button
+                onClick={() => void useBacklog.getState().runNow(taskItem.id)}
+                className="shrink-0 rounded-btn bg-amber-500/20 px-1.5 py-0.5 font-medium text-amber-700 hover:bg-amber-500/30"
+              >
+                现在就跑
+              </button>
+            )}
+            <button
+              onClick={() => {
+                setMenuOpen(true);
+                setReminderOpen(true);
+              }}
+              className="shrink-0 rounded-btn bg-amber-500/20 px-1.5 py-0.5 font-medium text-amber-700 hover:bg-amber-500/30"
+            >
+              挂提醒
+            </button>
+            <button
+              onClick={() => void dismissUrgent(entry.id)}
+              title="我比 routing 懂轻重 —— 只灭警告，任务与分类不动"
+              className="shrink-0 rounded-btn px-1.5 py-0.5 text-amber-700/80 hover:bg-amber-500/20"
+            >
+              忽略
+            </button>
+          </div>
+        )}
       </div>
 
       {/* 分类 chip（点开可改） */}

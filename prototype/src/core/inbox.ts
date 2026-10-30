@@ -96,6 +96,10 @@ export interface InboxEntry {
   readonly hints: InboxHints | null;
   /** 分类沉淀出的待办任务（actionable 分类才有） */
   readonly task: InboxEntryTaskRef | null;
+  /** 紧急检测（docs/30）：routing 嗅到时间压力 → 亮警告 + 沉淀任务不进闲时队列 */
+  readonly urgent: boolean;
+  /** 时间线索原话（urgent 时的展示/挂提醒预填依据），null = 无 */
+  readonly urgencyHint: string | null;
   readonly status: InboxStatus;
   readonly createdAt: number;
   readonly classifiedAt: number | null;

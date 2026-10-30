@@ -68,6 +68,8 @@ interface RawDecision {
   category?: unknown;
   title?: unknown;
   reason?: unknown;
+  urgent?: unknown;
+  urgencyHint?: unknown;
   task?: unknown;
 }
 
@@ -197,6 +199,11 @@ export class InboxClassifier {
     const category = typeof raw["category"] === "string" ? raw["category"].trim() : "";
     const validIds = new Set([...DEFAULT_INBOX_CATEGORIES.map((c) => c.id), ...cfg.categories.map((c) => c.id)]);
     const task = parseTask(raw["task"]);
+    // 紧急检测（docs/30）：routing 嗅到时间压力 → 条目亮警告，沉淀任务不进
+    // 闲时队列（auto=false）—— 紧急任务等不了「空闲+余量」，强制人裁决
+    // （现在就跑 / 挂提醒 / 自己动手）。urgencyHint 截 200 同 reason 口径。
+    const urgent = raw["urgent"] === true;
+    const urgencyHint = typeof raw["urgencyHint"] === "string" ? raw["urgencyHint"].slice(0, 200) : "";
     // 分类 id 无效：带 task 字段就当 todo，否则回落 note（条目不丢，理由里说明）
     const finalCategory = validIds.has(category) ? category : task !== null ? "todo" : "note";
     const noteBase = typeof raw["reason"] === "string" ? raw["reason"].slice(0, 200) : "";
@@ -233,7 +240,9 @@ export class InboxClassifier {
           runtimeId,
           model: hints?.model !== undefined ? hints.model : task.model,
           launchMode: hints?.launchMode ?? "headless",
-          auto: true,
+          // 紧急条目不进闲时队列：闲时执行构造性来不及，auto 任务跑完还会自动
+          // 验收 —— 迟到的执行 + 无人看见，是这条链路最坏的组合
+          auto: !urgent,
           // targetSessionId 只认用户亲手预置的 hints —— routing 的输出不收这个字段
           // （间接提示注入可以把任意已有会话 id 塞进来，把任务 prompt 灌进别人的对话）
           targetSessionId: hints?.targetSessionId ?? null,
@@ -243,6 +252,8 @@ export class InboxClassifier {
           category: finalCategory,
           categoryNote: note,
           taskId: id,
+          urgent,
+          urgencyHint,
           status: "classified",
           classifiedAt: Date.now(),
         });
@@ -254,6 +265,8 @@ export class InboxClassifier {
       category: finalCategory,
       categoryNote: note,
       taskId: null,
+      urgent,
+      urgencyHint,
       status: "classified",
       classifiedAt: Date.now(),
     });
@@ -316,8 +329,12 @@ export class InboxClassifier {
       "## 你的任务",
       "对每条条目输出一个分类决策：目标/待办类给 task 字段（goal 一句话可执行目标、prompt 启动提示词、unitId/runtimeId 拿不准留空）；",
       "想法/资料类不要 task 字段。用户预置了字段的条目，task 里对应字段必须原样保留。",
+      "判定基准：actionable 认长期价值型任务（维护/整理/学习/准备/复盘这类重要不紧急的事）——",
+      "清单的意义就是让它们在闲时被自动做掉；一时琐事拿不准就归想法。",
+      "紧急检测：条目带明确时间压力（今天/明天/后天/周几/截止/deadline/「HH 点前」等）就给",
+      '"urgent":true 并在 urgencyHint 里引一句时间线索 —— 闲时执行构造性来不及，系统会拦下它交给人。',
       "只输出一个 JSON 数组，不要输出任何其他文字：",
-      '[{"id":条目id,"category":"分类id","title":"一句话短标题","reason":"一句话理由","task":{"goal":"…","prompt":"…","unitId":"","runtimeId":"","model":null}}]',
+      '[{"id":条目id,"category":"分类id","title":"一句话短标题","reason":"一句话理由","urgent":false,"urgencyHint":"","task":{"goal":"…","prompt":"…","unitId":"","runtimeId":"","model":null}}]',
     ].join("\n");
 
     const texts: string[] = [];

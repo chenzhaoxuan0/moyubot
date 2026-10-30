@@ -3078,7 +3078,7 @@ registerMethod("inbox.list", () => {
 
 /** 编辑条目原话 / 手动改分类（改分类不烧 routing 的一分钱） */
 registerMethod("inbox.update", (params) => {
-  const p = (params ?? {}) as { id?: number; text?: string; category?: string | null; hints?: unknown };
+  const p = (params ?? {}) as { id?: number; text?: string; category?: string | null; hints?: unknown; urgent?: boolean };
   if (typeof p.id !== "number") throw badBacklog("id is required");
   const hit = store.getInboxEntry(p.id);
   if (hit === undefined) throw Object.assign(new Error(`没有这条清单条目：${p.id}`), { code: "unknown_entry" });
@@ -3098,6 +3098,8 @@ registerMethod("inbox.update", (params) => {
     ...(typeof p.text === "string" ? { text: p.text.trim() } : {}),
     ...(category !== undefined ? { category } : {}),
     ...(p.hints !== undefined ? { hints: normalizeInboxHints(p.hints) } : {}),
+    // 紧急警告的「忽略」（用户比 routing 懂轻重）：只灭警告，不动任务与分类
+    ...(typeof p.urgent === "boolean" ? { urgent: p.urgent, urgencyHint: p.urgent ? hit.urgencyHint : null } : {}),
     ...(categoryProvided
       ? {
           status: category === null ? "pending" : "classified",

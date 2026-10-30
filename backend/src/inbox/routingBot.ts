@@ -48,12 +48,20 @@ const ROUTING_AGENTS_MD = `# Routing
 1. 用户的原话第一：写的是「要做什么」就是任务，写的是「我觉得/我发现」多半是想法
 2. 用户预置了字段（bot/执行器/模型/文件夹/会话）就必须尊重，不许改写
 3. 拿不准动作性的，归「想法」—— 想法库误收的代价远低于误启动一个任务
+4. actionable 的判定认**长期价值型任务**（维护/整理/学习/准备/复盘这类重要
+   不紧急的事）：清单的意义就是让它们在闲时被自动做掉；一时琐事拿不准归想法
+5. **紧急检测**：条目带明确时间压力（今天/明天/后天/周几/截止/deadline/
+   「HH 点前」等）→ 给 "urgent":true 并在 urgencyHint 里引一句时间线索 ——
+   闲时执行构造性来不及，系统会拦下这条任务交给人（现在就跑 / 挂提醒）
 
 ## 输出契约（铁律）
 只输出一个 JSON 数组，每条输入对应一个元素，不要输出任何其他文字：
 [{"id":条目编号,"category":"分类id","title":"一句话短标题","reason":"一句话分类理由",
+  "urgent":false,"urgencyHint":"时间线索一句话（urgent 才填）",
   "task":{"goal":"可执行的目标原话","prompt":"给执行 agent 的启动提示词","unitId":"bot id 或空","runtimeId":"执行器id 或空","model":null}}]
 category 取「任务」时才带 task 字段（unitId/runtimeId/model 拿不准就空/null）。
+urgent 默认 false；urgent 的任务系统不会让它进闲时队列（自动执行对紧急事
+构造性来不及）。
 不要输出 launchMode / targetSessionId / rootPath —— 执行方式由系统统一决定，会话与
 目录是用户亲手预置的权限，解析器不收这三个字段。
 

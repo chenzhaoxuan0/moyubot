@@ -362,6 +362,10 @@ export class Store {
       // 会话来源（workbench/feishu/mobile/automation…）：历史列表的来源标签用。
       // 旧行 NULL 按工作台读（产品初期只有工作台一个入口）
       `ALTER TABLE sessions ADD COLUMN source TEXT`,
+      // 紧急检测（docs/30）：routing 嗅到时间压力 → urgent 亮警告，
+      // urgency_hint 存时间线索原话（挂提醒的预填依据）
+      `ALTER TABLE inbox_entries ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE inbox_entries ADD COLUMN urgency_hint TEXT`,
     ]) {
       try {
         this.db.exec(stmt);
@@ -1130,6 +1134,8 @@ export class Store {
             }
           : // join 没接上 = 任务已不在（脏 task_id）—— 别捏造「就绪」幽灵链接，按无任务呈现
             null,
+      urgent: Number(r["urgent"] ?? 0) === 1,
+      urgencyHint: r["urgency_hint"] === null || r["urgency_hint"] === undefined ? null : String(r["urgency_hint"]),
       status: (["pending", "classified", "failed"].includes(String(r["status"])) ? String(r["status"]) : "pending") as InboxStatus,
       createdAt: Number(r["created_at"]),
       classifiedAt: nOrNull(r["classified_at"]),
@@ -1189,6 +1195,8 @@ export class Store {
       taskId: number | null;
       status: InboxStatus;
       classifiedAt: number | null;
+      urgent: boolean;
+      urgencyHint: string | null;
     }>,
   ): boolean {
     const sets: string[] = [];
@@ -1204,6 +1212,8 @@ export class Store {
     if (patch.taskId !== undefined) put("task_id", patch.taskId);
     if (patch.status !== undefined) put("status", patch.status);
     if (patch.classifiedAt !== undefined) put("classified_at", patch.classifiedAt);
+    if (patch.urgent !== undefined) put("urgent", patch.urgent ? 1 : 0);
+    if (patch.urgencyHint !== undefined) put("urgency_hint", patch.urgencyHint);
     if (sets.length === 0) return true;
     sets.push("updated_at = ?");
     values.push(Date.now());

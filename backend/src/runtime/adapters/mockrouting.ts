@@ -9,6 +9,7 @@
  * - 文本含「想法」 → idea 归档（无 task）
  * - 文本含「坏分类」 → 故意给无效分类 id + task（验收回落 todo + 理由注明）
  * - 文本含「坏bot」 → task 建议 nonexistent-bot（验收未知 bot 回落）
+ * - 文本含「紧急」 → urgent:true + urgencyHint（验收紧急检测：条目亮警告、任务 auto=false）
  * - 其余 → todo + task（hints 优先由 applyDecision 强制，mock 不掺和）
  */
 
@@ -107,6 +108,12 @@ export class MockRoutingAdapter implements ExecutorAdapter {
         decisions.push({
           id, category: "todo", title: "坏bot", reason: "mockrouting：故意建议不存在的bot",
           task: { goal: "坏bot条目的目标", prompt: "", title: "", unitId: "nonexistent-bot", runtimeId: "", model: null },
+        });
+      } else if (t.includes("紧急")) {
+        decisions.push({
+          id, category: "todo", title: "紧急条目", reason: "mockrouting：嗅到时间压力", urgent: true,
+          urgencyHint: "mockrouting：今天之内",
+          task: { goal: "紧急条目的目标", prompt: "", title: "", unitId: "", runtimeId: "", model: null },
         });
       } else {
         const brief = t.slice(0, 20);
