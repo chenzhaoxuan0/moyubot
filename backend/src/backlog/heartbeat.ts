@@ -1120,10 +1120,12 @@ export class BacklogEngine {
             sessionId: run.sessionId,
             status: run.status,
             runtimeId: run.runtimeId,
+            trigger: run.trigger,
             startedAt: run.startedAt,
             finishedAt: run.finishedAt,
             detail: run.detail,
           },
+      runCount: this.deps.store.countBacklogRuns(row.id),
     };
   }
 

@@ -1064,6 +1064,12 @@ export class Store {
     return this.listBacklogRuns(itemId, 1)[0];
   }
 
+  /** 该条目的历史运行总次数（推进面板「跑过 N 次」——一行 COUNT，不值当 LIMIT 全取） */
+  countBacklogRuns(itemId: number): number {
+    const row = this.db.prepare(`SELECT COUNT(*) AS n FROM backlog_runs WHERE item_id = ?`).get(itemId) as Record<string, unknown>;
+    return Number(row["n"] ?? 0);
+  }
+
   /** 仍未收口的运行（重启自愈用）：status=running 的全量 */
   listRunningBacklogRuns(): Array<{ runId: number; itemId: number; sessionId: string | null; runtimeId: string; startedAt: number }> {
     const rows = this.db

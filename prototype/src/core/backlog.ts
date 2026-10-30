@@ -61,6 +61,8 @@ export interface BacklogRunRef {
   /** running | done | failed */
   readonly status: string;
   readonly runtimeId: string;
+  /** 谁派发的：autopilot（闲时托管）/ manual（手动立即执行）/ gtd（心跳确认后） */
+  readonly trigger: string;
   readonly startedAt: number;
   readonly finishedAt: number | null;
   readonly detail: string | null;
@@ -111,6 +113,8 @@ export interface BacklogItem {
   readonly updatedAt: number;
   /** 最近一次运行（卡片展示用） */
   readonly lastRun: BacklogRunRef | null;
+  /** 历史运行总次数（推进面板「跑过 N 次」） */
+  readonly runCount: number;
 }
 
 // ---------------------------------------------------------------------------

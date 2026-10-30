@@ -24,7 +24,7 @@ import { cn } from "./cn.ts";
  * 不烧 routing 额度，新内容停在「待分类」）、「立即分类」手动触发、清单设置。
  */
 
-export function InboxColumn({ onJumpToTask }: { onJumpToTask: (taskId: number) => void }): ReactElement {
+export function InboxColumn({ onJumpToTask, highlightId }: { onJumpToTask: (taskId: number) => void; highlightId: number | null }): ReactElement {
   const entries = useInbox((s) => s.entries);
   const config = useInbox((s) => s.config);
   const classifier = useInbox((s) => s.classifier);
@@ -58,6 +58,7 @@ export function InboxColumn({ onJumpToTask }: { onJumpToTask: (taskId: number) =
       setConfirmingDelete={setConfirmingDelete}
       taskItem={findTask(taskById, entry)}
       onJumpToTask={onJumpToTask}
+      highlighted={highlightId === entry.id}
     />
   );
 
@@ -184,12 +185,14 @@ function EntryRow({
   setConfirmingDelete,
   taskItem,
   onJumpToTask,
+  highlighted,
 }: {
   entry: InboxEntry;
   confirmingDelete: number | null;
   setConfirmingDelete: (id: number | null) => void;
   taskItem: { id: number; status: string; title: string } | null;
   onJumpToTask: (taskId: number) => void;
+  highlighted: boolean;
 }): ReactElement {
   const updateText = useInbox((s) => s.updateText);
   const setCategory = useInbox((s) => s.setCategory);
@@ -211,7 +214,10 @@ function EntryRow({
   };
 
   return (
-    <div className="flex items-start gap-2.5 border-b border-line-soft px-4 py-2.5 last:border-b-0">
+    <div
+      id={`inbox-entry-${entry.id}`}
+      className={cn("flex items-start gap-2.5 border-b border-line-soft px-4 py-2.5 last:border-b-0", highlighted && "ring-2 ring-teal")}
+    >
       {/* 原话（可内联编辑） */}
       <div className="min-w-0 flex-1">
         {editing ? (

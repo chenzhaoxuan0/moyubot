@@ -134,7 +134,8 @@ export const METHOD_META: Record<string, MethodMeta> = {
   "git.graph": { description: "可见历史提交图（HEAD+branches+tags+remotes，不用 --all）", paramsHint: "{rootPath, skip?, maxCount?}" },
 
   // ---- 待办（GTD）与自动化 ------------------------------------------------------
-  "backlog.list": { description: "拉待办全量视图：条目、提议、状态、配置、配额", paramsHint: "null" },
+  "backlog.list": { description: "拉待办全量视图：条目（含 runCount/lastRun）、提议、状态、配置、配额", paramsHint: "null" },
+  "backlog.runs": { description: "查单条待办的运行历史（含 trigger 来源：autopilot/manual/gtd）", paramsHint: "{id, limit?}" },
   "backlog.create": {
     description: "新建待办项并落库（launchMode：terminal=TUI / chat=对话页前台 / headless=纯后台；auto=true 闲时自动执行免确认门；targetSessionId 指定已有会话执行；prompt 无人值守口径同 automation.create）",
     paramsHint: "{goal, unitId, rootPath, title?, prompt?, unitName?, runtimeId?, model?, mode?, size?, launchMode?, auto?, targetSessionId?}",

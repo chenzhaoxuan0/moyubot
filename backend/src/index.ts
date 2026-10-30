@@ -2701,6 +2701,25 @@ registerMethod("backlog.list", async () => {
   };
 });
 
+// 推进面板的运行历史：单条待办的完整 run 列表（trigger 标记闲时/手动/心跳来源）
+registerMethod("backlog.runs", (params) => {
+  const p = (params ?? {}) as { id?: number; limit?: number };
+  if (typeof p.id !== "number" || !Number.isFinite(p.id)) throw badBacklog("id is required");
+  const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? Math.min(Math.max(1, Math.trunc(p.limit)), 50) : 10;
+  return {
+    runs: store.listBacklogRuns(p.id, limit).map((r) => ({
+      runId: r.id,
+      sessionId: r.sessionId,
+      status: r.status,
+      runtimeId: r.runtimeId,
+      trigger: r.trigger,
+      startedAt: r.startedAt,
+      finishedAt: r.finishedAt,
+      detail: r.detail,
+    })),
+  };
+});
+
 registerMethod("backlog.create", (params) => {
   const p = (params ?? {}) as {
     title?: string; goal?: string; prompt?: string;

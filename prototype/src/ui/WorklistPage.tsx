@@ -1,6 +1,8 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, type ReactElement } from "react";
 import { useInbox } from "../store/useInbox.ts";
 import { useBacklog } from "../store/useBacklog.ts";
+import { useTaskJump } from "../store/useTaskJump.ts";
+import { useWorkbench } from "../store/useWorkbench.ts";
 import { InboxComposer } from "./InboxComposer.tsx";
 import { InboxColumn } from "./InboxColumn.tsx";
 import { BacklogColumn } from "./BacklogColumn.tsx";
@@ -14,35 +16,39 @@ import { NoticeBanner } from "./WorklistBits.tsx";
  * HEAD 只放标题（窄窗口不与最小化/最大化/关闭钮打架）；功能控件分家到两栏
  * 栏头：左栏=清单（自动分类总开关、立即分类、清单设置、分类器状态），
  * 右栏=待办（闲时执行总开关、待办设置、强制忙碌、跳一跳、新建）。
+ *
+ * 跨入口跳转（左栏任务链接、通知深链）统一走 useTaskJump 信箱：本页消费、
+ * 滚到对应栏的锚点并短暂高亮 —— 页外入口（通知中心等）不依赖本页内部状态。
  */
 
 /** 轮询兜底间隔（权威同步走 inbox/backlog 信号帧，这是 daemon 不在/漏帧时的兜底） */
 const POLL_MS = 30_000;
 /** 页面级通知的自动消失时长 */
 const NOTICE_TTL_MS = 5_000;
-/** 左栏跳右栏的任务卡片高亮停留时长 */
+/** 跳转高亮停留时长（任务卡 / 清单条目共用） */
 const JUMP_HIGHLIGHT_MS = 1_600;
 
 export function WorklistPage(): ReactElement {
   const inboxRefresh = useInbox((s) => s.refresh);
   const backlogRefresh = useBacklog((s) => s.refresh);
+  const refreshAutomations = useWorkbench((s) => s.refreshAutomations);
   const inboxNotice = useInbox((s) => s.notice);
   const setInboxNotice = useInbox((s) => s.setNotice);
   const backlogNotice = useBacklog((s) => s.notice);
   const setBacklogNotice = useBacklog((s) => s.setNotice);
 
-  const [jumpTarget, setJumpTarget] = useState<number | null>(null);
-
-  // 一个轮询喂两栏（两 store 的信号帧在 main.tsx 全局绑定，这里只做漏帧兜底）
+  // 一个轮询喂两栏 + 右栏「定时带」（automations 无信号帧，30s 轮询同口径）
   useEffect(() => {
     void inboxRefresh();
     void backlogRefresh();
+    void refreshAutomations();
     const timer = setInterval(() => {
       void inboxRefresh();
       void backlogRefresh();
+      void refreshAutomations();
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [inboxRefresh, backlogRefresh]);
+  }, [inboxRefresh, backlogRefresh, refreshAutomations]);
 
   useEffect(() => {
     if (inboxNotice === null) return;
@@ -56,10 +62,16 @@ export function WorklistPage(): ReactElement {
     return () => clearTimeout(t);
   }, [backlogNotice, setBacklogNotice]);
 
-  const jumpToTask = (id: number): void => {
-    setJumpTarget(id);
-    window.setTimeout(() => setJumpTarget((cur) => (cur === id ? null : cur)), JUMP_HIGHLIGHT_MS);
-  };
+  // 全局跳转信箱：滚到锚点（高亮 ring 由两栏按各自 highlightId 渲染），1.6s 后清信箱
+  const jumpTarget = useTaskJump((s) => s.target);
+  const jumpSeq = useTaskJump((s) => s.seq);
+  useEffect(() => {
+    if (jumpTarget === null) return;
+    const anchor = jumpTarget.kind === "backlog" ? `backlog-card-${jumpTarget.id}` : `inbox-entry-${jumpTarget.id}`;
+    document.getElementById(anchor)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const t = window.setTimeout(() => useTaskJump.getState().clear(), JUMP_HIGHLIGHT_MS);
+    return () => window.clearTimeout(t);
+  }, [jumpTarget, jumpSeq]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -87,8 +99,8 @@ export function WorklistPage(): ReactElement {
 
           {/* 两栏：窄屏上下堆叠，整页一起滚 */}
           <div className="mt-5 grid grid-cols-1 items-start gap-x-6 gap-y-6 xl:grid-cols-2">
-            <InboxColumn onJumpToTask={jumpToTask} />
-            <BacklogColumn highlightId={jumpTarget} />
+            <InboxColumn onJumpToTask={(id) => useTaskJump.getState().jump({ kind: "backlog", id })} highlightId={jumpTarget?.kind === "inbox" ? jumpTarget.id : null} />
+            <BacklogColumn highlightId={jumpTarget?.kind === "backlog" ? jumpTarget.id : null} />
           </div>
         </div>
       </div>

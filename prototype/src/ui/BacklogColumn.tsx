@@ -4,10 +4,13 @@ import {
   ArrowDown,
   ArrowUp,
   BellOff,
+  ChevronDown,
+  ChevronRight,
   CircleAlert,
   CircleCheck,
   CircleDot,
   HeartPulse,
+  History,
   ListTodo,
   MoreHorizontal,
   Pencil,
@@ -19,13 +22,16 @@ import {
 import {
   BACKLOG_STATUS_LABEL,
   formatBacklogRelative,
-  isActiveStatus,
   WORK_PHASE_LABEL,
   type BacklogConfig,
   type BacklogItem,
   type BacklogStatus,
+  type QuotaHeadroom,
   type WorkPhase,
 } from "../core/backlog.ts";
+import { formatAbsoluteHuman } from "../core/automation.ts";
+import { fetchBacklogRuns, type BacklogRunRow } from "../adapters/daemon/client.ts";
+import { defaultDaemonEndpoint } from "../adapters/daemon/client.ts";
 import { useBacklog } from "../store/useBacklog.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { useSidePane } from "../store/useSidePane.ts";
@@ -37,24 +43,16 @@ import { Toggle } from "./Toggle.tsx";
 import { cn } from "./cn.ts";
 
 /**
- * 清单页右栏 —— 待办任务状态机（原待办页主体）。WorkPhase 状态行 + 过滤 chips +
- * 卡片列表；左栏点任务链接时 highlightId 命中的卡片滚动进入视野并短暂高亮。
+ * 清单页右栏 —— 推进面板：按状态机分组的任务总览（执行中 → 待验收 → 待确认
+ * → 排队 → 休眠 → 完成），排队组亮「下一条」与前置条件（当前判定，不承诺
+ * ETA），卡片带运行历史（trigger 来源）。左栏点任务链接 / 通知深链时
+ * highlightId 命中的卡片滚动进入视野并短暂高亮。
  *
  * 栏头是待办这一侧的功能钮：「闲时执行」总开关（关 = 空闲不再派发 auto 任务，
- * 手动「立即执行」不受影响）、待办设置、强制忙碌、跳一跳、新建。
+ * 手动「立即执行」不受影响）、待办设置、强制忙碌、跳一跳、新建。行1 顺带
+ * 今日完成计数，行2 状态行顺带定时带（钟控轴下次发火时刻）—— 栏头严格
+ * 两行与左栏等高，不加第三行。
  */
-
-type Filter = "active" | BacklogStatus;
-
-const FILTERS: readonly { id: Filter; label: string }[] = [
-  { id: "active", label: "活跃" },
-  { id: "ready", label: "就绪" },
-  { id: "awaiting_confirm", label: "待确认" },
-  { id: "executing", label: "执行中" },
-  { id: "awaiting_review", label: "待验收" },
-  { id: "sleeping", label: "休眠" },
-  { id: "done", label: "已完成" },
-];
 
 const PHASE_DOT: Record<WorkPhase, string> = {
   busy: "bg-line-strong",
@@ -65,32 +63,89 @@ const PHASE_DOT: Record<WorkPhase, string> = {
   awaiting_review: "bg-violet-500",
 };
 
+/** 与引擎 AUTOPILOT_FAILURE_BACKOFF_MS 同口径：最近一次失败 10 分钟内退避 */
+const FAILURE_BACKOFF_MS = 10 * 60_000;
+
+type GroupId = "executing" | "awaiting_review" | "awaiting_confirm" | "ready" | "sleeping" | "draft" | "today_done" | "older_done";
+
+const GROUPS: readonly { id: GroupId; label: string }[] = [
+  { id: "executing", label: "执行中" },
+  { id: "awaiting_review", label: "待验收" },
+  { id: "awaiting_confirm", label: "待确认" },
+  { id: "ready", label: "排队" },
+  { id: "sleeping", label: "休眠" },
+  { id: "draft", label: "草稿" },
+  { id: "today_done", label: "今日完成" },
+  { id: "older_done", label: "更早完成" },
+];
+
+const DEFAULT_COLLAPSED: Readonly<Record<string, boolean>> = { sleeping: true, draft: true, today_done: true, older_done: true };
+
+function startOfToday(): number {
+  const d = new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+}
+
 export function BacklogColumn({ highlightId }: { highlightId: number | null }): ReactElement {
   const items = useBacklog((s) => s.items);
   const state = useBacklog((s) => s.state);
   const config = useBacklog((s) => s.config);
+  const quotas = useBacklog((s) => s.quotas);
+  const automations = useWorkbench((s) => s.automations);
   const reorder = useBacklog((s) => s.reorder);
 
-  const [filter, setFilter] = useState<Filter>("active");
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({ ...DEFAULT_COLLAPSED });
   const [confirmingDelete, setConfirmingDelete] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dialog, setDialog] = useState<{ mode: "create" } | { mode: "edit"; item: BacklogItem } | null>(null);
 
-  // 左栏「定位任务」：滚到命中卡片（高亮 ring 由 highlightId 传进卡片渲染）
+  // 左栏「定位任务」/ 通知深链：滚到命中卡片（高亮 ring 由 highlightId 传进卡片渲染）
   useEffect(() => {
     if (highlightId === null) return;
     document.getElementById(`backlog-card-${highlightId}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [highlightId]);
 
-  const visible = useMemo(
-    () => items.filter((i) => (filter === "active" ? isActiveStatus(i.status) : i.status === filter)),
-    [items, filter],
-  );
-  const activeCount = items.filter((i) => isActiveStatus(i.status)).length;
+  const activeCount = items.filter((i) => i.status !== "done").length;
   const autopilotOn = config?.autopilot.enabled ?? false;
 
+  // 今日完成：done 且最近一次运行在今天收口（比 updatedAt 准 —— 编辑也会动它）
+  const today0 = startOfToday();
+  const isTodayDone = (i: BacklogItem): boolean => i.status === "done" && (i.lastRun?.finishedAt ?? 0) >= today0;
+
+  const groups = useMemo(() => {
+    const byGroup = new Map<GroupId, BacklogItem[]>();
+    for (const g of GROUPS) byGroup.set(g.id, []);
+    for (const i of items) {
+      if (i.status === "done") byGroup.get(isTodayDone(i) ? "today_done" : "older_done")!.push(i);
+      else if (i.status === "draft") byGroup.get("draft")!.push(i);
+      else byGroup.get(i.status as Exclude<BacklogStatus, "done" | "draft">)!.push(i);
+    }
+    return byGroup;
+    // isTodayDone 依赖 today0（挂载日的零点）——跨天停留页面时显式刷新分组
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items, today0]);
+
+  const todayDoneCount = groups.get("today_done")!.length;
+
+  // 定时带：钟控轴（automations）下次发火时刻 —— 钟控是真承诺，给确切时间；
+  // 与余量轴（autopilot）形成双轴对照：那边只给前置条件，不给假 ETA
+  const nextAutomationAt = useMemo(() => {
+    const nexts = automations.filter((a) => a.enabled && typeof a.nextRunAt === "number").map((a) => a.nextRunAt as number);
+    return nexts.length > 0 ? Math.min(...nexts) : null;
+  }, [automations]);
+
+  // 队列头：autopilot 的挑法（sortPos 序第一条 ready+auto，失败退避跳过）——
+  // 这里只做展示对齐，真正的挑单在引擎
+  const readyAuto = groups.get("ready")!.filter(
+    (i) => i.auto && !(i.lastRun?.status === "failed" && Date.now() - i.lastRun.startedAt < FAILURE_BACKOFF_MS),
+  );
+  const queueHead = readyAuto[0] ?? null;
+  const allReadyAutoBackoff = groups.get("ready")!.some((i) => i.auto) && readyAuto.length === 0;
+
+  const precondition = queuePrecondition(state, config, quotas, autopilotOn, allReadyAutoBackoff);
+
   const move = (id: number, dir: -1 | 1): void => {
-    const order = items.filter((i) => isActiveStatus(i.status)).map((i) => i.id);
+    const order = items.filter((i) => i.status !== "done").map((i) => i.id);
     const from = order.indexOf(id);
     const to = from + dir;
     if (from < 0 || to < 0 || to >= order.length) return;
@@ -107,7 +162,9 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
           <h2 className="flex min-w-0 items-center gap-2 text-body-sm font-medium text-ink">
             <span className={cn("h-2 w-2 shrink-0 rounded-full", PHASE_DOT[state?.phase ?? "busy"])} />
             <span className="truncate">{WORK_PHASE_LABEL[state?.phase ?? "busy"]}</span>
-            <span className="shrink-0 text-caption font-normal text-ash">待办 · {activeCount} 条活跃</span>
+            <span className="shrink-0 text-caption font-normal text-ash">
+              待办 · {activeCount} 条活跃{todayDoneCount > 0 ? ` · 今日完成 ${todayDoneCount}` : ""}
+            </span>
           </h2>
           {/* 总开关：关了空闲不再派发 auto 任务（20s tick 自查生效），手动执行不受影响 */}
           <label
@@ -131,12 +188,14 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
             title={
               `${state?.reason ?? "总状态计算中……"}` +
               (state?.nextBeatAt != null && state.heartbeatEnabled ? ` · 下次心跳 ${formatBacklogRelative(state.nextBeatAt)}` : "") +
-              (state?.lastBeatOutcome != null ? ` · 上跳：${state.lastBeatOutcome}` : "")
+              (state?.lastBeatOutcome != null ? ` · 上跳：${state.lastBeatOutcome}` : "") +
+              (nextAutomationAt !== null ? ` · 下次定时 ${formatAbsoluteHuman(nextAutomationAt)}` : "")
             }
           >
             {state?.reason ?? "总状态计算中……"}
             {state?.nextBeatAt != null && state.heartbeatEnabled && ` · 下次心跳 ${formatBacklogRelative(state.nextBeatAt)}`}
             {state?.lastBeatOutcome != null && ` · 上跳：${state.lastBeatOutcome}`}
+            {nextAutomationAt !== null && ` · 下次定时 ${formatAbsoluteHuman(nextAutomationAt)}`}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
             <HeaderBtn icon={Settings2} label="待办设置（心跳与余量）" onClick={() => setSettingsOpen((v) => !v)} active={settingsOpen} />
@@ -154,40 +213,60 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
         </div>
       </header>
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="ml-auto flex gap-1">
-          {FILTERS.map((f) => (
-            <button
-              key={f.id}
-              onClick={() => setFilter(f.id)}
-              aria-pressed={filter === f.id}
-              className={cn(
-                "rounded-chip px-2.5 py-1 text-caption",
-                filter === f.id ? "bg-line-soft font-medium text-ink" : "text-ash hover:text-graphite",
-              )}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {visible.length === 0 ? (
-        <EmptyPanel filter={filter} onCreate={() => setDialog({ mode: "create" })} config={config} />
+      {items.length === 0 ? (
+        <EmptyPanel onCreate={() => setDialog({ mode: "create" })} config={config} />
       ) : (
-        /* 两栏布局下右栏本就半宽 —— 卡片单列排布，原两列网格由合页取代 */
-        <div className="flex flex-col gap-3">
-          {visible.map((item) => (
-            <BacklogCard
-              key={item.id}
-              item={item}
-              onEdit={() => setDialog({ mode: "edit", item })}
-              confirmingDelete={confirmingDelete}
-              setConfirmingDelete={setConfirmingDelete}
-              onMove={move}
-              highlighted={highlightId === item.id}
-            />
-          ))}
+        <div className="space-y-5">
+          {GROUPS.map((g) => {
+            const list = groups.get(g.id)!;
+            if (list.length === 0) return null;
+            const isCollapsed = collapsed[g.id] ?? false;
+            return (
+              <section key={g.id}>
+                <h3 className="mb-2 flex items-center gap-2">
+                  <button
+                    onClick={() => setCollapsed((c) => ({ ...c, [g.id]: !isCollapsed }))}
+                    aria-expanded={!isCollapsed}
+                    className="flex items-center gap-1 text-ash hover:text-graphite"
+                    aria-label={`${g.label}分组${isCollapsed ? "展开" : "折叠"}`}
+                  >
+                    {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                  </button>
+                  <span className={cn("text-body-sm font-medium", g.id === "today_done" || g.id === "older_done" ? "text-ash" : "text-ink")}>{g.label}</span>
+                  <span className="rounded-chip bg-line-soft px-1.5 py-0.5 text-[10px] text-ash">{list.length}</span>
+                  {g.id === "ready" && queueHead !== null && (
+                    <span className="rounded-chip bg-teal-tint px-1.5 py-0.5 text-[10px] text-teal" title="空闲且余量够时，下一拍派发的就是它">
+                      下一条
+                    </span>
+                  )}
+                </h3>
+
+                {/* 排队组的前置条件行：当前判定（余量轴不承诺 ETA —— 条件可验证，预测是撒谎） */}
+                {g.id === "ready" && (queueHead !== null || allReadyAutoBackoff) && precondition !== null && (
+                  <p className="mb-2 rounded-btn bg-rail px-2.5 py-1.5 text-caption text-graphite" title="autopilot 此刻为什么没派发 —— 引擎 20 秒一拍，条件变了下一拍就动">
+                    当前判定：{precondition}
+                  </p>
+                )}
+
+                {!isCollapsed && (
+                  <div className="flex flex-col gap-3">
+                    {list.map((item) => (
+                      <BacklogCard
+                        key={item.id}
+                        item={item}
+                        onEdit={() => setDialog({ mode: "edit", item })}
+                        confirmingDelete={confirmingDelete}
+                        setConfirmingDelete={setConfirmingDelete}
+                        onMove={move}
+                        highlighted={highlightId === item.id}
+                        isQueueHead={g.id === "ready" && queueHead !== null && queueHead.id === item.id}
+                      />
+                    ))}
+                  </div>
+                )}
+              </section>
+            );
+          })}
         </div>
       )}
 
@@ -197,6 +276,35 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
       {settingsOpen && <BacklogSettings onClose={() => setSettingsOpen(false)} />}
     </section>
   );
+}
+
+/**
+ * 队列头为什么还没跑 —— 全部从快照现有字段推导（引擎的判定口径），零新增后端。
+ * 返回 null = 说不出话（快照还没到），宁可不说也不编。
+ */
+function queuePrecondition(
+  state: import("../core/backlog.ts").BacklogStateSnapshot | null,
+  config: BacklogConfig | null,
+  quotas: readonly QuotaHeadroom[],
+  autopilotOn: boolean,
+  allBackoff: boolean,
+): string | null {
+  if (!autopilotOn) return "闲时执行总开关已关 —— 队列静默（手动执行不受影响）";
+  if (allBackoff) return "排队任务全部在失败退避中（10 分钟窗口）";
+  if (state === null) return null;
+  if (state.forceBusy) return "强制忙碌中 —— 不派发";
+  if (state.phase === "beating") return "心跳评估中 —— autopilot 让路";
+  if (state.phase === "awaiting_confirm") return "有提议挂起等确认";
+  if (state.phase === "executing" || state.phase === "awaiting_review") return state.reason;
+  if (state.phase === "busy") return state.reason;
+  // idle：引擎没派只可能是余量门（或刚好在两拍之间）
+  if (state.lastBeatOutcome === "autopilot:no-headroom") {
+    const floor = config?.autopilot.headroomFloorPercent ?? 10;
+    const resets = quotas.filter((q) => q.resetsAt !== null).map((q) => q.resetsAt as number);
+    const nextReset = resets.length > 0 ? Math.min(...resets) : null;
+    return `余量低于地板（${floor}%）${nextReset !== null ? ` · 最近重置 ${formatAbsoluteHuman(nextReset)}` : ""}`;
+  }
+  return "空闲 —— 等下一拍（20 秒内）";
 }
 
 /* ------------------------------------------------------------------ 卡片 */
@@ -211,6 +319,20 @@ const STATUS_CHIP: Record<BacklogStatus, string> = {
   sleeping: "bg-line-soft text-ash",
 };
 
+const TRIGGER_LABEL: Readonly<Record<string, string>> = {
+  autopilot: "闲时",
+  manual: "手动",
+  gtd: "心跳",
+};
+
+function fmtDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s} 秒`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} 分钟`;
+  return `${Math.floor(m / 60)} 小时 ${m % 60} 分`;
+}
+
 function BacklogCard({
   item,
   onEdit,
@@ -218,6 +340,7 @@ function BacklogCard({
   setConfirmingDelete,
   onMove,
   highlighted,
+  isQueueHead,
 }: {
   item: BacklogItem;
   onEdit: () => void;
@@ -225,6 +348,7 @@ function BacklogCard({
   setConfirmingDelete: (id: number | null) => void;
   onMove: (id: number, dir: -1 | 1) => void;
   highlighted: boolean;
+  isQueueHead: boolean;
 }): ReactElement {
   const runNow = useBacklog((s) => s.runNow);
   const wake = useBacklog((s) => s.wake);
@@ -236,6 +360,16 @@ function BacklogCard({
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [rejectNote, setRejectNote] = useState<string | null>(null);
+  const [runsOpen, setRunsOpen] = useState(false);
+  const [runs, setRuns] = useState<readonly BacklogRunRow[] | null>(null);
+
+  // 展开时懒加载一次（runCount 变了也不追 —— 展开看的是当时的历史，收起再开即刷新）
+  useEffect(() => {
+    if (!runsOpen || runs !== null) return;
+    void fetchBacklogRuns(item.id, 10, defaultDaemonEndpoint())
+      .then((r) => setRuns(r.runs))
+      .catch(() => setRuns([]));
+  }, [runsOpen, runs, item.id]);
 
   const unitName = units.find((u) => u.id === item.unitId)?.name ?? item.unitName;
   const lastRun = item.lastRun;
@@ -281,7 +415,7 @@ function BacklogCard({
                 {item.status === "sleeping" && (
                   <MenuRow icon={<CircleCheck size={12} />} label="唤醒" onClick={() => { setMenuOpen(false); void wake(item.id); }} />
                 )}
-                {isActiveStatus(item.status) && item.status !== "executing" && item.status !== "awaiting_confirm" && (
+                {item.status !== "done" && item.status !== "executing" && item.status !== "awaiting_confirm" && (
                   <MenuRow icon={<BellOff size={12} />} label="休眠（不再提议）" onClick={() => { setMenuOpen(false); void sleep(item.id); }} />
                 )}
                 <MenuRow
@@ -307,6 +441,11 @@ function BacklogCard({
         <span className={cn("shrink-0 whitespace-nowrap rounded-chip px-2 py-0.5 text-caption", STATUS_CHIP[item.status])}>
           {BACKLOG_STATUS_LABEL[item.status]}
         </span>
+        {isQueueHead && (
+          <span className="shrink-0 whitespace-nowrap rounded-chip bg-teal-tint px-2 py-0.5 text-caption text-teal" title="空闲且余量够时，autopilot 下一拍派发的就是它">
+            下一条
+          </span>
+        )}
         {item.size !== null && (
           <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">{item.size === "big" ? "大" : "小"}</span>
         )}
@@ -389,13 +528,91 @@ function BacklogCard({
           </dd>
         </div>
         <div className="min-w-0">
-          <dt className="text-ash">上次提议</dt>
-          <dd className="truncate text-graphite">{item.lastProposedAt === null ? "—" : formatBacklogRelative(item.lastProposedAt)}</dd>
+          <dt className="text-ash">跑过次数</dt>
+          <dd className="truncate text-graphite">
+            {item.runCount} 次{item.lastProposedAt !== null ? ` · 上次提议 ${formatBacklogRelative(item.lastProposedAt)}` : ""}
+          </dd>
         </div>
       </dl>
 
+      {/* 运行历史：懒加载，trigger 标来源（闲时托管 / 手动 / 心跳确认后） */}
+      {runsOpen && (
+        <div className="flex flex-col gap-1 rounded-btn bg-rail px-2.5 py-2">
+          {runs === null ? (
+            <p className="text-caption text-ash">加载运行记录…</p>
+          ) : runs.length === 0 ? (
+            <p className="text-caption text-ash">还没有运行记录</p>
+          ) : (
+            runs.map((r) => (
+              <div key={r.runId} className="flex items-center gap-2 text-caption">
+                {r.status === "done" ? (
+                  <CircleCheck size={11} className="shrink-0 text-gain" />
+                ) : r.status === "failed" ? (
+                  <CircleAlert size={11} className="shrink-0 text-loss" />
+                ) : (
+                  <CircleDot size={11} className="shrink-0 animate-pulse text-blue-500" />
+                )}
+                <span className="shrink-0 text-graphite">{r.status === "done" ? "完成" : r.status === "failed" ? "失败" : "运行中"}</span>
+                <span className="shrink-0 rounded-chip bg-line-soft px-1.5 py-px text-[10px] text-ash">{TRIGGER_LABEL[r.trigger] ?? r.trigger}</span>
+                <span className="shrink-0 text-ash">{formatBacklogRelative(r.startedAt)}</span>
+                {r.finishedAt !== null && <span className="shrink-0 text-ash">· {fmtDuration(r.finishedAt - r.startedAt)}</span>}
+                {r.detail !== null && (
+                  <span className="min-w-0 truncate text-ash" title={r.detail}>
+                    {r.detail}
+                  </span>
+                )}
+                {/* headless/chat run 有事件账本可回放；autoterm_ 前缀是终端 id 没有事件流 */}
+                {r.sessionId != null && r.sessionId !== "" && !r.sessionId.startsWith("autoterm_") && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      const w = useWorkbench.getState();
+                      if (String(w.activeUnitId) !== String(item.unitId)) w.selectUnit(asUnitId(item.unitId));
+                      useSidePane.getState().openLiveSession({
+                        unitId: asUnitId(item.unitId),
+                        sessionId: r.sessionId!,
+                        runtimeId: r.runtimeId === "" ? item.runtimeId : r.runtimeId,
+                        title: item.title,
+                      });
+                    }}
+                    onKeyDown={(ev) => {
+                      if (ev.key !== "Enter" && ev.key !== " ") return;
+                      const w = useWorkbench.getState();
+                      if (String(w.activeUnitId) !== String(item.unitId)) w.selectUnit(asUnitId(item.unitId));
+                      useSidePane.getState().openLiveSession({
+                        unitId: asUnitId(item.unitId),
+                        sessionId: r.sessionId!,
+                        runtimeId: r.runtimeId === "" ? item.runtimeId : r.runtimeId,
+                        title: item.title,
+                      });
+                    }}
+                    title="在右侧面板跟随这次运行的事件流（在跑实时看，已结束可回放）"
+                    className="ml-auto flex shrink-0 cursor-pointer items-center gap-0.5 rounded-chip bg-teal-tint px-1.5 py-px text-[10px] text-teal transition hover:bg-teal hover:text-canvas"
+                  >
+                    监控
+                  </span>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
       {/* 状态化动作带：可换行，按钮/状态一律不内折（窄窗口宁可整枚换行） */}
       <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-line-soft pt-2.5">
+        <button
+          onClick={() => setRunsOpen((v) => !v)}
+          aria-expanded={runsOpen}
+          className={cn(
+            "flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn px-1.5 py-1 text-caption transition",
+            runsOpen ? "bg-line-soft text-ink" : "text-graphite hover:bg-line-soft hover:text-ink",
+          )}
+          title="这条任务每次运行的记录：来源（闲时/手动/心跳）、时间、时长与结果"
+        >
+          <History size={12} />
+          运行历史（{item.runCount}）
+        </button>
         {item.status === "ready" && (
           <button
             onClick={() => void runNow(item.id)}
@@ -493,11 +710,11 @@ function BacklogCard({
 
 /* ------------------------------------------------------------------ 空态 */
 
-function EmptyPanel({ filter, onCreate, config }: { filter: Filter; onCreate: () => void; config: BacklogConfig | null }): ReactElement {
+function EmptyPanel({ onCreate, config }: { onCreate: () => void; config: BacklogConfig | null }): ReactElement {
   return (
     <div className="flex flex-col items-center rounded-card border border-line bg-card px-6 py-10 text-center">
       <ListTodo size={16} className="mb-2 text-ash" />
-      <p className="text-body-sm font-medium text-ink">{filter === "active" ? "还没有待办" : `没有「${FILTERS.find((f) => f.id === filter)?.label}」的待办`}</p>
+      <p className="text-body-sm font-medium text-ink">还没有待办</p>
       <p className="mt-1 max-w-[460px] text-body-sm leading-relaxed text-graphite">
         左栏写下的目标会被 routing 沉淀成这里的任务 —— 也可以直接新建，或在每个单元的 GTD.md
         里追加一行，每日统合自动收进清单{config?.consolidate.enabled ? "" : "（统合当前关闭）"}。

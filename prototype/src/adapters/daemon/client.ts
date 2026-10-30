@@ -1928,6 +1928,28 @@ export async function fetchBacklog(endpoint: string = defaultDaemonEndpoint()): 
   return client.rpc<BacklogListResult>("backlog.list", null, 20000);
 }
 
+/** 单条待办的运行历史（推进面板展开区，懒加载） */
+export interface BacklogRunRow {
+  readonly runId: number;
+  readonly sessionId: string | null;
+  readonly status: string;
+  readonly runtimeId: string;
+  /** autopilot（闲时托管）/ manual（手动立即执行）/ gtd（心跳确认后） */
+  readonly trigger: string;
+  readonly startedAt: number;
+  readonly finishedAt: number | null;
+  readonly detail: string | null;
+}
+
+export async function fetchBacklogRuns(
+  id: number,
+  limit = 10,
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<{ runs: readonly BacklogRunRow[] }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ runs: readonly BacklogRunRow[] }>("backlog.runs", { id, limit }, 15000);
+}
+
 export async function createBacklogItem(
   input: BacklogWriteInput,
   endpoint: string = defaultDaemonEndpoint(),
