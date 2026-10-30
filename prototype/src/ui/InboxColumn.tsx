@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactElement } from "react";
-import { FolderOpen, Inbox as InboxIcon, ListTodo, Loader2, MoreHorizontal, Pencil, RefreshCw, Settings2, Trash2 } from "lucide-react";
+import { BellRing, FolderOpen, Inbox as InboxIcon, ListTodo, Loader2, MoreHorizontal, Pencil, RefreshCw, Settings2, Trash2 } from "lucide-react";
 import {
   BUILTIN_CATEGORY_ORDER,
   DEFAULT_INBOX_CATEGORIES,
@@ -8,6 +8,7 @@ import {
   type InboxEntry,
 } from "../core/inbox.ts";
 import { BACKLOG_STATUS_LABEL, formatBacklogRelative, type BacklogStatus } from "../core/backlog.ts";
+import { createReminder, defaultDaemonEndpoint } from "../adapters/daemon/client.ts";
 import { useInbox } from "../store/useInbox.ts";
 import { useBacklog } from "../store/useBacklog.ts";
 import { InboxSettings } from "./InboxSettings.tsx";
@@ -204,6 +205,9 @@ function EntryRow({
   const [catMenuOpen, setCatMenuOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(entry.text);
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [reminderAt, setReminderAt] = useState("");
+  const [reminderBusy, setReminderBusy] = useState(false);
 
   const allCategories = [...DEFAULT_INBOX_CATEGORIES, ...(config?.categories ?? [])];
 
@@ -211,6 +215,30 @@ function EntryRow({
     const t = draft.trim();
     setEditing(false);
     if (t !== "" && t !== entry.text) void updateText(entry.id, t);
+  };
+
+  // 挂提醒（docs/30）：一次性钟控行，链接回这条条目 —— 到点通知点开直达这里
+  const scheduleReminder = (runAt: number): void => {
+    if (reminderBusy) return;
+    setReminderBusy(true);
+    void createReminder({ text: entry.text.slice(0, 200), runAt, link: { kind: "inbox-entry", id: entry.id } }, defaultDaemonEndpoint())
+      .then(() => {
+        useInbox.getState().setNotice({ kind: "success", text: `已挂提醒 · ${new Date(runAt).toLocaleString("zh-CN")}` });
+        setMenuOpen(false);
+        setReminderOpen(false);
+        setReminderAt("");
+      })
+      .catch((err: unknown) => {
+        useInbox.getState().setNotice({ kind: "error", text: `提醒没挂上：${err instanceof Error ? err.message : String(err)}` });
+      })
+      .finally(() => setReminderBusy(false));
+  };
+
+  const tomorrowAt = (hour: number, minute = 0): number => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(hour, minute, 0, 0);
+    return d.getTime();
   };
 
   return (
@@ -325,6 +353,47 @@ function EntryRow({
             <div className="absolute right-0 top-6 z-50 flex w-44 flex-col rounded-card border border-line bg-card p-1 shadow-subtle">
               <MenuRow icon={<Pencil size={12} />} label="编辑" onClick={() => { setMenuOpen(false); setDraft(entry.text); setEditing(true); }} />
               <MenuRow icon={<RefreshCw size={12} />} label="让 routing 重新分类" onClick={() => { setMenuOpen(false); void reclassify(entry.id); }} />
+              <MenuRow icon={<BellRing size={12} />} label="挂提醒" onClick={() => { setReminderOpen((v) => !v); }} />
+              {reminderOpen && (
+                <div className="mx-1 my-1 flex flex-col gap-1 rounded-btn bg-rail px-2 py-2">
+                  <button
+                    onClick={() => scheduleReminder(Date.now() + 15 * 60_000)}
+                    className="rounded-btn px-1.5 py-1 text-left text-caption text-graphite hover:bg-line-soft hover:text-ink"
+                  >
+                    15 分钟后
+                  </button>
+                  <button
+                    onClick={() => scheduleReminder(Date.now() + 60 * 60_000)}
+                    className="rounded-btn px-1.5 py-1 text-left text-caption text-graphite hover:bg-line-soft hover:text-ink"
+                  >
+                    1 小时后
+                  </button>
+                  <button
+                    onClick={() => scheduleReminder(tomorrowAt(9))}
+                    className="rounded-btn px-1.5 py-1 text-left text-caption text-graphite hover:bg-line-soft hover:text-ink"
+                  >
+                    明天 09:00
+                  </button>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="datetime-local"
+                      value={reminderAt}
+                      onChange={(e) => setReminderAt(e.target.value)}
+                      className="min-w-0 flex-1 rounded-input border border-transparent bg-card px-1.5 py-1 text-[11px] text-ink outline-none focus:border-teal"
+                    />
+                    <button
+                      onClick={() => {
+                        const t = new Date(reminderAt).getTime();
+                        if (Number.isFinite(t) && t > Date.now()) scheduleReminder(t);
+                      }}
+                      disabled={reminderBusy || reminderAt.trim() === ""}
+                      className="shrink-0 rounded-btn bg-ink px-2 py-1 text-[11px] text-canvas disabled:opacity-40"
+                    >
+                      {reminderBusy ? <Loader2 size={10} className="animate-spin" /> : "挂"}
+                    </button>
+                  </div>
+                </div>
+              )}
               {entry.task !== null && (
                 <MenuRow icon={<FolderOpen size={12} />} label="定位任务（右栏）" onClick={() => { setMenuOpen(false); onJumpToTask(entry.task!.id); }} />
               )}

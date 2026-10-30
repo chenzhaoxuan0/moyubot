@@ -14,7 +14,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
-import type { DispatchTarget, LaunchMode, ScheduleRule } from "../../../prototype/src/core/automation.ts";
+import type { AutomationLink, DispatchTarget, LaunchMode, ScheduleRule } from "../../../prototype/src/core/automation.ts";
 import type { BacklogStatus } from "../../../prototype/src/core/backlog.ts";
 import type { InboxEntry, InboxHints, InboxStatus } from "../../../prototype/src/core/inbox.ts";
 import { normalizeInboxHints } from "../../../prototype/src/core/inbox.ts";
@@ -356,6 +356,9 @@ export class Store {
       // 来源：manual = 用户手建；quota_resume = 用量耗尽后自动排的续跑。
       // 自动排的那条要去重（同一窗口只排一条），这个标记就是去重的凭据。
       `ALTER TABLE automations ADD COLUMN origin TEXT`,
+      // notify 载荷（提醒）的深链目标 JSON（AutomationLink）—— 提醒通知点开
+      // 直达清单条目/待办卡片。任务载荷不用它，NULL。
+      `ALTER TABLE automations ADD COLUMN link_json TEXT`,
       // 会话来源（workbench/feishu/mobile/automation…）：历史列表的来源标签用。
       // 旧行 NULL 按工作台读（产品初期只有工作台一个入口）
       `ALTER TABLE sessions ADD COLUMN source TEXT`,
@@ -586,6 +589,18 @@ export class Store {
 
   // ---- 自动化（Phase 5，v2 调度状态机）---------------------------------------
 
+  /** link_json 反序列化：坏 JSON / 脏形状按 null 读，不掀列表（同 scheduleRule 的口径） */
+  private parseLink(raw: unknown): AutomationLink | null {
+    if (typeof raw !== "string" || raw === "") return null;
+    try {
+      const v = JSON.parse(raw) as { kind?: unknown; id?: unknown };
+      if ((v.kind !== "inbox-entry" && v.kind !== "backlog-item") || typeof v.id !== "number" || !Number.isFinite(v.id)) return null;
+      return { kind: v.kind, id: v.id };
+    } catch {
+      return null;
+    }
+  }
+
   /** automations 行的读取形态。scheduleRule 为调度权威（共享引擎的规则对象）。 */
   automationRow(r: Record<string, unknown>): ReturnType<Store["listAutomations"]>[number] {
     let rule: ScheduleRule | null = null;
@@ -620,9 +635,10 @@ export class Store {
       lastErrorAt: r["last_error_at"] === null || r["last_error_at"] === undefined ? null : Number(r["last_error_at"]),
       launchMode: r["launch_mode"] === "headless" || r["launch_mode"] === "chat" ? r["launch_mode"] : "terminal",
       // 旧行 dispatch_target 为 NULL —— 按 new_session 读，保持 v2 行为不变
-      dispatchTarget: r["dispatch_target"] === "existing_session" ? "existing_session" : "new_session",
+      dispatchTarget: r["dispatch_target"] === "existing_session" ? "existing_session" : r["dispatch_target"] === "notify" ? "notify" : "new_session",
       targetSessionId: r["target_session_id"] === null || r["target_session_id"] === undefined ? null : String(r["target_session_id"]),
-      origin: r["origin"] === "quota_resume" ? "quota_resume" : "manual",
+      origin: r["origin"] === "quota_resume" ? "quota_resume" : r["origin"] === "reminder" ? "reminder" : "manual",
+      link: this.parseLink(r["link_json"]),
       createdAt: Number(r["created_at"]),
     };
   }
@@ -644,14 +660,15 @@ export class Store {
     launchMode: LaunchMode;
     dispatchTarget?: DispatchTarget;
     targetSessionId?: string | null;
-    origin?: "manual" | "quota_resume";
+    origin?: "manual" | "quota_resume" | "reminder";
+    link?: AutomationLink | null;
   }): number {
     const result = this.db
       .prepare(
         `INSERT INTO automations (unit_id, unit_name, name, runtime_id, root_path, prompt, model, mode, cron,
            schedule_rule, recurring, max_runs, run_count, next_run_at, enabled, created_at, launch_mode,
-           dispatch_target, target_session_id, origin)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1, ?, ?, ?, ?, ?)`,
+           dispatch_target, target_session_id, origin, link_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 1, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         a.unitId,
@@ -672,6 +689,7 @@ export class Store {
         a.dispatchTarget ?? "new_session",
         a.targetSessionId ?? null,
         a.origin ?? "manual",
+        a.link === undefined || a.link === null ? null : JSON.stringify(a.link),
       );
     return Number(result.lastInsertRowid);
   }
@@ -699,7 +717,8 @@ export class Store {
     launchMode: LaunchMode;
     dispatchTarget: DispatchTarget;
     targetSessionId: string | null;
-    origin: "manual" | "quota_resume";
+    origin: "manual" | "quota_resume" | "reminder";
+    link: AutomationLink | null;
     createdAt: number;
   }> {
     const rows = this.db.prepare(`SELECT * FROM automations ORDER BY id DESC`).all() as Array<Record<string, unknown>>;

@@ -1379,10 +1379,12 @@ export interface DaemonAutomation {
   readonly lastErrorAt: number | null;
   /** 执行方式三形态（terminal / chat / headless，语义见 core/automation.ts 的 LaunchMode）。旧行缺省按 terminal 读 */
   readonly launchMode?: "terminal" | "chat" | "headless";
-  /** 到点把消息投到哪里。旧行缺省 = new_session */
-  readonly dispatchTarget?: "new_session" | "existing_session";
+  /** 到点把消息投到哪里。notify = 提醒（不拉会话）。旧行缺省 = new_session */
+  readonly dispatchTarget?: "new_session" | "existing_session" | "notify";
   readonly targetSessionId?: string | null;
-  readonly origin?: "manual" | "quota_resume";
+  /** notify 载荷的深链目标（{kind, id}） */
+  readonly link?: { readonly kind: "inbox-entry" | "backlog-item"; readonly id: number } | null;
+  readonly origin?: "manual" | "quota_resume" | "reminder";
   readonly createdAt: number;
   readonly runs: readonly DaemonAutomationRun[];
 }
@@ -1452,9 +1454,10 @@ export function daemonAutomationToAutomation(a: DaemonAutomation): Automation {
     cron: a.cron,
     scheduleSource: a.scheduleRule === null ? "cron" : "rule",
     launchMode: a.launchMode === "headless" || a.launchMode === "chat" ? a.launchMode : "terminal",
-    dispatchTarget: a.dispatchTarget === "existing_session" ? "existing_session" : "new_session",
+    dispatchTarget: a.dispatchTarget === "existing_session" ? "existing_session" : a.dispatchTarget === "notify" ? "notify" : "new_session",
     targetSessionId: a.targetSessionId ?? null,
-    origin: a.origin === "quota_resume" ? "quota_resume" : "manual",
+    link: a.link ?? null,
+    origin: a.origin === "quota_resume" ? "quota_resume" : a.origin === "reminder" ? "reminder" : "manual",
     nextRunAt: a.nextRunAt ?? undefined,
     lastFailure: a.lastError === null ? undefined : { at: a.lastErrorAt ?? a.createdAt, reason: a.lastError },
   };
@@ -1471,13 +1474,15 @@ export interface DaemonNotificationRow {
   readonly id: string;
   readonly at: number;
   readonly level: "info" | "ok" | "warn" | "loss";
-  readonly kind: "session" | "permission" | "error" | "notice" | "steer" | "deliverable" | "backlog" | "git";
+  readonly kind: "session" | "permission" | "error" | "notice" | "steer" | "deliverable" | "backlog" | "git" | "reminder";
   readonly title: string;
   readonly text: string;
   /** SessionSource 原始值（客户端渲染徽标） */
   readonly source?: string;
   readonly sessionId?: string;
   readonly backlog?: boolean;
+  /** 提醒深链（kind=reminder）：{kind: "inbox-entry"|"backlog-item", id} */
+  readonly link?: { readonly kind: "inbox-entry" | "backlog-item"; readonly id: number };
 }
 
 export async function fetchNotifications(endpoint: string = defaultDaemonEndpoint()): Promise<DaemonNotificationRow[]> {
@@ -1892,6 +1897,25 @@ export async function runAutomationNow(
 }
 
 // ---------------------------------------------------------------------------
+// 提醒（reminder）—— 钟控轴 notify 载荷（docs/30）：到点扇出通知不拉会话，
+// 错过补发。行落在 automations 表（origin=reminder），卡片在自动化页。
+// ---------------------------------------------------------------------------
+
+export async function createReminder(
+  input: {
+    text: string;
+    /** epoch ms（与 delayMinutes 二选一） */
+    runAt?: number;
+    delayMinutes?: number;
+    link?: { kind: "inbox-entry" | "backlog-item"; id: number };
+  },
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<{ id: number; nextRunAt: number }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ id: number; nextRunAt: number }>("reminder.create", input, 15000);
+}
+
+// ---------------------------------------------------------------------------
 // 待办 / GTD（backlog）—— 清单 CRUD / 确认门 / 验收 / 心跳配置 / 余量。
 // daemon 返回的形态与 core/backlog.ts 一致（engine.toItem 直出），直接透传。
 // ---------------------------------------------------------------------------
@@ -2076,7 +2100,7 @@ export async function fetchInbox(endpoint: string = defaultDaemonEndpoint()): Pr
 }
 
 export async function addInboxEntry(
-  input: { text: string; category?: string | null; hints?: InboxHints },
+  input: { text: string; category?: string | null; hints?: InboxHints; reminderAt?: number },
   endpoint: string = defaultDaemonEndpoint(),
 ): Promise<{ id: number; entry: InboxEntry | null }> {
   const client = DaemonClient.get(endpoint);

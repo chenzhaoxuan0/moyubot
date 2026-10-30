@@ -52,10 +52,21 @@ export type RunStatus = "idle" | "running" | "completed" | "failed" | "paused";
  * - `new_session`：新开一个会话把 prompt 当首轮发出去（历史行为，缺省）
  * - `existing_session`：往 `targetSessionId` 那个已有对话里续发一条消息 ——
  *   会话死了先 resume 再发，上下文原地接上，不重开对话。
+ * - `notify`：不拉会话不烧额度 —— 载荷是「提醒」，收件人是人：到点扇出
+ *   应用内通知行 + 桌面 toast + IM（docs/30）。与 origin=reminder 搭配使用。
  *
- * 这就是「定时发送」的全部口径：新对话还是老对话，二选一。
+ * 这就是「定时发送」的全部口径：新对话、老对话、还是提醒人，三选一。
  */
-export type DispatchTarget = "new_session" | "existing_session";
+export type DispatchTarget = "new_session" | "existing_session" | "notify";
+
+/**
+ * notify 载荷（提醒）的深链目标 —— 提醒通知原样携带，前端点开直达清单条目 /
+ * 待办卡片（useTaskJump 锚点）。任务载荷用不上它，null 即可。
+ */
+export interface AutomationLink {
+  readonly kind: "inbox-entry" | "backlog-item";
+  readonly id: number;
+}
 
 /**
  * 执行方式三形态（自动化与待办共用；docs/23）：
@@ -111,11 +122,15 @@ export interface Automation {
   readonly dispatchTarget?: DispatchTarget;
   /** dispatchTarget=existing_session 时的收件对话 id */
   readonly targetSessionId?: string | null;
+  /** dispatchTarget=notify（提醒）时的通知深链目标 */
+  readonly link?: AutomationLink | null;
   /**
-   * 这条自动化是哪来的：manual = 用户手建；quota_resume = 用量耗尽自动排的续跑。
+   * 这条自动化是哪来的：manual = 用户手建；quota_resume = 用量耗尽自动排的续跑；
+   * reminder = 提醒（notify 载荷的一次性行，错过补发而非跳过 —— 语义分野见
+   * scheduler 的 misfire 分支）。
    * 自动排的那条要在卡片上说明白「为什么会有这条」，否则用户以为是自己建的。
    */
-  readonly origin?: "manual" | "quota_resume";
+  readonly origin?: "manual" | "quota_resume" | "reminder";
   /** 调度权威来源：rule = scheduleRule；cron = 纯 cron 行（表单的规则还原能力有限，不能拿来改写它） */
   readonly scheduleSource?: "rule" | "cron";
   /**

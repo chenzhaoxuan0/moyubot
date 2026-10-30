@@ -192,6 +192,11 @@ export const METHOD_META: Record<string, MethodMeta> = {
   "automation.setEnabled": { description: "启停定时任务", paramsHint: "{id, enabled}" },
   "automation.delete": { description: "删除定时任务", paramsHint: "{id}" },
   "automation.runNow": { description: "立即跑一次定时任务（runId + sessionId，终态回灌运行记录）", paramsHint: "{id}" },
+  // ---- 提醒（reminder）—— 钟控轴 notify 载荷（docs/30）-------------------------
+  "reminder.create": {
+    description: "挂一条提醒：到点扇出应用内通知+桌面 toast+IM（不拉会话不烧额度）；错过补发不跳过；runAt/delayMinutes 二选一；link 深链到清单条目或待办卡片",
+    paramsHint: "{text, runAt?|delayMinutes?, link?:{kind, id}}",
+  },
 
   // ---- 记忆 / 上下文 ------------------------------------------------------------
   "memory.save": { description: "写一条记忆（三柱 semantic/episodic/procedural 之一）并广播" },

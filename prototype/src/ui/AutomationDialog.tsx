@@ -250,7 +250,11 @@ export function AutomationDialog({
   const [mode, setMode] = useState(initial?.mode ?? "");
   // 新建默认「对话页」；编辑沿用定义行的值（旧行缺省按 terminal 读，映射层已归一）
   const [launchMode, setLaunchMode] = useState<"terminal" | "chat" | "headless">(initial?.launchMode ?? "chat");
-  const [dispatchTarget, setDispatchTarget] = useState<DispatchTarget>(initial?.dispatchTarget === "existing_session" ? "existing_session" : "new_session");
+  // 对话框只能表达两种投递目标：notify（提醒）不经这里建 —— 提醒有专属入口
+  // （reminder.create），编辑提醒行时也按 new_session 兜底展示
+  const [dispatchTarget, setDispatchTarget] = useState<"new_session" | "existing_session">(
+    initial?.dispatchTarget === "existing_session" ? "existing_session" : "new_session",
+  );
   /** 定时发送的收件对话：空串 = 发火时自动挑最近一个能接回来的 */
   const [targetSessionId, setTargetSessionId] = useState<string>(initial?.targetSessionId ?? "");
   const [resumable, setResumable] = useState<readonly ResumableSession[]>([]);

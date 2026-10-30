@@ -18,6 +18,7 @@ import type { NotificationKind, NotificationLevel, WorkbenchNotification } from 
 import { sessionTargetOf, useNotifications } from "../store/useNotifications.ts";
 import { useShell } from "../store/useShell.ts";
 import { useSidePane } from "../store/useSidePane.ts";
+import { useTaskJump } from "../store/useTaskJump.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import type { UnitId } from "../core/units.ts";
 import { cn } from "./cn.ts";
@@ -41,6 +42,7 @@ const KIND_ICON: Record<NotificationKind, typeof Bell> = {
   deliverable: Package,
   backlog: ListTodo,
   git: GitBranch,
+  reminder: BellRing,
 };
 
 const LEVEL_CLS: Record<NotificationLevel, string> = {
@@ -169,10 +171,18 @@ function NotificationRow({ n }: { n: WorkbenchNotification }): ReactElement {
   );
 }
 
-/** 行点击的跳转目标：有会话归属 → 实时监控回放；待办提议 → 待办视图 */
+/** 行点击的跳转目标：提醒深链 → 清单页滚到条目/卡片；有会话归属 → 实时监控回放；待办提议 → 待办视图 */
 function useNotificationJump(n: WorkbenchNotification): (() => void) | null {
   const selectUnit = useWorkbench((s) => s.selectUnit);
   return useMemo(() => {
+    // 提醒深链（docs/30）：通知把人送回那条清单条目 / 待办卡片 —— 「送回」必须
+    // 走完最后一步，只切页面不滚动等于送了一半
+    if (n.kind === "reminder" && n.link !== undefined) {
+      return () => {
+        useShell.getState().setMainView("backlog");
+        useTaskJump.getState().jump({ kind: n.link!.kind === "backlog-item" ? "backlog" : "inbox", id: n.link!.id });
+      };
+    }
     if (n.backlog === true) {
       return () => useShell.getState().setMainView("backlog");
     }
@@ -191,5 +201,5 @@ function useNotificationJump(n: WorkbenchNotification): (() => void) | null {
         title: target.title !== "" ? target.title : n.title,
       });
     };
-  }, [n.backlog, n.sessionId, n.title, selectUnit]);
+  }, [n.kind, n.link, n.backlog, n.sessionId, n.title, selectUnit]);
 }

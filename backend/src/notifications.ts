@@ -18,6 +18,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RuntimeEvent } from "./contract.ts";
 import type { BacklogSignal } from "../../prototype/src/core/backlog.ts";
+import type { AutomationLink } from "../../prototype/src/core/automation.ts";
 import { SESSION_SOURCE_LABEL } from "../../prototype/src/core/units.ts";
 import { log } from "./log.ts";
 
@@ -26,13 +27,15 @@ export interface NotificationRow {
   readonly id: string;
   readonly at: number;
   readonly level: "info" | "ok" | "warn" | "loss";
-  readonly kind: "session" | "permission" | "error" | "notice" | "steer" | "deliverable" | "backlog" | "git";
+  readonly kind: "session" | "permission" | "error" | "notice" | "steer" | "deliverable" | "backlog" | "git" | "reminder";
   readonly title: string;
   readonly text: string;
   /** 会话来源（SessionSource 原始值；客户端渲染徽标） */
   readonly source?: string;
   readonly sessionId?: string;
   readonly backlog?: boolean;
+  /** 提醒深链（kind=reminder）：点开直达清单条目 / 待办卡片 */
+  readonly link?: AutomationLink;
 }
 
 const MAX_ROWS = 100;
@@ -267,6 +270,23 @@ export class NotificationsService {
       kind: "git",
       title: "仓库有新改动",
       text: name,
+    });
+  }
+
+  /**
+   * 定点推送（钟控轴 notify 载荷 / 主管日报这类「给人看」的高信号通知）：
+   * 应用内账本一行 + 实时推送。自然键由调用方给（如 rem:{automationId}）——
+   * 同一来源重复发火原位刷新，不给铃铛叠一摞同一件事。
+   * 桌面 toast / IM 的扇出在 index 的 notifyUser。
+   */
+  notifyPush(key: string, title: string, text: string, link: AutomationLink | null): void {
+    this.#upsert({
+      id: key,
+      level: "info",
+      kind: "reminder",
+      title,
+      text: clip(text),
+      ...(link === null ? {} : { link }),
     });
   }
 

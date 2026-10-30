@@ -28,7 +28,14 @@ export type NotificationKind =
   | "steer"
   | "deliverable"
   | "backlog"
-  | "git";
+  | "git"
+  | "reminder";
+
+/** 提醒深链目标（与 daemon AutomationLink 同形）：点开直达清单条目 / 待办卡片 */
+export interface NotificationLink {
+  readonly kind: "inbox-entry" | "backlog-item";
+  readonly id: number;
+}
 
 export interface WorkbenchNotification {
   /** 自然键（去重口径），如 `end:s1` / `git:C:/repo` */
@@ -44,6 +51,8 @@ export interface WorkbenchNotification {
   readonly sessionId?: string;
   /** 待办提议跳待办视图 */
   readonly backlog?: boolean;
+  /** 提醒深链（kind=reminder）：点开滚到清单条目 / 待办卡片 */
+  readonly link?: NotificationLink;
   readonly read: boolean;
 }
 
@@ -138,6 +147,16 @@ function stillWatching(sessionId: string | undefined): boolean {
   return sessionId !== undefined && String(useWorkbench.getState().activeSessionId ?? "") === sessionId;
 }
 
+/** Electron 桌面 toast（preload 暴露；Web 模式没有这个方法，自然降级为仅应用内） */
+function desktopToast(title: string, body: string): void {
+  const api = (window as unknown as { electronAPI?: { notifyDesktop?: (o: { title: string; body: string }) => void } }).electronAPI;
+  try {
+    api?.notifyDesktop?.({ title, body });
+  } catch {
+    /* 桥抖一下不影响应用内通知 */
+  }
+}
+
 function insertRow(row: DaemonNotificationRow): void {
   const line = clearedAt();
   if (row.at <= line) return;
@@ -148,6 +167,9 @@ function insertRow(row: DaemonNotificationRow): void {
   } else if ((row.kind === "permission" || row.kind === "error") && stillWatching(row.sessionId)) {
     return;
   }
+  // 提醒是用户亲手挂的（高信号、预期中）—— 强通道：应用内行之外再发桌面 toast。
+  // 系统推断类通知不走这里（打断预算原则，docs/30）
+  if (row.kind === "reminder") desktopToast(row.title, row.text);
   const source = row.source as SessionSource | undefined;
   const item: WorkbenchNotification = {
     id: row.id,
@@ -159,6 +181,7 @@ function insertRow(row: DaemonNotificationRow): void {
     sourceLabel: source !== undefined ? (SESSION_SOURCE_LABEL[source] ?? source) : undefined,
     sessionId: row.sessionId,
     backlog: row.backlog,
+    link: row.link,
     read: readSet().has(row.id),
   };
   useNotifications.setState((s) => {

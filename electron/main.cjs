@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, net, protocol, shell, ipcMain, Menu, nativeImage, nativeTheme, Tray } = require("electron");
+const { app, BrowserWindow, dialog, net, protocol, shell, ipcMain, Menu, nativeImage, nativeTheme, Notification, Tray } = require("electron");
 const path = require("path");
 const os = require("os");
 const { fork } = require("node:child_process");
@@ -312,6 +312,40 @@ ipcMain.handle("shell:open-path", async (_event, path) => {
 ipcMain.handle("shell:show-item-in-folder", (_event, path) => {
   if (typeof path !== "string" || path.trim() === "") return;
   shell.showItemInFolder(path);
+});
+
+/**
+ * 桌面系统通知（提醒的强通道，docs/30）：渲染端收到 kind=reminder 的
+ * notifications 帧时代发 —— daemon 在主进程外，自己弹不了系统 toast。
+ * 优先 Electron Notification（Windows toast / macOS 通知中心），不支持时
+ * 回落托盘气泡（Windows）。点击 toast 聚焦主窗口：深链导航由渲染层的
+ * 通知中心行点击完成，toast 本身只负责「把你拉回来」。
+ */
+ipcMain.handle("notify:desktop", (_event, opts) => {
+  const o = opts !== null && typeof opts === "object" ? opts : {};
+  const title = typeof o.title === "string" && o.title !== "" ? o.title : "MoyuBot";
+  const body = typeof o.body === "string" ? o.body : "";
+  try {
+    if (Notification.isSupported()) {
+      const n = new Notification({ title, body });
+      n.on("click", () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      });
+      n.show();
+      return true;
+    }
+    if (tray !== null && process.platform === "win32" && typeof tray.displayBalloon === "function") {
+      tray.displayBalloon({ title, content: body });
+      return true;
+    }
+  } catch {
+    /* 弹不出来不影响应用内通知 */
+  }
+  return false;
 });
 
 ipcMain.handle("dialog:pick-directory", (_event, opts) => {

@@ -74,6 +74,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
     showItemInFolder: (path) => ipcRenderer.invoke("shell:show-item-in-folder", path),
   },
   /**
+   * 桌面系统通知（提醒的强通道，docs/30）：渲染端收到 kind=reminder 的
+   * notifications 帧时调用。主进程用 Electron Notification（Windows toast），
+   * 不支持时回落托盘气泡。纯浏览器访问时本方法不存在，自然降级为仅应用内。
+   */
+  notifyDesktop: (opts) => ipcRenderer.invoke("notify:desktop", opts),
+  /**
    * 前端自绘窗口控制按钮（WindowControls.tsx）的通道。
    * 纯浏览器访问时整块 electronAPI 不存在，组件自行隐藏。
    */

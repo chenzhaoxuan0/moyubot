@@ -20,6 +20,7 @@ export function InboxComposer(): ReactElement {
   const [text, setText] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [hints, setHints] = useState<InboxHints>({});
+  const [reminderAt, setReminderAt] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   const runtimeIds = useMemo(() => runtimes.map((r) => r.id.replace(/^daemon:/, "")), [runtimes]);
@@ -28,13 +29,17 @@ export function InboxComposer(): ReactElement {
   const submit = (): void => {
     const t = text.trim();
     if (t === "" || submitting) return;
+    // datetime-local 字符串 → epoch ms；空串 = 不挂提醒。过去时刻交 daemon 拒
+    // （resolveSchedule 对 runAt 过期直接报错，不静默顺延）
+    const reminderMs = reminderAt.trim() === "" ? undefined : new Date(reminderAt).getTime();
     // daemon 往返期间再按 Enter / 点按钮会重复提交同一段文字 —— 占位挡住
     setSubmitting(true);
-    void add({ text: t, hints: hintsFilled ? hints : undefined })
+    void add({ text: t, hints: hintsFilled ? hints : undefined, ...(Number.isFinite(reminderMs) ? { reminderAt: reminderMs as number } : {}) })
       .then((ok) => {
         if (ok) {
           setText("");
           setHints({});
+          setReminderAt("");
         }
       })
       .finally(() => setSubmitting(false));
@@ -142,8 +147,18 @@ export function InboxComposer(): ReactElement {
               className={cn(inputCls, "font-mono")}
             />
           </HintField>
+          {/* 提醒不是 routing hint（分类器不管它）：到点由钟控轴 notify 载荷独立
+              发通知 —— 应用内 + 桌面 toast + IM，链接回这条原话（docs/30） */}
+          <HintField label="提醒时间（到点通知我，不依赖分类）">
+            <input
+              type="datetime-local"
+              value={reminderAt}
+              onChange={(e) => setReminderAt(e.target.value)}
+              className={inputCls}
+            />
+          </HintField>
           <p className="col-span-2 text-[10px] leading-relaxed text-ash">
-            预置了就照你的来，routing 不改写；空着的由 routing 分类时建议。这些字段沉淀成任务后都能在右栏待办里再改。
+            预置了就照你的来，routing 不改写；空着的由 routing 分类时建议。这些字段沉淀成任务后都能在右栏待办里再改。提醒时间是独立的：到点只是通知你，不会替你执行。
           </p>
         </div>
       )}

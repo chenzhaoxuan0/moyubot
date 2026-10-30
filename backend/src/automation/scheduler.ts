@@ -139,8 +139,12 @@ export class AutomationScheduler {
       }
       if (a.nextRunAt > now) continue;
 
-      // misfire：停机/休眠期间错过的窗口跳过不补跑（调度器的职责是到点起会话，不是补账）
-      if (now - a.nextRunAt > MISFIRE_GRACE_MS) {
+      // misfire：停机/休眠期间错过的窗口跳过不补跑（调度器的职责是到点起会话，不是补账）。
+      // 例外是提醒（notify 载荷，docs/30）：它的载荷是注意力不是副作用 —— 3 点的
+      // 提醒 3:20（电脑唤醒、daemon 复活）送到仍救得了「忘了这件事」，跳过才是违约。
+      // 任务错过=跳过，提醒错过=补发 —— 双轴承诺语义在错过路径上的分野。
+      const isReminder = a.origin === "reminder";
+      if (!isReminder && now - a.nextRunAt > MISFIRE_GRACE_MS) {
         const oneShot = !a.recurring && (a.maxRuns ?? 1) <= 1;
         const forward = oneShot ? null : this.computeNext(a, now);
         this.store.recordSkippedAutomationRun(a.id, a.nextRunAt, "missed: computer_asleep_or_app_not_running");

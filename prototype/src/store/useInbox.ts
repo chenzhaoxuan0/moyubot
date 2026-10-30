@@ -30,7 +30,7 @@ interface InboxState {
   /** 信号帧入口（main.tsx 里绑定到 DaemonClient.onInboxSignal） */
   handleSignal: (s: InboxSignal) => void;
 
-  add: (input: { text: string; category?: string | null; hints?: import("../core/inbox.ts").InboxHints }) => Promise<boolean>;
+  add: (input: { text: string; category?: string | null; hints?: import("../core/inbox.ts").InboxHints; reminderAt?: number }) => Promise<boolean>;
   updateText: (id: number, text: string) => Promise<boolean>;
   setCategory: (id: number, category: string | null) => Promise<boolean>;
   remove: (id: number) => Promise<void>;

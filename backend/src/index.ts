@@ -94,6 +94,7 @@ import {
   buildRelativeDelaySchedule,
   computeScheduleNextRunAt,
   scheduleRuleToCron,
+  type AutomationLink,
   type LaunchMode,
   type ScheduleRule,
 } from "../../prototype/src/core/automation.ts";
@@ -770,8 +771,9 @@ async function runAutomation(
     model: string | null;
     mode: string | null;
     launchMode: LaunchMode;
-    dispatchTarget?: "new_session" | "existing_session";
+    dispatchTarget?: "new_session" | "existing_session" | "notify";
     targetSessionId?: string | null;
+    link?: AutomationLink | null;
   },
   opts: { trigger: "schedule" | "manual" },
 ): Promise<{ runId: number; sessionId: string }> {
@@ -779,6 +781,25 @@ async function runAutomation(
   // 成功路径默认把 last_error 清空，会把同一次调用里刚写下的说明一起抹掉 ——
   // 所以统一走这个变量，成功时写它而不是 null。
   let dispatchNote: string | null = null;
+
+  // notify 载荷（提醒，docs/30）：收件人是人不是执行器 —— 不拉会话、不烧
+  // 额度、零 LLM，到点只扇出通知（应用内账本 + 桌面 toast + IM）。运行记录
+  // 照写一行 done，让卡片/主管日报看得见这次发火。
+  if (a.dispatchTarget === "notify") {
+    const runId = store.startAutomationRun(a.id, null, opts.trigger);
+    try {
+      notifyUser(a.prompt, { key: `rem:${a.id}`, title: "提醒", link: a.link ?? null });
+      store.finishAutomationRun(runId, "done", "提醒已送达");
+      store.setAutomationError(a.id, null, null);
+      log.info("automation reminder delivered", { automationId: a.id, runId, trigger: opts.trigger });
+      return { runId, sessionId: "" };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      store.finishAutomationRun(runId, "failed", message);
+      store.setAutomationError(a.id, message, Date.now());
+      throw err;
+    }
+  }
 
   // 定时发送到已有对话：不新开会话，把 prompt 当一条消息投进那个对话。
   // 会话多半已经因为用量耗尽而结束 —— resumeSession 把盘里的会话接回执行器
@@ -887,6 +908,29 @@ async function runAutomation(
 }
 
 const scheduler = new AutomationScheduler(store, runAutomation);
+
+/**
+ * 通知扇出（docs/30 的三通道）—— 提醒与主管日报都走这一个口：
+ *   ① 应用内通知账本（notifications 行，WS 实时推）—— 永远有
+ *   ② IM（飞书）—— 待办设置里启用且有 receiveId 才发，失败只记日志
+ *   ③ 桌面 toast —— daemon 发不了，由渲染端收到 notifications 帧后代发
+ *      （Electron 桥在 useNotifications，Web 模式自然降级）
+ * 打断预算原则：这里只服务「用户创建的提醒 / 周期汇报」这类高信号事件，
+ * 系统推断类的弱通知直接走 notifications.recordXxx，不进这里。
+ */
+function notifyUser(text: string, opts: { key?: string; title?: string; link?: AutomationLink | null } = {}): void {
+  notifications.notifyPush(opts.key ?? `push:${text.slice(0, 60)}`, opts.title ?? "提醒", text, opts.link ?? null);
+  const cfg = getBacklogConfig(store);
+  if (!cfg.feishu.enabled || cfg.feishu.receiveId === "") return;
+  void feishuGateway
+    .sendTo(cfg.feishu.botId, cfg.feishu.accountId, cfg.feishu.receiveId, text)
+    .then((r) => {
+      if (!r.ok) log.warn("notifyUser feishu send failed", { detail: r.detail });
+    })
+    .catch((err: unknown) => {
+      log.warn("notifyUser feishu send failed", { error: err instanceof Error ? err.message : String(err) });
+    });
+}
 
 /**
  * 重启自愈 —— 「sessionId → 运行记录」的回灌映射在内存里，daemon 重启即丢。
@@ -1691,13 +1735,13 @@ registerMethod("automation.create", (params) => {
   }
   // 创建上限（默认 20，用户可在自动化页改）：agent 能经 aw CLI 自建定时任务，
   // 没有上限就是递归滥建的下限 —— 到上限就让人工清理再建，或调高上限。
-  // 只数用户自建任务：quota_resume 自动排的一次性续跑不占额度（它们有独立的
-  // 保留策略 —— QuotaResumeWatcher 每跳清理已完结行，每执行器只留最近 5 条）。
-  // 不拆开的话，频繁撞用量墙的执行器每个窗口都永久占一行，额度很快耗尽
+  // 只数用户自建任务：quota_resume 自动排的一次性续跑（每跳清理、每执行器
+  // 留 5 条）与 reminder 提醒行（轻量、发完即终态）都不占额度 —— 不拆开的
+  // 话，频繁撞墙的执行器每个窗口永久占一行、日常挂的提醒把额度吃光。
   const createLimit = getAutomationCreateLimit(store);
-  if (store.listAutomations().filter((a) => a.origin !== "quota_resume").length >= createLimit) {
+  if (store.listAutomations().filter((a) => a.origin === "manual").length >= createLimit) {
     throw Object.assign(
-      new Error(`定时任务已达上限（${createLimit} 条，不含自动排的用量续跑）—— 删掉不需要的再建，或在自动化页调高上限`),
+      new Error(`定时任务已达上限（${createLimit} 条，不含自动排的续跑与提醒）—— 删掉不需要的再建，或在自动化页调高上限`),
       { code: "automation_limit_reached" },
     );
   }
@@ -1751,6 +1795,62 @@ registerMethod("automation.create", (params) => {
     // 定时发送到已有对话：目标会话可以留空 —— 发火时按执行器最近一个可 resume 的会话回退
     dispatchTarget: p.dispatchTarget === "existing_session" ? "existing_session" : "new_session",
     targetSessionId: typeof p.targetSessionId === "string" && p.targetSessionId !== "" ? p.targetSessionId : null,
+  });
+  return { id, nextRunAt };
+});
+
+// 提醒（docs/30）：钟控轴的 notify 载荷 —— 一次性、错过**补发**（scheduler 对
+// origin=reminder 绕过 misfire 宽限：任务的迟到无意义，提醒的迟到仍有价值）、
+// 不占创建额度、不烧任何执行器。内部造 automations 行（quotaResume 同款先例），
+// 不暴露 automation.create 的全参数面 —— 提醒只有「一句话 + 什么时候 + 链到哪」。
+registerMethod("reminder.create", (params) => {
+  const p = (params ?? {}) as {
+    text?: string;
+    runAt?: number | null;
+    delayMinutes?: number;
+    link?: { kind?: string; id?: number } | null;
+  };
+  if (typeof p.text !== "string" || p.text.trim() === "") throw badAutomation("text is required");
+  if (typeof p.runAt === "number" && typeof p.delayMinutes === "number") {
+    throw badAutomation("runAt 与 delayMinutes 只能给一个");
+  }
+  const text = p.text.trim().slice(0, 2000);
+  let link: AutomationLink | null = null;
+  if (p.link !== undefined && p.link !== null) {
+    if ((p.link.kind !== "inbox-entry" && p.link.kind !== "backlog-item") || typeof p.link.id !== "number" || !Number.isFinite(p.link.id)) {
+      throw badAutomation("link.kind 只能是 inbox-entry 或 backlog-item，且 id 必填");
+    }
+    // 深链目标必须真实存在 —— 通知点开落空是最差的提醒体验
+    if (p.link.kind === "inbox-entry" && store.listInboxEntries().every((e) => e.id !== p.link!.id)) {
+      throw badAutomation("link 指向的清单条目不存在");
+    }
+    if (p.link.kind === "backlog-item" && store.getBacklogItem(p.link.id) === undefined) {
+      throw badAutomation("link 指向的待办不存在");
+    }
+    link = { kind: p.link.kind, id: p.link.id };
+  }
+  const { cron, rule, nextRunAt } = resolveSchedule({ runAt: p.runAt ?? undefined, delayMinutes: p.delayMinutes });
+  if (nextRunAt === null) throw badAutomation("当前规则推不出任何未来的触发时间");
+  const id = store.createAutomation({
+    // 合成单元（quota:<runtime> 同款口径）：提醒不属于任何工作单元
+    unitId: "reminder",
+    unitName: "提醒",
+    name: `提醒 · ${text.replace(/\s+/g, " ").slice(0, 24)}${text.length > 24 ? "…" : ""}`,
+    runtimeId: "",
+    rootPath: config.homeDir,
+    prompt: text,
+    model: null,
+    mode: null,
+    cron,
+    scheduleRule: rule,
+    recurring: false,
+    maxRuns: 1,
+    nextRunAt,
+    launchMode: "headless",
+    dispatchTarget: "notify",
+    targetSessionId: null,
+    origin: "reminder",
+    link,
   });
   return { id, nextRunAt };
 });
@@ -2918,7 +3018,13 @@ registerMethod("backlog.consolidate.run", (params) => {
 // 提交即收进清单（一分钱不花），分类是 routing 会话的事（自动触发可关）。
 
 registerMethod("inbox.add", (params) => {
-  const p = (params ?? {}) as { text?: string; category?: string | null; hints?: unknown };
+  const p = (params ?? {}) as {
+    text?: string;
+    category?: string | null;
+    hints?: unknown;
+    /** 可选「提醒时间」（epoch ms）：给了就同时挂一条链接本条目的提醒（docs/30） */
+    reminderAt?: number | null;
+  };
   if (typeof p.text !== "string" || p.text.trim() === "") throw badBacklog("text is required");
   // 清单是自由文本入口，但原话会变成分类 prompt 与任务 goal —— 钳住上限
   if (p.text.length > 8000) throw badBacklog("text 超过 8000 字符上限 —— 长内容请拆成多条或直接给到 bot 会话");
@@ -2928,6 +3034,35 @@ registerMethod("inbox.add", (params) => {
   const category = typeof p.category === "string" && p.category.trim() !== "" ? p.category.trim() : null;
   const id = store.createInboxEntry({ text: p.text.trim(), category, hints });
   if (category === null && cfg.autoClassify) inboxClassifier.schedule();
+  // 提醒是独立的一次性钟控行，不依赖分类完成 —— 到点它提醒的是这条原话
+  if (typeof p.reminderAt === "number" && Number.isFinite(p.reminderAt)) {
+    try {
+      store.createAutomation({
+        unitId: "reminder",
+        unitName: "提醒",
+        name: `提醒 · ${p.text.trim().replace(/\s+/g, " ").slice(0, 24)}`,
+        runtimeId: "",
+        rootPath: config.homeDir,
+        prompt: p.text.trim().slice(0, 2000),
+        model: null,
+        mode: null,
+        cron: scheduleRuleToCron(buildAbsoluteSchedule(p.reminderAt)),
+        scheduleRule: buildAbsoluteSchedule(p.reminderAt),
+        recurring: false,
+        maxRuns: 1,
+        nextRunAt: p.reminderAt,
+        launchMode: "headless",
+        dispatchTarget: "notify",
+        targetSessionId: null,
+        origin: "reminder",
+        link: { kind: "inbox-entry", id },
+      });
+    } catch (err: unknown) {
+      // 提醒挂不上不该连累条目入库（条目已建好）：报出来让调用方知道
+      log.warn("inbox.add reminder schedule failed", { entryId: id, error: err instanceof Error ? err.message : String(err) });
+      throw Object.assign(new Error(`条目已存但提醒没挂上：${err instanceof Error ? err.message : String(err)}`), { code: "reminder_failed" });
+    }
+  }
   const entry = store.getInboxEntry(id);
   broadcastInbox(wss, { kind: "entries" } satisfies InboxSignal);
   return { id, entry: entry ?? null };

@@ -812,6 +812,15 @@ function AutomationCard({
               用量续跑
             </span>
           )}
+          {/* 提醒（notify 载荷）：不拉会话不烧额度，到点只发通知；错过补发而非跳过 */}
+          {a.origin === "reminder" && (
+            <span
+              className="shrink-0 whitespace-nowrap rounded-chip bg-teal-tint px-1.5 py-px text-caption text-teal"
+              title="提醒：到点扇出应用内通知 + 桌面 toast + IM，不拉会话；错过会补发（任务错过才是跳过）"
+            >
+              提醒
+            </span>
+          )}
           {/* 执行方式标记：TUI = 到点在前端拉终端；对话页 = 开在聊天页前台；后台 = headless 会话 */}
           <span
             className={cn(
