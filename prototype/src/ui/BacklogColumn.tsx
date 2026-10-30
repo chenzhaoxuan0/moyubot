@@ -69,20 +69,67 @@ const FAILURE_BACKOFF_MS = 10 * 60_000;
 type GroupId = "executing" | "awaiting_review" | "awaiting_confirm" | "ready" | "sleeping" | "draft" | "today_done" | "older_done";
 
 /**
- * 状态分组全量常驻（用户拍板：全部分组都要可见）—— 布局是看板式的固定骨架，
- * 位置可学习：扫一眼就知道哪里有东西、哪里空着。空组不隐藏，显示占位提示；
- * 默认全展开（折叠只是临时收纳动作，不作为初始态）。
+ * 状态分组全量常驻（用户拍板：全部分组都要可见），内容**默认折叠**，顺序可
+ * 自定义——看板式固定骨架 + 个人布局：一眼扫的是「组名 + 计数」这层总览，
+ * 展开哪组、组排什么顺序是用户自己的工作台布局，记在 localStorage。
  */
-const GROUPS: readonly { id: GroupId; label: string; emptyHint: string }[] = [
-  { id: "executing", label: "执行中", emptyHint: "没有正在执行的任务" },
-  { id: "awaiting_review", label: "待验收", emptyHint: "没有待验收的任务" },
-  { id: "awaiting_confirm", label: "待确认", emptyHint: "没有待确认的提议" },
-  { id: "ready", label: "排队", emptyHint: "队列为空" },
-  { id: "sleeping", label: "休眠", emptyHint: "没有休眠的任务" },
-  { id: "draft", label: "草稿", emptyHint: "没有草稿" },
-  { id: "today_done", label: "今日完成", emptyHint: "今天还没有完成的任务" },
-  { id: "older_done", label: "更早完成", emptyHint: "没有更早的完成记录" },
+const GROUP_DEFS: Readonly<Record<GroupId, { label: string; emptyHint: string }>> = {
+  executing: { label: "执行中", emptyHint: "没有正在执行的任务" },
+  awaiting_review: { label: "待验收", emptyHint: "没有待验收的任务" },
+  awaiting_confirm: { label: "待确认", emptyHint: "没有待确认的提议" },
+  ready: { label: "排队", emptyHint: "队列为空" },
+  sleeping: { label: "休眠", emptyHint: "没有休眠的任务" },
+  draft: { label: "草稿", emptyHint: "没有草稿" },
+  today_done: { label: "今日完成", emptyHint: "今天还没有完成的任务" },
+  older_done: { label: "更早完成", emptyHint: "没有更早的完成记录" },
+};
+
+const DEFAULT_GROUP_ORDER: readonly GroupId[] = [
+  "executing",
+  "awaiting_review",
+  "awaiting_confirm",
+  "ready",
+  "sleeping",
+  "draft",
+  "today_done",
+  "older_done",
 ];
+
+const GROUPS_PREFS_KEY = "agent-workbench:worklist-groups-v1";
+
+interface GroupPrefs {
+  readonly order: readonly GroupId[];
+  readonly collapsed: Readonly<Record<string, boolean>>;
+}
+
+/** 坏数据不掀布局：顺序去重补漏（新分组落默认位）、折叠缺省 true */
+function loadGroupPrefs(): GroupPrefs {
+  const collapsed: Record<string, boolean> = Object.fromEntries(DEFAULT_GROUP_ORDER.map((id) => [id, true]));
+  if (typeof window === "undefined") return { order: DEFAULT_GROUP_ORDER, collapsed };
+  try {
+    const raw = window.localStorage.getItem(GROUPS_PREFS_KEY);
+    if (raw === null) return { order: DEFAULT_GROUP_ORDER, collapsed };
+    const p = JSON.parse(raw) as { order?: unknown; collapsed?: unknown };
+    const known = new Set<string>(DEFAULT_GROUP_ORDER);
+    const stored = Array.isArray(p.order) ? p.order.filter((x): x is GroupId => typeof x === "string" && known.has(x)) : [];
+    const seen = new Set(stored);
+    const order = [...stored, ...DEFAULT_GROUP_ORDER.filter((id) => !seen.has(id))];
+    const sc = (p.collapsed ?? {}) as Record<string, unknown>;
+    for (const id of DEFAULT_GROUP_ORDER) if (sc[id] === false) collapsed[id] = false;
+    return { order, collapsed };
+  } catch {
+    return { order: DEFAULT_GROUP_ORDER, collapsed };
+  }
+}
+
+function persistGroupPrefs(p: GroupPrefs): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(GROUPS_PREFS_KEY, JSON.stringify({ order: p.order, collapsed: p.collapsed }));
+  } catch {
+    /* localStorage 不可用（隐私模式）—— 布局退化为本次会话态 */
+  }
+}
 
 function startOfToday(): number {
   const d = new Date();
@@ -97,7 +144,29 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
   const automations = useWorkbench((s) => s.automations);
   const reorder = useBacklog((s) => s.reorder);
 
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // 分组布局（顺序 + 折叠态）：一次读入，变更即持久化 —— 是用户的工作台布局，不是会话态
+  const [groupPrefs, setGroupPrefs] = useState<GroupPrefs>(loadGroupPrefs);
+
+  const toggleGroup = (id: GroupId): void => {
+    const next: GroupPrefs = {
+      order: groupPrefs.order,
+      collapsed: { ...groupPrefs.collapsed, [id]: !(groupPrefs.collapsed[id] ?? true) },
+    };
+    setGroupPrefs(next);
+    persistGroupPrefs(next);
+  };
+
+  const moveGroup = (id: GroupId, dir: -1 | 1): void => {
+    const order = [...groupPrefs.order];
+    const from = order.indexOf(id);
+    const to = from + dir;
+    if (from < 0 || to < 0 || to >= order.length) return;
+    order.splice(to, 0, ...order.splice(from, 1));
+    const next: GroupPrefs = { order, collapsed: groupPrefs.collapsed };
+    setGroupPrefs(next);
+    persistGroupPrefs(next);
+  };
+
   const [confirmingDelete, setConfirmingDelete] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dialog, setDialog] = useState<{ mode: "create" } | { mode: "edit"; item: BacklogItem } | null>(null);
@@ -117,7 +186,7 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
 
   const groups = useMemo(() => {
     const byGroup = new Map<GroupId, BacklogItem[]>();
-    for (const g of GROUPS) byGroup.set(g.id, []);
+    for (const g of DEFAULT_GROUP_ORDER) byGroup.set(g, []);
     for (const i of items) {
       if (i.status === "done") byGroup.get(isTodayDone(i) ? "today_done" : "older_done")!.push(i);
       else if (i.status === "draft") byGroup.get("draft")!.push(i);
@@ -218,57 +287,81 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
 
       {items.length === 0 && <EmptyPanel onCreate={() => setDialog({ mode: "create" })} config={config} />}
 
-      {/* 全量常驻：空组也渲染（占位提示），组位置固定可学习 */}
+      {/* 全量常驻：空组也渲染（展开后见占位提示），顺序与折叠态是用户布局 */}
       <div className="space-y-5">
-        {GROUPS.map((g) => {
-          const list = groups.get(g.id)!;
-          const isCollapsed = collapsed[g.id] ?? false;
+        {groupPrefs.order.map((gid, gi) => {
+          const g = GROUP_DEFS[gid];
+          const list = groups.get(gid)!;
+          const isCollapsed = groupPrefs.collapsed[gid] ?? true;
           return (
-            <section key={g.id}>
-              <h3 className="mb-2 flex items-center gap-2">
+            <section key={gid}>
+              <h3 className="group mb-2 flex items-center gap-2">
                 <button
-                  onClick={() => setCollapsed((c) => ({ ...c, [g.id]: !isCollapsed }))}
+                  onClick={() => toggleGroup(gid)}
                   aria-expanded={!isCollapsed}
                   className="flex items-center gap-1 text-ash hover:text-graphite"
                   aria-label={`${g.label}分组${isCollapsed ? "展开" : "折叠"}`}
                 >
                   {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
                 </button>
-                <span className={cn("text-body-sm font-medium", g.id === "today_done" || g.id === "older_done" ? "text-ash" : "text-ink")}>{g.label}</span>
+                <span className={cn("text-body-sm font-medium", gid === "today_done" || gid === "older_done" ? "text-ash" : "text-ink")}>{g.label}</span>
                 <span className="rounded-chip bg-line-soft px-1.5 py-0.5 text-[10px] text-ash">{list.length}</span>
-                {g.id === "ready" && queueHead !== null && (
+                {gid === "ready" && queueHead !== null && (
                   <span className="rounded-chip bg-teal-tint px-1.5 py-0.5 text-[10px] text-teal" title="空闲且余量够时，下一拍派发的就是它">
                     下一条
                   </span>
                 )}
+                {/* 顺序自定义：悬停浮现的上移/下移（到头禁用） */}
+                <span className="ml-auto flex items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+                  <button
+                    onClick={() => moveGroup(gid, -1)}
+                    disabled={gi === 0}
+                    aria-label={`${g.label}分组上移`}
+                    title="分组上移"
+                    className="rounded-btn p-0.5 text-ash hover:bg-line-soft hover:text-ink disabled:pointer-events-none disabled:opacity-25"
+                  >
+                    <ArrowUp size={11} />
+                  </button>
+                  <button
+                    onClick={() => moveGroup(gid, 1)}
+                    disabled={gi === groupPrefs.order.length - 1}
+                    aria-label={`${g.label}分组下移`}
+                    title="分组下移"
+                    className="rounded-btn p-0.5 text-ash hover:bg-line-soft hover:text-ink disabled:pointer-events-none disabled:opacity-25"
+                  >
+                    <ArrowDown size={11} />
+                  </button>
+                </span>
               </h3>
 
-              {/* 排队组的前置条件行：当前判定（余量轴不承诺 ETA —— 条件可验证，预测是撒谎） */}
-              {g.id === "ready" && (queueHead !== null || allReadyAutoBackoff) && precondition !== null && (
-                <p className="mb-2 rounded-btn bg-rail px-2.5 py-1.5 text-caption text-graphite" title="autopilot 此刻为什么没派发 —— 引擎 20 秒一拍，条件变了下一拍就动">
-                  当前判定：{precondition}
-                </p>
+              {!isCollapsed && (
+                <>
+                  {/* 排队组的前置条件行：当前判定（余量轴不承诺 ETA —— 条件可验证，预测是撒谎） */}
+                  {gid === "ready" && (queueHead !== null || allReadyAutoBackoff) && precondition !== null && (
+                    <p className="mb-2 rounded-btn bg-rail px-2.5 py-1.5 text-caption text-graphite" title="autopilot 此刻为什么没派发 —— 引擎 20 秒一拍，条件变了下一拍就动">
+                      当前判定：{precondition}
+                    </p>
+                  )}
+                  {list.length === 0 ? (
+                    <p className="rounded-btn border border-dashed border-line px-2.5 py-2 text-caption text-ash">{g.emptyHint}</p>
+                  ) : (
+                    <div className="flex flex-col gap-3">
+                      {list.map((item) => (
+                        <BacklogCard
+                          key={item.id}
+                          item={item}
+                          onEdit={() => setDialog({ mode: "edit", item })}
+                          confirmingDelete={confirmingDelete}
+                          setConfirmingDelete={setConfirmingDelete}
+                          onMove={move}
+                          highlighted={highlightId === item.id}
+                          isQueueHead={gid === "ready" && queueHead !== null && queueHead.id === item.id}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
-
-              {!isCollapsed &&
-                (list.length === 0 ? (
-                  <p className="rounded-btn border border-dashed border-line px-2.5 py-2 text-caption text-ash">{g.emptyHint}</p>
-                ) : (
-                  <div className="flex flex-col gap-3">
-                    {list.map((item) => (
-                      <BacklogCard
-                        key={item.id}
-                        item={item}
-                        onEdit={() => setDialog({ mode: "edit", item })}
-                        confirmingDelete={confirmingDelete}
-                        setConfirmingDelete={setConfirmingDelete}
-                        onMove={move}
-                        highlighted={highlightId === item.id}
-                        isQueueHead={g.id === "ready" && queueHead !== null && queueHead.id === item.id}
-                      />
-                    ))}
-                  </div>
-                ))}
             </section>
           );
         })}
