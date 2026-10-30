@@ -110,7 +110,7 @@ export function StatusBand(p: StatusBandProps): ReactElement {
               title={active ? `点掉「${s.label}」过滤` : `只看${s.label}的任务`}
               className={cn(
                 "shrink-0 rounded-chip px-2 py-0.5 transition",
-                active ? `${s.cls} font-medium ring-1 ring-current/30` : n > 0 ? s.cls : "bg-line-soft text-ash",
+                active ? `${s.cls} font-medium ring-1 ring-line` : n > 0 ? s.cls : "bg-line-soft text-ash",
                 n === 0 && !active && "opacity-70",
               )}
             >

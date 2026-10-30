@@ -182,9 +182,14 @@ export function TimelineColumn({ jumpTarget }: { jumpTarget: TaskJumpTarget | nu
     };
   }, []);
 
-  // 深链：跳到条目/任务卡 —— 先展开父块（导航动作，不写偏好），展开重渲后再滚一拍
+  // 深链：跳到条目/任务卡 —— 先展开父块（导航动作，不写偏好），展开/切序重渲后再滚一拍。
+  // inbox 锚点只在时间态存在：队列态收到 inbox 跳转先切回时间态（同样不写偏好）
   useEffect(() => {
     if (jumpTarget === null) return;
+    if (jumpTarget.kind === "inbox" && view.sortMode === "queue") {
+      setView((v) => (v.sortMode === "time" ? v : { ...v, sortMode: "time" }));
+      return; // 等切序重渲后本效果再跑一拍，那时锚点才在 DOM 里
+    }
     if (jumpTarget.kind === "inbox") {
       setExpanded((x) => (x[jumpTarget.id] === true ? x : { ...x, [jumpTarget.id]: true }));
       document.getElementById(`inbox-entry-${jumpTarget.id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
@@ -193,7 +198,7 @@ export function TimelineColumn({ jumpTarget }: { jumpTarget: TaskJumpTarget | nu
       if (parent !== undefined) setExpanded((x) => (x[parent.id] === true ? x : { ...x, [parent.id]: true }));
       document.getElementById(`backlog-card-${jumpTarget.id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
-  }, [jumpTarget, expanded, entries]);
+  }, [jumpTarget, expanded, entries, view.sortMode]);
 
   // ---- 数据组装 ---------------------------------------------------------------
 
@@ -318,9 +323,14 @@ export function TimelineColumn({ jumpTarget }: { jumpTarget: TaskJumpTarget | nu
         onViewPatch={patchView}
         onJumpQueueHead={() => {
           if (queueHead === null) return;
-          // 队列态下任务都在场直接滚；时间态先切队列再滚（下一拍 effect 接力）
-          if (view.sortMode !== "queue") patchView({ sortMode: "queue" });
-          useTaskJump.getState().jump({ kind: "backlog", id: queueHead.id });
+          // 导航不写偏好（时间态下不强行把用户切到队列态存进 localStorage）：
+          // 队列态直接滚到卡；时间态跳队列头任务的父条目（展开+滚动），孤儿则滚卡
+          if (view.sortMode === "queue") {
+            useTaskJump.getState().jump({ kind: "backlog", id: queueHead.id });
+            return;
+          }
+          const src = entryByTaskId.get(queueHead.id);
+          useTaskJump.getState().jump(src !== undefined ? { kind: "inbox", id: src.id } : { kind: "backlog", id: queueHead.id });
         }}
       />
 
@@ -431,12 +441,15 @@ export function TimelineColumn({ jumpTarget }: { jumpTarget: TaskJumpTarget | nu
                           entry={r.entry}
                           nested={nestedOf(r.entry)}
                           expanded={isExpanded(r.entry)}
-                          onToggle={() =>
+                          onToggle={() => {
+                            // 默认展开态（已读语义）在拍子里可能刚变：从 updater 的
+                            // 当前 state 算，不读 render 快照（连点两下不吃陈旧值）
+                            const fallback = (r.entry.classifiedAt ?? r.entry.createdAt) > seenAt;
                             setExpanded((x) => {
-                              const cur = expanded[r.entry.id] !== undefined ? expanded[r.entry.id] : (r.entry.classifiedAt ?? r.entry.createdAt) > seenAt;
+                              const cur = x[r.entry.id] !== undefined ? x[r.entry.id] : fallback;
                               return { ...x, [r.entry.id]: !cur };
-                            })
-                          }
+                            });
+                          }}
                           highlighted={jumpTarget?.kind === "inbox" && jumpTarget.id === r.entry.id}
                           taskHighlightId={jumpTarget?.kind === "backlog" && r.entry.task !== null && r.entry.task.id === jumpTarget.id ? jumpTarget.id : null}
                           confirmingDelete={confirmingDelete}
@@ -498,8 +511,44 @@ function PendingBlock({
   confirmingDelete: number | null;
   setConfirmingDelete: (id: number | null) => void;
 }): ReactElement {
+  const updateText = useInbox((s) => s.updateText);
   const remove = useInbox((s) => s.remove);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(entry.text);
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [reminderInput, setReminderInput] = useState("");
+  const [reminderBusy, setReminderBusy] = useState(false);
+
+  const saveEdit = (): void => {
+    const t = draft.trim();
+    setEditing(false);
+    if (t !== "" && t !== entry.text) void updateText(entry.id, t);
+  };
+
+  // 与 EntryBlock 同款挂提醒（待分类也能挂：提醒不依赖分类完成，docs/30）
+  const scheduleReminder = (runAt: number): void => {
+    if (reminderBusy) return;
+    setReminderBusy(true);
+    void createReminder({ text: entry.text.slice(0, 200), runAt, link: { kind: "inbox-entry", id: entry.id } }, defaultDaemonEndpoint())
+      .then(() => {
+        useInbox.getState().setNotice({ kind: "success", text: `已挂提醒 · ${new Date(runAt).toLocaleString("zh-CN")}` });
+        setMenuOpen(false);
+        setReminderOpen(false);
+        setReminderInput("");
+      })
+      .catch((err: unknown) => {
+        useInbox.getState().setNotice({ kind: "error", text: `提醒没挂上：${err instanceof Error ? err.message : String(err)}` });
+      })
+      .finally(() => setReminderBusy(false));
+  };
+
+  const tomorrowAt = (hour: number, minute = 0): number => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    d.setHours(hour, minute, 0, 0);
+    return d.getTime();
+  };
 
   return (
     <div
@@ -510,7 +559,36 @@ function PendingBlock({
       )}
     >
       <div className="min-w-0 flex-1">
-        <p className="whitespace-pre-wrap break-words text-body-sm leading-relaxed text-ink">{entry.text}</p>
+        {editing ? (
+          <textarea
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                saveEdit();
+              } else if (e.key === "Escape") {
+                setEditing(false);
+                setDraft(entry.text);
+              }
+            }}
+            onBlur={saveEdit}
+            rows={Math.min(6, draft.split(/\r?\n/).length + 1)}
+            className="w-full resize-none rounded-input border border-transparent bg-rail px-2 py-1 text-body-sm leading-relaxed text-ink outline-none focus:border-teal"
+          />
+        ) : (
+          <button
+            onClick={() => {
+              setDraft(entry.text);
+              setEditing(true);
+            }}
+            className="block w-full whitespace-pre-wrap break-words text-left text-body-sm leading-relaxed text-ink hover:text-graphite"
+            title="点击编辑原话"
+          >
+            {entry.text}
+          </button>
+        )}
         <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-caption text-ash">
           <span className={entry.status === "failed" ? "text-loss" : "text-amber-600"}>
             {entry.status === "failed" ? "分类失败 —— 可改分类或重试" : "等 routing 分拣"}
@@ -534,7 +612,40 @@ function PendingBlock({
         {menuOpen && (
           <>
             <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} aria-hidden />
-            <div className="absolute right-0 top-6 z-50 flex w-40 flex-col rounded-card border border-line bg-card p-1 shadow-subtle">
+            <div className="absolute right-0 top-6 z-50 flex w-44 flex-col rounded-card border border-line bg-card p-1 shadow-subtle">
+              <MenuRow icon={<Pencil size={12} />} label="编辑" onClick={() => { setMenuOpen(false); setDraft(entry.text); setEditing(true); }} />
+              <MenuRow icon={<BellRing size={12} />} label="挂提醒" onClick={() => setReminderOpen((v) => !v)} />
+              {reminderOpen && (
+                <div className="mx-1 my-1 flex flex-col gap-1 rounded-btn bg-rail px-2 py-2">
+                  <button onClick={() => scheduleReminder(Date.now() + 15 * 60_000)} className="rounded-btn px-1.5 py-1 text-left text-caption text-graphite hover:bg-line-soft hover:text-ink">
+                    15 分钟后
+                  </button>
+                  <button onClick={() => scheduleReminder(Date.now() + 60 * 60_000)} className="rounded-btn px-1.5 py-1 text-left text-caption text-graphite hover:bg-line-soft hover:text-ink">
+                    1 小时后
+                  </button>
+                  <button onClick={() => scheduleReminder(tomorrowAt(9))} className="rounded-btn px-1.5 py-1 text-left text-caption text-graphite hover:bg-line-soft hover:text-ink">
+                    明天 09:00
+                  </button>
+                  <div className="flex items-center gap-1">
+                    <input
+                      type="datetime-local"
+                      value={reminderInput}
+                      onChange={(e) => setReminderInput(e.target.value)}
+                      className="min-w-0 flex-1 rounded-input border border-transparent bg-card px-1.5 py-1 text-[11px] text-ink outline-none focus:border-teal"
+                    />
+                    <button
+                      onClick={() => {
+                        const t = new Date(reminderInput).getTime();
+                        if (Number.isFinite(t) && t > Date.now()) scheduleReminder(t);
+                      }}
+                      disabled={reminderBusy || reminderInput.trim() === ""}
+                      className="shrink-0 rounded-btn bg-ink px-2 py-1 text-[11px] text-canvas disabled:opacity-40"
+                    >
+                      {reminderBusy ? <Loader2 size={10} className="animate-spin" /> : "挂"}
+                    </button>
+                  </div>
+                </div>
+              )}
               <MenuRow
                 icon={<Trash2 size={12} />}
                 label={confirmingDelete === entry.id ? "确认删除？" : "删除"}
