@@ -171,6 +171,10 @@ export const METHOD_META: Record<string, MethodMeta> = {
   "inbox.config.get": { description: "读清单配置（自动分类开关/分类器执行器/自定义分类）", paramsHint: "null" },
   "inbox.config.set": { description: "以补丁更新清单配置并落盘", paramsHint: "{patch}" },
   "quotaResume.state": { description: "读配额续跑判定快照，只读不触发探测", paramsHint: "null" },
+  // ---- 主管日报（docs/30）—— 只报无人值守的自动活动，无活动即沉默 ---------------
+  "supervisor.config.get": { description: "读主管日报配置（开关与每日发报时刻）", paramsHint: "null" },
+  "supervisor.config.set": { description: "以补丁更新主管日报配置", paramsHint: "{patch}" },
+  "supervisor.report.run": { description: "立即生成一版主管日报（窗口自上次发报收敛；空报告不送达）", paramsHint: "{force:true}" },
   "notifications.list": {
     description: "通知事实源：daemon 聚合的通知行（会话终态/审批/报错/产出/git/待办，自然键去重）；已读与「你不在它面前」是客户端呈现，行里不带 read",
     paramsHint: "{limit?}",

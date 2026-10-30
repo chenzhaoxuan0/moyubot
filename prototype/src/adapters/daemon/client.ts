@@ -1916,6 +1916,37 @@ export async function createReminder(
 }
 
 // ---------------------------------------------------------------------------
+// 主管日报（supervisor，docs/30）—— 只报无人值守的自动活动，无活动即沉默。
+// ---------------------------------------------------------------------------
+
+export interface SupervisorConfigRow {
+  readonly enabled: boolean;
+  /** 每日发报时刻（分钟数，21*60 = 21:00） */
+  readonly atMinutes: number;
+}
+
+export async function fetchSupervisorConfig(endpoint: string = defaultDaemonEndpoint()): Promise<SupervisorConfigRow> {
+  const client = DaemonClient.get(endpoint);
+  const r = await client.rpc<{ config: SupervisorConfigRow }>("supervisor.config.get", null, 15000);
+  return r.config;
+}
+
+export async function saveSupervisorConfig(
+  patch: Partial<SupervisorConfigRow>,
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<SupervisorConfigRow> {
+  const client = DaemonClient.get(endpoint);
+  const r = await client.rpc<{ config: SupervisorConfigRow }>("supervisor.config.set", { patch }, 15000);
+  return r.config;
+}
+
+/** 手动生成一版（设置页预览）；窗口自上次发报收敛，空报告不送达 */
+export async function runSupervisorReport(endpoint: string = defaultDaemonEndpoint()): Promise<{ delivered: boolean; text: string; empty: boolean }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ delivered: boolean; text: string; empty: boolean }>("supervisor.report.run", { force: true }, 30000);
+}
+
+// ---------------------------------------------------------------------------
 // 待办 / GTD（backlog）—— 清单 CRUD / 确认门 / 验收 / 心跳配置 / 余量。
 // daemon 返回的形态与 core/backlog.ts 一致（engine.toItem 直出），直接透传。
 // ---------------------------------------------------------------------------

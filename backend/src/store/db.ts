@@ -876,6 +876,24 @@ export class Store {
     }));
   }
 
+  /** 主管日报用：窗口内的钟控发火（trigger=schedule，升序，含 skipped）——
+   *  手动 runNow 的 manual 行不在报告口径里（用户自己点的自己知道） */
+  listAutomationRunsSince(at: number): Array<{ id: number; automationId: number; sessionId: string | null; status: string; trigger: string; startedAt: number; finishedAt: number | null; detail: string | null }> {
+    const rows = this.db
+      .prepare(`SELECT * FROM automation_runs WHERE started_at >= ? AND trigger = 'schedule' ORDER BY started_at ASC`)
+      .all(at) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: Number(r["id"]),
+      automationId: Number(r["automation_id"]),
+      sessionId: r["session_id"] === null ? null : String(r["session_id"]),
+      status: String(r["status"]),
+      trigger: r["trigger"] === null || r["trigger"] === undefined ? "schedule" : String(r["trigger"]),
+      startedAt: Number(r["started_at"]),
+      finishedAt: r["finished_at"] === null ? null : Number(r["finished_at"]),
+      detail: r["detail"] === null ? null : String(r["detail"]),
+    }));
+  }
+
   // ---- 待办 / GTD（backlog）----------------------------------------------------
 
   private backlogRow(r: Record<string, unknown>): BacklogRow {
@@ -1085,6 +1103,25 @@ export class Store {
   /** 最近的运行引用（卡片与执行中判定共用） */
   latestBacklogRun(itemId: number): ReturnType<Store["listBacklogRuns"]>[number] | undefined {
     return this.listBacklogRuns(itemId, 1)[0];
+  }
+
+  /** 主管日报用：窗口内的闲时托管运行（trigger=autopilot，升序）——
+   *  只取「从未经过用户手」的执行，manual/gtd 不在报告口径里 */
+  listBacklogRunsSince(at: number): Array<ReturnType<Store["listBacklogRuns"]>[number]> {
+    const rows = this.db
+      .prepare(`SELECT * FROM backlog_runs WHERE started_at >= ? AND trigger = 'autopilot' ORDER BY started_at ASC`)
+      .all(at) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: Number(r["id"]),
+      itemId: Number(r["item_id"]),
+      sessionId: r["session_id"] === null || r["session_id"] === undefined ? null : String(r["session_id"]),
+      runtimeId: String(r["runtime_id"]),
+      status: String(r["status"]),
+      trigger: String(r["trigger"] ?? "gtd"),
+      startedAt: Number(r["started_at"]),
+      finishedAt: r["finished_at"] === null || r["finished_at"] === undefined ? null : Number(r["finished_at"]),
+      detail: r["detail"] === null || r["detail"] === undefined ? null : String(r["detail"]),
+    }));
   }
 
   /** 该条目的历史运行总次数（推进面板「跑过 N 次」——一行 COUNT，不值当 LIMIT 全取） */

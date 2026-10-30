@@ -86,6 +86,7 @@ import {
 import { ExecutorUpdatesChecker } from "./runtime/updates.ts";
 import { AutomationScheduler } from "./automation/scheduler.ts";
 import { QuotaResumeWatcher } from "./automation/quotaResume.ts";
+import { SupervisorWatcher, getSupervisorConfig, setSupervisorConfig } from "./automation/supervisor.ts";
 import { getAutomationCreateLimit, setAutomationCreateLimit } from "./automation/limits.ts";
 import { QuotaProbe } from "./backlog/probe.ts";
 import { cronNextAt, parseCron } from "./automation/cron.ts";
@@ -1000,6 +1001,14 @@ const quotaResumeWatcher = new QuotaResumeWatcher({
   getConfig: () => getBacklogConfig(store),
 });
 quotaResumeWatcher.start();
+
+// 主管日报（docs/30）：只报无人值守的自动活动，无活动即沉默。
+// 送达走 notifyUser（应用内 + IM）；数据列举全确定性（零 LLM）。
+const supervisor = new SupervisorWatcher({
+  store,
+  notify: (text, dayKey) => notifyUser(text, { key: dayKey, title: "主管日报" }),
+});
+supervisor.start();
 
 // 凭证保险库（Credential Vault）：管理微信等扫码产生的动态敏感令牌
 const credentialVault = new CredentialVault(config.homeDir);
@@ -2992,6 +3001,26 @@ registerMethod("quotaResume.state", () => {
   return { enabled: cfg.quotaResume.enabled, config: cfg.quotaResume, states: quotaResumeWatcher.snapshot() };
 });
 
+// ---- 主管日报（docs/30）：只报无人值守的自动活动 -------------------------------
+
+registerMethod("supervisor.config.get", () => {
+  return { config: getSupervisorConfig(store) };
+});
+
+registerMethod("supervisor.config.set", (params) => {
+  const p = (params ?? {}) as { patch?: unknown };
+  return { config: setSupervisorConfig(store, p.patch) };
+});
+
+/** 手动生成（设置页预览 / 冒烟）：窗口从上次发报时刻起收敛，连按不重复唱票；
+ *  空报告返回但不送达（无活动即沉默的口径 force 也守） */
+registerMethod("supervisor.report.run", (params) => {
+  const p = (params ?? {}) as { force?: boolean };
+  if (p.force !== true) throw Object.assign(new Error("只支持 force=true 的手动生成"), { code: "bad_params" });
+  const r = supervisor.runNow();
+  return { delivered: r.delivered, text: r.text, summary: r.report.summary, empty: r.report.empty };
+});
+
 registerMethod("backlog.state.forceBusy", (params) => {
   const p = (params ?? {}) as { on?: boolean };
   if (typeof p.on !== "boolean") throw badBacklog("on is required");
@@ -4650,6 +4679,7 @@ async function shutdown(signal: string): Promise<void> {
   log.info("shutting down", { signal });
   scheduler.stop();
   quotaResumeWatcher.stop();
+  supervisor.stop();
   gitWatcher.stop();
   backlogEngine?.stop();
   memoryScheduler?.stop(); // 之前漏了：60s interval 会活到 process.exit，正在跑的日报/curator 被从中间砍断

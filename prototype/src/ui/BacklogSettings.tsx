@@ -1,6 +1,8 @@
-import { useState, type ReactElement } from "react";
-import { HeartPulse, RefreshCw, Settings2, Zap } from "lucide-react";
+import { useEffect, useState, type ReactElement } from "react";
+import { ClipboardList, HeartPulse, RefreshCw, Settings2, Zap } from "lucide-react";
 import type { BacklogConfig } from "../core/backlog.ts";
+import { fetchSupervisorConfig, runSupervisorReport, saveSupervisorConfig, type SupervisorConfigRow } from "../adapters/daemon/client.ts";
+import { defaultDaemonEndpoint } from "../adapters/daemon/client.ts";
 import { useBacklog } from "../store/useBacklog.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { ModelSelect } from "./ModelSelect.tsx";
@@ -225,6 +227,9 @@ export function BacklogSettings({ onClose }: { onClose: () => void }): ReactElem
             </p>
           </section>
 
+          {/* 主管日报（docs/30）：只报无人值守的自动活动，无活动即沉默 */}
+          <SupervisorSection />
+
           {/* 统合与飞书 */}
           <section className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
@@ -289,5 +294,91 @@ export function BacklogSettings({ onClose }: { onClose: () => void }): ReactElem
         </div>
       </div>
     </div>
+  );
+}
+
+/** 主管日报小节：独立 kv 配置（不走 backlog.config），挂进待办设置弹窗 */
+function SupervisorSection(): ReactElement {
+  const [cfg, setCfg] = useState<SupervisorConfigRow | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void fetchSupervisorConfig(defaultDaemonEndpoint())
+      .then(setCfg)
+      .catch(() => setCfg(null));
+  }, []);
+
+  const save = async (patch: Partial<SupervisorConfigRow>): Promise<void> => {
+    if (cfg === null || busy) return;
+    setBusy(true);
+    try {
+      setCfg(await saveSupervisorConfig(patch, defaultDaemonEndpoint()));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const minutesToClock = (m: number): string => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  const clockToMinutes = (v: string): number => {
+    const parts = v.split(":");
+    const h = Number(parts[0] ?? NaN);
+    const m = Number(parts[1] ?? NaN);
+    return (Number.isFinite(h) ? h : 21) * 60 + (Number.isFinite(m) ? m : 0);
+  };
+
+  return (
+    <section className="space-y-2.5">
+      <h3 className="flex items-center gap-2 text-body-sm font-medium text-ink">
+        <ClipboardList size={13} className="text-teal" />
+        主管日报
+        {cfg !== null && (
+          <label className="ml-auto flex cursor-pointer items-center gap-1.5 text-caption text-graphite">
+            <input
+              type="checkbox"
+              checked={cfg.enabled}
+              disabled={busy}
+              onChange={(e) => void save({ enabled: e.target.checked })}
+              className="accent-teal"
+            />
+            启用
+          </label>
+        )}
+      </h3>
+      <p className="text-[10px] leading-relaxed text-ash">
+        每日汇总「从未经过你手」的自动活动（闲时托管执行、定时任务发火、提醒送达）与该跑而没跑的
+        （错过跳过、重试停用、失败退避）；手动起的不报。本期无自动活动则整日沉默 —— 沉默本身就是好消息。
+      </p>
+      {cfg !== null && (
+        <div className="flex flex-wrap items-center gap-2 text-caption text-graphite">
+          <input
+            type="time"
+            value={minutesToClock(cfg.atMinutes)}
+            disabled={busy}
+            onChange={(e) => void save({ atMinutes: clockToMinutes(e.target.value) })}
+            className={cn(railInputCls, "w-28")}
+          />
+          <span>发报</span>
+          <button
+            onClick={() => {
+              if (busy) return;
+              setBusy(true);
+              setPreview(null);
+              void runSupervisorReport(defaultDaemonEndpoint())
+                .then((r) => setPreview(r.text))
+                .catch((err: unknown) => setPreview(`生成失败：${err instanceof Error ? err.message : String(err)}`))
+                .finally(() => setBusy(false));
+            }}
+            disabled={busy}
+            className="rounded-btn border border-line px-2.5 py-1 text-caption text-graphite hover:bg-line-soft hover:text-ink disabled:opacity-40"
+          >
+            立即生成一版
+          </button>
+        </div>
+      )}
+      {preview !== null && (
+        <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap rounded-btn bg-rail px-2.5 py-2 text-[11px] leading-relaxed text-graphite">{preview}</pre>
+      )}
+    </section>
   );
 }
