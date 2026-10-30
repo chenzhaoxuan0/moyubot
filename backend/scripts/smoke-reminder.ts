@@ -160,6 +160,9 @@ async function main(): Promise<void> {
   // 1. 过去的 runAt 直接拒 —— 静默顺延是最坏的失败形态
   const past = await rpc(ws, "reminder.create", { text: "过去的提醒", runAt: Date.now() - 60_000 });
   check("runAt 过去被拒", past["error"] !== undefined, past);
+  // 1b. inbox.add 的 reminderAt 同口径拒过去时刻（静默变成「立即补发」最坑）
+  const pastInbox = await rpc(ws, "inbox.add", { text: "带过期提醒的条目", reminderAt: Date.now() - 60_000 });
+  check("inbox.add 过期 reminderAt 被拒", pastInbox["error"] !== undefined, pastInbox);
 
   // 2. 深链不许落空：link 指向不存在的条目直接拒
   const badLink = await rpc(ws, "reminder.create", { text: "悬空深链", delayMinutes: 5, link: { kind: "inbox-entry", id: 999_999 } });

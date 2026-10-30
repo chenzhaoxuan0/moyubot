@@ -157,7 +157,7 @@ function desktopToast(title: string, body: string): void {
   }
 }
 
-function insertRow(row: DaemonNotificationRow): void {
+function insertRow(row: DaemonNotificationRow, opts: { live: boolean }): void {
   const line = clearedAt();
   if (row.at <= line) return;
   // 呈现过滤（口径与旧实现逐条一致）：正盯着的会话不通知；审批与报错只豁免
@@ -167,9 +167,10 @@ function insertRow(row: DaemonNotificationRow): void {
   } else if ((row.kind === "permission" || row.kind === "error") && stillWatching(row.sessionId)) {
     return;
   }
-  // 提醒是用户亲手挂的（高信号、预期中）—— 强通道：应用内行之外再发桌面 toast。
-  // 系统推断类通知不走这里（打断预算原则，docs/30）
-  if (row.kind === "reminder") desktopToast(row.title, row.text);
+  // 桌面 toast 只给**实时到达**的提醒（用户挂的、预期中的高信号事件）——
+  // boot/resync 的历史回放（seedFromLedger）绝不能连环弹旧提醒的 toast，
+  // 否则每次启动都把账本里的提醒重炸一遍
+  if (opts.live && row.kind === "reminder") desktopToast(row.title, row.text);
   const source = row.source as SessionSource | undefined;
   const item: WorkbenchNotification = {
     id: row.id,
@@ -203,11 +204,12 @@ export function sessionTargetOf(
 // 安装（WorkspaceShell 挂一次）
 // ---------------------------------------------------------------------------
 
-/** 拉历史事实 + 叠本地已读/清空线（boot 与 resync/换代共用——daemon 持久化了，客户端不用再对账） */
+/** 拉历史事实 + 叠本地已读/清空线（boot 与 resync/换代共用——daemon 持久化了，客户端不用再对账）。
+ *  历史回放不触发桌面 toast（live=false）：toast 只属于实时到达的那一下 */
 function seedFromLedger(): void {
   void fetchNotifications()
     .then((rows) => {
-      for (const row of [...rows].reverse()) insertRow(row); // 旧→新插入，新的排前面
+      for (const row of [...rows].reverse()) insertRow(row, { live: false }); // 旧→新插入，新的排前面
     })
     .catch(() => {
       /* 拉不到：实时推流仍在，只损失历史 */
@@ -217,7 +219,7 @@ function seedFromLedger(): void {
 export function installNotifications(): () => void {
   const client = DaemonClient.get(defaultDaemonEndpoint());
   const unsubs = [
-    client.onNotification(insertRow),
+    client.onNotification((row) => insertRow(row, { live: true })),
     client.onResync(seedFromLedger),
     client.onGenerationChange(seedFromLedger),
   ];

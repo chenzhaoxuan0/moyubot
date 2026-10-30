@@ -68,18 +68,21 @@ const FAILURE_BACKOFF_MS = 10 * 60_000;
 
 type GroupId = "executing" | "awaiting_review" | "awaiting_confirm" | "ready" | "sleeping" | "draft" | "today_done" | "older_done";
 
-const GROUPS: readonly { id: GroupId; label: string }[] = [
-  { id: "executing", label: "执行中" },
-  { id: "awaiting_review", label: "待验收" },
-  { id: "awaiting_confirm", label: "待确认" },
-  { id: "ready", label: "排队" },
-  { id: "sleeping", label: "休眠" },
-  { id: "draft", label: "草稿" },
-  { id: "today_done", label: "今日完成" },
-  { id: "older_done", label: "更早完成" },
+/**
+ * 状态分组全量常驻（用户拍板：全部分组都要可见）—— 布局是看板式的固定骨架，
+ * 位置可学习：扫一眼就知道哪里有东西、哪里空着。空组不隐藏，显示占位提示；
+ * 默认全展开（折叠只是临时收纳动作，不作为初始态）。
+ */
+const GROUPS: readonly { id: GroupId; label: string; emptyHint: string }[] = [
+  { id: "executing", label: "执行中", emptyHint: "没有正在执行的任务" },
+  { id: "awaiting_review", label: "待验收", emptyHint: "没有待验收的任务" },
+  { id: "awaiting_confirm", label: "待确认", emptyHint: "没有待确认的提议" },
+  { id: "ready", label: "排队", emptyHint: "队列为空" },
+  { id: "sleeping", label: "休眠", emptyHint: "没有休眠的任务" },
+  { id: "draft", label: "草稿", emptyHint: "没有草稿" },
+  { id: "today_done", label: "今日完成", emptyHint: "今天还没有完成的任务" },
+  { id: "older_done", label: "更早完成", emptyHint: "没有更早的完成记录" },
 ];
-
-const DEFAULT_COLLAPSED: Readonly<Record<string, boolean>> = { sleeping: true, draft: true, today_done: true, older_done: true };
 
 function startOfToday(): number {
   const d = new Date();
@@ -94,7 +97,7 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
   const automations = useWorkbench((s) => s.automations);
   const reorder = useBacklog((s) => s.reorder);
 
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({ ...DEFAULT_COLLAPSED });
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [confirmingDelete, setConfirmingDelete] = useState<number | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dialog, setDialog] = useState<{ mode: "create" } | { mode: "edit"; item: BacklogItem } | null>(null);
@@ -213,42 +216,44 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
         </div>
       </header>
 
-      {items.length === 0 ? (
-        <EmptyPanel onCreate={() => setDialog({ mode: "create" })} config={config} />
-      ) : (
-        <div className="space-y-5">
-          {GROUPS.map((g) => {
-            const list = groups.get(g.id)!;
-            if (list.length === 0) return null;
-            const isCollapsed = collapsed[g.id] ?? false;
-            return (
-              <section key={g.id}>
-                <h3 className="mb-2 flex items-center gap-2">
-                  <button
-                    onClick={() => setCollapsed((c) => ({ ...c, [g.id]: !isCollapsed }))}
-                    aria-expanded={!isCollapsed}
-                    className="flex items-center gap-1 text-ash hover:text-graphite"
-                    aria-label={`${g.label}分组${isCollapsed ? "展开" : "折叠"}`}
-                  >
-                    {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-                  </button>
-                  <span className={cn("text-body-sm font-medium", g.id === "today_done" || g.id === "older_done" ? "text-ash" : "text-ink")}>{g.label}</span>
-                  <span className="rounded-chip bg-line-soft px-1.5 py-0.5 text-[10px] text-ash">{list.length}</span>
-                  {g.id === "ready" && queueHead !== null && (
-                    <span className="rounded-chip bg-teal-tint px-1.5 py-0.5 text-[10px] text-teal" title="空闲且余量够时，下一拍派发的就是它">
-                      下一条
-                    </span>
-                  )}
-                </h3>
+      {items.length === 0 && <EmptyPanel onCreate={() => setDialog({ mode: "create" })} config={config} />}
 
-                {/* 排队组的前置条件行：当前判定（余量轴不承诺 ETA —— 条件可验证，预测是撒谎） */}
-                {g.id === "ready" && (queueHead !== null || allReadyAutoBackoff) && precondition !== null && (
-                  <p className="mb-2 rounded-btn bg-rail px-2.5 py-1.5 text-caption text-graphite" title="autopilot 此刻为什么没派发 —— 引擎 20 秒一拍，条件变了下一拍就动">
-                    当前判定：{precondition}
-                  </p>
+      {/* 全量常驻：空组也渲染（占位提示），组位置固定可学习 */}
+      <div className="space-y-5">
+        {GROUPS.map((g) => {
+          const list = groups.get(g.id)!;
+          const isCollapsed = collapsed[g.id] ?? false;
+          return (
+            <section key={g.id}>
+              <h3 className="mb-2 flex items-center gap-2">
+                <button
+                  onClick={() => setCollapsed((c) => ({ ...c, [g.id]: !isCollapsed }))}
+                  aria-expanded={!isCollapsed}
+                  className="flex items-center gap-1 text-ash hover:text-graphite"
+                  aria-label={`${g.label}分组${isCollapsed ? "展开" : "折叠"}`}
+                >
+                  {isCollapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                </button>
+                <span className={cn("text-body-sm font-medium", g.id === "today_done" || g.id === "older_done" ? "text-ash" : "text-ink")}>{g.label}</span>
+                <span className="rounded-chip bg-line-soft px-1.5 py-0.5 text-[10px] text-ash">{list.length}</span>
+                {g.id === "ready" && queueHead !== null && (
+                  <span className="rounded-chip bg-teal-tint px-1.5 py-0.5 text-[10px] text-teal" title="空闲且余量够时，下一拍派发的就是它">
+                    下一条
+                  </span>
                 )}
+              </h3>
 
-                {!isCollapsed && (
+              {/* 排队组的前置条件行：当前判定（余量轴不承诺 ETA —— 条件可验证，预测是撒谎） */}
+              {g.id === "ready" && (queueHead !== null || allReadyAutoBackoff) && precondition !== null && (
+                <p className="mb-2 rounded-btn bg-rail px-2.5 py-1.5 text-caption text-graphite" title="autopilot 此刻为什么没派发 —— 引擎 20 秒一拍，条件变了下一拍就动">
+                  当前判定：{precondition}
+                </p>
+              )}
+
+              {!isCollapsed &&
+                (list.length === 0 ? (
+                  <p className="rounded-btn border border-dashed border-line px-2.5 py-2 text-caption text-ash">{g.emptyHint}</p>
+                ) : (
                   <div className="flex flex-col gap-3">
                     {list.map((item) => (
                       <BacklogCard
@@ -263,12 +268,11 @@ export function BacklogColumn({ highlightId }: { highlightId: number | null }): 
                       />
                     ))}
                   </div>
-                )}
-              </section>
-            );
-          })}
-        </div>
-      )}
+                ))}
+            </section>
+          );
+        })}
+      </div>
 
       {dialog !== null && (
         <BacklogDialog key={dialog.mode === "edit" ? dialog.item.id : "new"} initial={dialog.mode === "edit" ? dialog.item : null} onClose={() => setDialog(null)} />
@@ -363,7 +367,7 @@ function BacklogCard({
   const [runsOpen, setRunsOpen] = useState(false);
   const [runs, setRuns] = useState<readonly BacklogRunRow[] | null>(null);
 
-  // 展开时懒加载一次（runCount 变了也不追 —— 展开看的是当时的历史，收起再开即刷新）
+  // 展开时拉一次；重开时清缓存重拉（展开看的是当下最新的历史，不是首开快照）
   useEffect(() => {
     if (!runsOpen || runs !== null) return;
     void fetchBacklogRuns(item.id, 10, defaultDaemonEndpoint())
@@ -602,7 +606,11 @@ function BacklogCard({
       {/* 状态化动作带：可换行，按钮/状态一律不内折（窄窗口宁可整枚换行） */}
       <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-line-soft pt-2.5">
         <button
-          onClick={() => setRunsOpen((v) => !v)}
+          onClick={() => {
+            const next = !runsOpen;
+            setRunsOpen(next);
+            if (next) setRuns(null);
+          }}
           aria-expanded={runsOpen}
           className={cn(
             "flex shrink-0 items-center gap-1 whitespace-nowrap rounded-btn px-1.5 py-1 text-caption transition",

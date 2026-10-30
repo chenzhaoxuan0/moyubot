@@ -3068,8 +3068,11 @@ registerMethod("inbox.add", (params) => {
   const category = typeof p.category === "string" && p.category.trim() !== "" ? p.category.trim() : null;
   const id = store.createInboxEntry({ text: p.text.trim(), category, hints, provenance: p.provenance ?? null });
   if (category === null && cfg.autoClassify) inboxClassifier.schedule();
-  // 提醒是独立的一次性钟控行，不依赖分类完成 —— 到点它提醒的是这条原话
+  // 提醒是独立的一次性钟控行，不依赖分类完成 —— 到点它提醒的是这条原话。
+  // 过去时刻与 reminder.create 同口径直接拒：静默变成「立即补发」最坑
+  // （用户以为设的是今晚，结果下一拍就响）。
   if (typeof p.reminderAt === "number" && Number.isFinite(p.reminderAt)) {
+    if (p.reminderAt <= Date.now()) throw badBacklog("reminderAt 已是过去时间 —— 提醒不支持，请设未来时刻");
     try {
       store.createAutomation({
         unitId: "reminder",
