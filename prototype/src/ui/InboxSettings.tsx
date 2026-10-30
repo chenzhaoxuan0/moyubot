@@ -7,7 +7,7 @@ import { inputCls } from "./WorklistBits.tsx";
 
 /**
  * 清单设置弹窗（原 InboxPage 内嵌弹窗独立成文件）。
- * 自动分类总开关在左栏清单栏头（与「立即分类」同排），这里只留分类会话
+ * 自动分类总开关在状态带（与「立即分类」在待分类块头同体系），这里只留分类会话
  * 执行器/模型与自定义分类。
  */
 
@@ -60,9 +60,9 @@ export function InboxSettings({ onClose }: { onClose: () => void }): ReactElemen
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4 text-body-sm">
           {/* routing 分类 */}
           <section className="space-y-2.5">
-            <h3 className="text-body-sm font-medium text-ink">routing 分类</h3>
+            <h3 className="text-body-sm font-medium text-ink">routing 分类（打标签）</h3>
             <p className="text-[10px] leading-relaxed text-ash">
-              「自动分类」总开关在左栏清单头部 —— 关闭时新内容停在「待分类」，可手动「立即分类」触发。
+              「自动分类」总开关在状态带 —— 关闭时新内容停在「待分类」，可「立即分类」手动触发。
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
@@ -96,14 +96,14 @@ export function InboxSettings({ onClose }: { onClose: () => void }): ReactElemen
             </p>
           </section>
 
-          {/* 自定义分类 */}
+          {/* 自定义标签（原「自定义分类」——机制零改动，时间轴口径下改口为标签） */}
           <section className="space-y-2">
-            <h3 className="text-body-sm font-medium text-ink">自定义分类</h3>
+            <h3 className="text-body-sm font-medium text-ink">自定义标签</h3>
             <p className="text-[10px] leading-relaxed text-ash">
-              内置五个通用分类（目标 / 待办 / 想法 / 资料 / 以后再说）；这里追加你自己的。勾「沉淀任务」的分类会像目标/待办一样生成任务。
+              内置五个通用标签（目标 / 待办 / 想法 / 资料 / 以后再说）；这里追加你自己的。勾「沉淀任务」的标签会像目标/待办一样生成任务。时间轴的标签行与条目标签 chip 都能按它过滤。
             </p>
             <div className="space-y-1.5">
-              {config.categories.length === 0 && <p className="text-caption text-ash">还没有自定义分类</p>}
+              {config.categories.length === 0 && <p className="text-caption text-ash">还没有自定义标签</p>}
               {config.categories.map((c: InboxCategoryDef) => (
                 <div key={c.id} className="flex items-center gap-2 rounded-btn bg-rail px-2.5 py-2">
                   <span className="flex-1 text-caption text-ink">{c.label}</span>
@@ -122,7 +122,7 @@ export function InboxSettings({ onClose }: { onClose: () => void }): ReactElemen
                   <button
                     onClick={() => void save({ categories: config.categories.filter((x) => x.id !== c.id) })}
                     className="rounded-btn p-1 text-ash hover:bg-line-soft hover:text-loss"
-                    aria-label={`删除分类 ${c.label}`}
+                    aria-label={`删除标签 ${c.label}`}
                   >
                     <Trash2 size={12} />
                   </button>
@@ -132,7 +132,7 @@ export function InboxSettings({ onClose }: { onClose: () => void }): ReactElemen
             <div className="flex items-center gap-2">
               <input
                 value={newLabel}
-                placeholder="新分类名（如「读书清单」）"
+                placeholder="新标签名（如「读书清单」）"
                 onChange={(e) => setNewLabel(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.nativeEvent.isComposing) submitNewCategory();
