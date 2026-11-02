@@ -53,6 +53,29 @@ await build({
   logLevel: "info",
 });
 
+// pty worker 必须单独产出一份入口实体。
+//
+// esbuild **不会**把 `new Worker(new URL("./ptyWorker.ts", import.meta.url))`
+// 重写成 chunk 引用（实测 0.25：无论 Worker 是全局还是从 node:worker_threads
+// import、无论带不带 { type: "module" }，代码文件的 new URL 一律原样保留）。
+// 之前 bundle 里就留着这个 .ts 引用 —— dev 有源文件（Node 24 原生跑 TS）能跑，
+// daemon-deploy 里文件不存在 → worker 加载即死 → 所有终端 exit=-1
+// （v0.1.0 Windows 实测翻车根因）。ptyHost.ts 按 .ts → .js 顺序探测。
+await build({
+  entryPoints: [path.join(root, "src", "terminal", "ptyWorker.ts")],
+  bundle: true,
+  format: "esm",
+  platform: "node",
+  target: "node22",
+  outdir: out,
+  entryNames: "ptyWorker",
+  banner: {
+    js: "import { createRequire as __awbCreateRequire } from 'node:module';\nconst require = __awbCreateRequire(import.meta.url);",
+  },
+  external: ["node-pty"],
+  logLevel: "info",
+});
+
 const outputs = readdirSync(out).filter((f) => f.endsWith(".mjs") || f.endsWith(".js"));
 console.log(`[build-daemon] bundle: ${outputs.join(", ")}`);
 

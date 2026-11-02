@@ -86,6 +86,14 @@ jobs:
       - name: Backend cross-platform discovery smoke
         run: pnpm -C backend smoke:chrome
 
+      # 打包形态冒烟：跑 daemon-deploy bundle 建 PTY 终端（v0.1.0 复盘——
+      # esbuild 不重写 worker 的 new URL，bundle 缺 ptyWorker.js 时 src 形态
+      # 冒烟全绿、打包版终端全军覆没，只有真跑 bundle 才暴露得出来）
+      - name: Packaged-form daemon + PTY smoke
+        run: |
+          pnpm -C backend build:daemon
+          pnpm -C backend smoke:packaged
+
       - name: Shell scripts LF + syntax guard
         run: |
           ! grep -q $'\r' launch-all.sh launch-electron.sh

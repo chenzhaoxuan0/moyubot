@@ -41,7 +41,12 @@ win:
     - portable
 
 nsis:
-  oneClick: true
+  # assisted 安装器：v0.1.0 的 oneClick: true 是「双击即全自动装进默认位」，
+  # 用户不可选位置 —— 首发实测不可接受。改为引导式：选目录页
+  # （allowToChangeInstallationDirectory）+ 开始菜单快捷方式页，
+  # 默认位仍是每用户 %LOCALAPPDATA%\Programs（免管理员），装哪由用户说了算。
+  oneClick: false
+  allowToChangeInstallationDirectory: true
   perMachine: false
   shortcutName: MoyuBot
 

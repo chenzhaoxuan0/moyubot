@@ -45,9 +45,13 @@ function hasPwsh(): Promise<boolean> {
 }
 
 async function locateOnPath(name: string): Promise<string[]> {
+  // windowsHide：daemon 在打包形态下跑在 GUI 子系统进程里（Electron
+  // ELECTRON_RUN_AS_NODE），spawn console 程序（where.exe / which）不隐藏
+  // 就会弹一个空控制台窗口 —— v0.1.0 Windows 实测「启动闪黑窗」来源之一。
+  const probeOpts = { windowsHide: true } as const;
   const out = process.platform === "win32"
-    ? await execFileP("where.exe", [name]).catch(() => ({ stdout: "", stderr: "" }))
-    : await execFileP("which", [name]).catch(() => ({ stdout: "", stderr: "" }));
+    ? await execFileP("where.exe", [name], probeOpts).catch(() => ({ stdout: "", stderr: "" }))
+    : await execFileP("which", [name], probeOpts).catch(() => ({ stdout: "", stderr: "" }));
   const hits = out.stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   if (hits.length > 0) return hits;
 
@@ -98,7 +102,7 @@ async function locateOnPath(name: string): Promise<string[]> {
  * 所以 shim 里的路径是**批处理变量**（`%dp0%` / `%~dp0%` / `%_prog%`），
  * 必须拿 shim 自己的目录代入，不能当字面路径用。
  */
-function parseCmdShim(shimPath: string): { node: string; script: string } | null {
+async function parseCmdShim(shimPath: string): Promise<{ node: string; script: string } | null> {
   let text: string;
   try {
     text = readFileSync(shimPath, "utf8");
@@ -120,10 +124,28 @@ function parseCmdShim(shimPath: string): { node: string; script: string } | null
   const script = path.resolve(shimDir, sub(raw));
   if (!existsSync(script)) return null; // 解析出来但文件不在 → 老实走 fallback
 
-  // node 二进制：shim 里写明了就用它（可能是随包自带的 node.exe），否则用当前进程
-  const nodeM = text.match(/"([^"]*node(?:\.exe)?)"/i);
-  const node = nodeM?.[1] !== undefined && existsSync(nodeM[1]) ? nodeM[1] : process.execPath;
-  return { node, script };
+  // node 二进制解析，按 npm shim 自身的语义（IF EXIST "%dp0%\node.exe" 用同目录的，
+  // 否则 SET "_prog=node" 落到 PATH）：
+  //   1) shim 里写明的**字面量** node 路径（形态 1；含 % 的批处理变量不算，
+  //      `SET "_prog=%dp0%\node.exe"` 会被引号正则误配成 `%dp0%\node.exe` ——
+  //      v0.1.0 Windows 的翻车根因：它 existsSync 必假 → 回退 process.execPath，
+  //      打包形态下那是 GUI 子系统的 MoyuBot.exe —— 它再 spawn 的 console 孙进程
+  //      （lark-cli.exe 等）拿不到父控制台，Windows 给每个新分配一个可见控制台，
+  //      用户看到的就是「启动弹一个空白命令行窗口」）
+  //   2) shim 同目录的 node.exe（shim 的 IF EXIST 分支）
+  //   3) PATH 上的 node.exe（dev / 常规安装）
+  //   4) 兜底 process.execPath：dev = 系统 node 没问题；打包形态 = MoyuBot.exe，
+  //      依赖 daemon env 里继承的 ELECTRON_RUN_AS_NODE=1 才有 node 语义 ——
+  //      npm shim 存在就意味着机器上有 npm/node，正常到不了这一步。
+  const quoted = text.match(/"([^"]*node(?:\.exe)?)"/i)?.[1];
+  if (quoted !== undefined && !quoted.includes("%") && existsSync(quoted)) {
+    return { node: quoted, script };
+  }
+  const beside = path.join(shimDir, "node.exe");
+  if (existsSync(beside)) return { node: beside, script };
+  const onPath = (await locateOnPath("node")).find((p) => p.toLowerCase().endsWith(".exe"));
+  if (onPath !== undefined) return { node: onPath, script };
+  return { node: process.execPath, script };
 }
 
 export async function resolveCommand(name: string): Promise<ResolvedCommand> {
@@ -143,7 +165,7 @@ export async function resolveCommand(name: string): Promise<ResolvedCommand> {
   } else {
     const shim = candidates.find((c) => /\.cmd$/i.test(c)) ?? candidates[0];
     if (shim && /\.cmd$/i.test(shim)) {
-      const parsed = parseCmdShim(shim);
+      const parsed = await parseCmdShim(shim);
       if (parsed && existsSync(parsed.script)) {
         resolved = { file: parsed.node, prefixArgs: [parsed.script], via: "npm-shim" };
       } else {

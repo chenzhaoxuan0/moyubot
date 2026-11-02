@@ -8,6 +8,7 @@
  * 「终端标签闪退」。
  */
 
+import { existsSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { log } from "../log.ts";
 
@@ -36,6 +37,20 @@ interface WorkerSession {
   spawnError: string | null;
   created: boolean;
   pendingWrites: string[];
+}
+
+/**
+ * worker 入口解析：dev（src 树）是 ptyWorker.ts 源文件，daemon-deploy bundle
+ * 形态是 build-daemon.mjs 单独产出的 ptyWorker.js。esbuild 不会重写
+ * `new URL("./ptyWorker.ts")` 这类代码文件引用（详见 build-daemon.mjs 注释），
+ * 所以这里按候选顺序探测存在者——两种形态各取所需。
+ */
+function resolvePtyWorkerUrl(): URL {
+  for (const name of ["./ptyWorker.ts", "./ptyWorker.js"] as const) {
+    const u = new URL(name, import.meta.url);
+    if (existsSync(u)) return u;
+  }
+  return new URL("./ptyWorker.ts", import.meta.url);
 }
 
 export class PtyHost {
@@ -108,7 +123,7 @@ export class PtyHost {
     if (this.starting !== null) return this.starting;
 
     this.starting = new Promise<Worker>((resolve, reject) => {
-      const w = new Worker(new URL("./ptyWorker.ts", import.meta.url));
+      const w = new Worker(resolvePtyWorkerUrl());
       let settled = false;
       w.once("online", () => {
         settled = true;

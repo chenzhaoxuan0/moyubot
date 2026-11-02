@@ -179,14 +179,16 @@ async function attemptFreePort(port: number): Promise<boolean> {
   try {
     const { execSync } = await import("node:child_process");
     if (process.platform === "win32") {
-      const out = execSync("netstat -ano -p tcp", { encoding: "utf8" });
+      // windowsHide：打包形态的 daemon 跑在 GUI 子系统进程里，netstat / taskkill
+      // 是 console 程序，不隐藏就每次启动闪一个空命令行窗口
+      const out = execSync("netstat -ano -p tcp", { encoding: "utf8", windowsHide: true });
       let freed = false;
       for (const line of out.split(/\r?\n/)) {
         if (line.includes(`:${port}`) && line.includes("LISTENING")) {
           const parts = line.trim().split(/\s+/);
           const pid = parts[parts.length - 1];
           if (pid && pid !== "0" && Number(pid) !== process.pid) {
-            execSync(`taskkill /F /PID ${pid} /T`, { stdio: "ignore" });
+            execSync(`taskkill /F /PID ${pid} /T`, { stdio: "ignore", windowsHide: true });
             freed = true;
           }
         }

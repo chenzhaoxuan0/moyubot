@@ -1,7 +1,7 @@
 {
   "name": "agent-workbench-prototype",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "UI/UX 原型壳：一个界面，两种视图，多家工具平等切换。此阶段不含任何厂商代码。",
   "scripts": {
