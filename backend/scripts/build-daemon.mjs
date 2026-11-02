@@ -16,7 +16,7 @@
  */
 
 import { build } from "esbuild";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -98,6 +98,22 @@ for (const name of ["node-pty", "@nut-tree-fork"]) {
     throw new Error(`[build-daemon] 缺 ${src}——先 pnpm install`);
   }
   cpSync(src, path.join(out, "node_modules", name), { recursive: true, dereference: true });
+}
+
+// node-pty 1.1.0 的 npm tarball 把 macOS spawn-helper 打成了 644（无执行位）
+// ——posix_spawnp 起不来，macOS 终端全灭。daemon-deploy 是自包含产物，
+// 不赌 postinstall 跑没跑过，拷完就地补（与 backend 的 postinstall 同源双保险）。
+if (process.platform !== "win32") {
+  const prebuildsDir = path.join(out, "node_modules", "node-pty", "prebuilds");
+  if (existsSync(prebuildsDir)) {
+    for (const plat of readdirSync(prebuildsDir)) {
+      if (!plat.startsWith("darwin")) continue;
+      const helper = path.join(prebuildsDir, plat, "spawn-helper");
+      if (existsSync(helper)) chmodSync(helper, 0o755);
+    }
+  }
+  const releaseHelper = path.join(out, "node_modules", "node-pty", "build", "Release", "spawn-helper");
+  if (existsSync(releaseHelper)) chmodSync(releaseHelper, 0o755);
 }
 
 console.log(`[build-daemon] daemon-deploy 就绪: ${out}`);
