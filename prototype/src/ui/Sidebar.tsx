@@ -650,9 +650,9 @@ function openNewTuiForUnit(unit: WorkUnit): void {
   sessionOpenOpenNewTui(unit);
 }
 
-/** 给该 bot 开一个对话窗格：已有窗格就聚焦，没有就开草稿窗格（bot 行右键「新建会话」） */
+/** 给该 bot 开一个**全新草稿**对话窗格（bot 行右键「新建会话」——每次都是新的） */
 function openNewChatForUnit(unit: WorkUnit): void {
-  useChatPanes.getState().openUnitChatPane(unit.id);
+  useChatPanes.getState().openChatPane({ unitId: unit.id, sessionId: null });
 }
 
 /** 状态灯的五种形态（对齐 ZCode deriveTaskLeadingIndicator 的「空闲不显示」原则） */

@@ -171,7 +171,10 @@ LayoutNode.leaf: { kind: "terminal", instanceId }       // 系统终端 / Agent 
 
 **已知近似（接受）**：草稿文本不跨 F5（种子只存身份不存正文）；单元级 hash
 目标（`#/u/<id>` 无段）只切全局上下文不动窗格；侧栏「历史详情 / bot 设置」
-里的 selectUnit 仍会清全局时间线（焦点窗格受影响，与改造前同口径）。
+里的 selectUnit 仍会清全局时间线（焦点窗格受影响，与改造前同口径）；**后台
+窗格的审批**走底栏任务栏 chip（awaiting_permission 进榜 → 点击经 openChatPane
+聚焦 → 审批卡在焦点窗格弹出）——与改造前「切走的会话审批只亮 chip」同口径，
+不另做后台窗格内联审批。
 
 ## 十、二期 / 三期落地记录（2026-11-05，typecheck / build 全绿）
 
@@ -220,3 +223,17 @@ LayoutNode.leaf: { kind: "terminal", instanceId }       // 系统终端 / Agent 
 **三期已知近似（接受）**：F5 后对无引用弹窗条目点「归拢」会在弹窗还开着时
 重认领终端（双活至弹窗关闭，关闭通告幂等收口）；弹窗里的对话草稿文本随窗
 口关闭丢失（会话身份可回）。
+
+**review 修订（2026-11-05，双轴评审后）**：① P0——openChatPane 命中**后台
+标签**的窗格时原实现只换全局数据不切标签，可见窗格会渲染别人会话的内容；
+focus 链补反向推画布游标（focusChatPaneTab，幂等短路防递归）。② 「＋」/
+头部/侧栏右键的「新建对话」改为**每次新草稿**（原 openUnitChatPane 复用旧
+窗格与 session 级粒度相悖）；bot 点选复用语义只留给新建会话页。③ 工具条按
+§三补齐 chat 动作（新对话 / 历史——历史开右栏该 bot 的历史面板）。④ chat
+窗格「旁开终端」明确为系统终端（bot 工作目录）；与 Agent TUI 并排的正路是
+「＋」派发 TUI 标签后拖到窗格边缘吸附（§七.2 场景口径）。⑤ 命名与去重：
+maximizedInstanceId → maximizedPaneId（双 kind 语义）、popout 路由解析单源
+（parsePopoutRoute 移入 useCanvasPopouts）、runtimeIdOfSession 三方单源、
+ChatPaneRecord 记录工厂、BotAvatar 抽取；createChatTab 删投机的 activate
+参数；PaneMiniBar 抽取暂缓（两条 mini-bar 的拆分动作语义不同型，硬抽是
+投机抽象）。

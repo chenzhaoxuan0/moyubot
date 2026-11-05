@@ -161,7 +161,7 @@ export function restoreCanvasLayout(): boolean {
       activeGroupId,
       activeInstanceId: collectLeafIds(activeGroup.rootLayout)[0] ?? null,
       activeChatPaneKey: null,
-      maximizedInstanceId: null,
+      maximizedPaneId: null,
     });
 
     // 恢复时的焦点方向：当时聚焦的是 chat → 走焦点链把会话 openSession 回来；

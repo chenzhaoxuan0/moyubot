@@ -15,6 +15,7 @@ import {
   MessageSquarePlus,
   ExternalLink,
   Combine,
+  History,
 } from "lucide-react";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import {
@@ -27,6 +28,7 @@ import {
 import { useChatPanes } from "../store/useChatPanes.ts";
 import { useCanvasDnd } from "../store/canvasDnd.ts";
 import { useCanvasPopouts } from "../store/useCanvasPopouts.ts";
+import { useSidePane } from "../store/useSidePane.ts";
 import { terminalSessionRegistry } from "../store/TerminalSessionManager.ts";
 import { TerminalSplitTree } from "./TerminalSplitTree.tsx";
 import { TerminalPaneSlot, ShellOrAgentIcon } from "./TerminalPaneSlot.tsx";
@@ -77,7 +79,7 @@ export function TerminalPanel({
     activeGroupId,
     activeInstanceId,
     activeChatPaneKey,
-    maximizedInstanceId,
+    maximizedPaneId,
     defaultProfileId,
     createTab,
     splitPane,
@@ -137,11 +139,12 @@ export function TerminalPanel({
     });
   };
 
-  // 新建对话标签（「＋」下拉第一组）：当前 bot 直开；没选 bot 开未选态窗格
+  // 新建对话标签（「＋」下拉第一组）：每次都开**新草稿**（session 级粒度的
+  // 题中之义——同 bot 多草稿并存）；bot 点选复用语义只在新建会话页
   const handleNewChat = () => {
     setMenuOpen(false);
     if (unit) {
-      useChatPanes.getState().openUnitChatPane(unit.id);
+      useChatPanes.getState().openChatPane({ unitId: unit.id, sessionId: null });
       return;
     }
     const draftKey = useChatPanes.getState().createDraftRecord();
@@ -206,11 +209,11 @@ export function TerminalPanel({
   }, [activeGroup]);
 
   const maximizedInst = useMemo(() => {
-    return instances.find((i) => i.id === maximizedInstanceId);
-  }, [instances, maximizedInstanceId]);
+    return instances.find((i) => i.id === maximizedPaneId);
+  }, [instances, maximizedPaneId]);
   /** 最大化游标落在 chat 窗格上（toggleMaximize 对任意窗格 id 通用） */
   const maximizedChatPaneKey =
-    maximizedInstanceId !== null && maximizedInst === undefined ? maximizedInstanceId : null;
+    maximizedPaneId !== null && maximizedInst === undefined ? maximizedPaneId : null;
 
   /** 标签标题：显式命名 → 单窗格（终端实例名 / 对话 bot 名）→ 分屏摘要 */
   const tabTitleOf = (groupId: string): { title: string; isSplit: boolean; chatPaneKey: string | null } => {
@@ -234,8 +237,14 @@ export function TerminalPanel({
   };
 
   const resolvedTheme = useAppearance((s) => s.resolvedAppearance);
-  /** 焦点窗格类型：chat → 工具条收起终端专属动作（清屏/重启），其余照旧 */
+  /** 焦点窗格类型：chat → 工具条换 chat 动作（新对话/历史），终端动作收起 */
   const focusedIsChat = activeChatPaneKey !== null;
+  const focusedChatPane = useChatPanes((s) =>
+    s.focusedChatKey !== null ? s.panes[s.focusedChatKey] : undefined,
+  );
+  const focusedChatUnit = useWorkbench((s) =>
+    s.units.find((u) => u.id === focusedChatPane?.unitId),
+  );
 
   return (
     <div
@@ -642,18 +651,47 @@ export function TerminalPanel({
               <button
                 type="button"
                 onClick={() => toggleMaximize()}
-                title={maximizedInstanceId ? "还原分屏窗格" : "最大化当前聚焦窗格"}
+                title={maximizedPaneId ? "还原分屏窗格" : "最大化当前聚焦窗格"}
                 className={cn(
                   "flex items-center gap-1 rounded-btn px-2 py-0.5 text-caption transition",
-                  maximizedInstanceId
+                  maximizedPaneId
                     ? "bg-teal-tint text-teal"
                     : "text-ash hover:bg-line-soft hover:text-ink",
                 )}
               >
-                {maximizedInstanceId ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                {maximizedPaneId ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
                 <span className="hidden sm:inline">
-                  {maximizedInstanceId ? "还原" : "最大化"}
+                  {maximizedPaneId ? "还原" : "最大化"}
                 </span>
+              </button>
+            </>
+          )}
+
+          {/* chat 动作（docs/31 §三：焦点在对话窗格时工具条换 chat 专属动作） */}
+          {focusedIsChat && focusedChatPane !== undefined && focusedChatPane.unitId !== "" && (
+            <>
+              <button
+                type="button"
+                onClick={() =>
+                  useChatPanes.getState().openChatPane({ unitId: focusedChatPane.unitId, sessionId: null })
+                }
+                title={`给 ${focusedChatUnit?.name ?? "这个 bot"} 新开一个对话标签（草稿）`}
+                className="flex items-center gap-1 rounded-btn px-2 py-0.5 text-caption text-ash hover:bg-line-soft hover:text-ink transition"
+              >
+                <MessageSquarePlus size={12} />
+                <span className="hidden sm:inline">新对话</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (focusedChatUnit === undefined) return;
+                  useSidePane.getState().openTab({ unitId: focusedChatUnit.id, unitName: focusedChatUnit.name });
+                }}
+                title="在右侧面板打开这个 bot 的历史会话列表"
+                className="flex items-center gap-1 rounded-btn px-2 py-0.5 text-caption text-ash hover:bg-line-soft hover:text-ink transition"
+              >
+                <History size={12} />
+                <span className="hidden sm:inline">历史</span>
               </button>
             </>
           )}

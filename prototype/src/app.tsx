@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { WorkspaceShell } from "./WorkspaceShell.tsx";
-import { PopoutShell, parsePopoutRoute } from "./ui/PopoutShell.tsx";
+import { PopoutShell, type PopoutRoute } from "./ui/PopoutShell.tsx";
+import { parsePopoutRoute } from "./store/useCanvasPopouts.ts";
 import { installGitAutoRefresh } from "./store/gitAutoRefresh.ts";
 import { installSessionForeground } from "./store/sessionForeground.ts";
 

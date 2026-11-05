@@ -4,6 +4,8 @@ import { DaemonClient, defaultDaemonEndpoint } from "../adapters/daemon/client.t
 import { adoptTermRow, type DaemonTermRow, type TerminalInstanceItem } from "../store/useTerminalStore.ts";
 import { useWorkbench, selectActiveUnit } from "../store/useWorkbench.ts";
 import { asSessionId, asUnitId } from "../core/units.ts";
+import { runtimeIdOfSession } from "../store/useChatPanes.ts";
+import { parsePopoutRoute } from "../store/useCanvasPopouts.ts";
 import { useChatAccentStyle } from "./useChatAccentStyle.ts";
 import { TerminalPaneSlot } from "./TerminalPaneSlot.tsx";
 import { Timeline } from "./Timeline.tsx";
@@ -24,17 +26,6 @@ import { cn } from "./cn.ts";
 export type PopoutRoute =
   | { kind: "terminal"; terminalId: string }
   | { kind: "chat"; unitId: string; sessionId: string | null };
-
-export function parsePopoutRoute(hash: string): PopoutRoute | null {
-  let m = /^#\/popout\/t\/([^/?]+)/.exec(hash);
-  if (m !== null) return { kind: "terminal", terminalId: decodeURIComponent(m[1]!) };
-  m = /^#\/popout\/c\/([^/]+)\/([^/?]+)/.exec(hash);
-  if (m !== null) {
-    const sid = decodeURIComponent(m[2]!);
-    return { kind: "chat", unitId: decodeURIComponent(m[1]!), sessionId: sid === "-" ? null : sid };
-  }
-  return null;
-}
 
 export function PopoutShell({ route }: { route: PopoutRoute }) {
   // 关闭通告（挂载即装；unmount 不拆——beforeunload 要活到窗口关掉那一刻）
@@ -153,20 +144,14 @@ function ChatPopout({ unitId, sessionId }: { unitId: string; sessionId: string |
       }
       useWorkbench.getState().selectUnit(asUnitId(unitId));
       if (sessionId !== null) {
-        // runtimeId 从台账查（openSession 必填）；查不到就交给 openSession 的兜底提示
-        const { fetchSessions, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
-        try {
-          const rows = await fetchSessions(defaultDaemonEndpoint());
-          const runtimeId = rows.find((r) => String(r.id) === sessionId)?.runtimeId;
-          if (runtimeId !== undefined && alive) {
-            await useWorkbench.getState().openSession({
-              sessionId: asSessionId(sessionId),
-              unitId: asUnitId(unitId),
-              runtimeId,
-            });
-          }
-        } catch {
-          /* daemon 抖动：留在 bot 空态，输入框首发即开新段 */
+        // runtimeId 从台账查（openSession 必填）；查不到就留在 bot 空态，输入框首发即开新段
+        const runtimeId = await runtimeIdOfSession(sessionId);
+        if (runtimeId !== null && alive) {
+          await useWorkbench.getState().openSession({
+            sessionId: asSessionId(sessionId),
+            unitId: asUnitId(unitId),
+            runtimeId,
+          });
         }
       }
       if (alive) setReady(true);

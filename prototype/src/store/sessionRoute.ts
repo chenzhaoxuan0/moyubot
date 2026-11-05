@@ -88,21 +88,14 @@ async function applyTarget(target: RouteTarget): Promise<void> {
     return;
   }
 
-  const { fetchSessions, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
-  let runtimeId: string | undefined;
-  try {
-    const rows = await fetchSessions(defaultDaemonEndpoint());
-    runtimeId = rows.find((r) => String(r.id) === target.sessionId)?.runtimeId;
-  } catch {
-    /* daemon 抖动：下面 openChatPane 会给出更具体的提示 */
-  }
-  if (runtimeId === undefined) {
+  // docs/31 会话画布：回放 = 开/聚焦对话窗格（幂等；openSession 权威重建在
+  // focus 链内部完成）。互斥的 conversationView 已退役。
+  const { useChatPanes, runtimeIdOfSession } = await import("./useChatPanes.ts");
+  const runtimeId = await runtimeIdOfSession(target.sessionId);
+  if (runtimeId === null) {
     wb.pushNotice("路由恢复失败", `台账里没有会话 ${target.sessionId}，或执行器不可用。`, { level: "warn" });
     return;
   }
-  // docs/31 会话画布：回放 = 开/聚焦对话窗格（幂等；openSession 权威重建在
-  // focus 链内部完成）。互斥的 conversationView 已退役。
-  const { useChatPanes } = await import("./useChatPanes.ts");
   useChatPanes.getState().openChatPane({
     unitId: target.unitId,
     sessionId: target.sessionId,

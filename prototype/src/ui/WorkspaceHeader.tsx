@@ -193,7 +193,7 @@ export function WorkspaceHeader() {
                   label: unit ? `新对话 · ${unit.name}` : "新对话（先选 bot）",
                   icon: MessageSquarePlus,
                   onSelect: () => {
-                    if (unit) useChatPanes.getState().openUnitChatPane(unit.id);
+                    if (unit) useChatPanes.getState().openChatPane({ unitId: unit.id, sessionId: null });
                     else {
                       const draftKey = useChatPanes.getState().createDraftRecord();
                       useTerminalStore.getState().createChatTab(draftKey);

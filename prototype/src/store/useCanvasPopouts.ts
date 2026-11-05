@@ -50,20 +50,32 @@ function popoutUrl(entry: Omit<PopoutEntry, "win" | "title">): string {
     : `#/popout/c/${encodeURIComponent(entry.unitId ?? "")}/${entry.sessionId == null ? "-" : encodeURIComponent(entry.sessionId)}?po=${po}`;
 }
 
-/** postMessage 载荷里带回的 URL → 重认领（主窗口 F5 后也能按 URL 对账） */
-function readoptByUrl(rawUrl: string): void {
-  const hash = rawUrl.slice(rawUrl.indexOf("#"));
+/** popout 路由的单源解析（PopoutShell 与本 store 的关闭通告对账共用） */
+export function parsePopoutRoute(hash: string):
+  | { kind: "terminal"; terminalId: string }
+  | { kind: "chat"; unitId: string; sessionId: string | null }
+  | null {
   let m = /^#\/popout\/t\/([^/?]+)/.exec(hash);
-  if (m !== null) {
-    void useTerminalStore.getState().readoptTerminal(decodeURIComponent(m[1]!));
-    return;
-  }
+  if (m !== null) return { kind: "terminal", terminalId: decodeURIComponent(m[1]!) };
   m = /^#\/popout\/c\/([^/]+)\/([^/?]+)/.exec(hash);
   if (m !== null) {
-    const unitId = decodeURIComponent(m[1]!);
     const sid = decodeURIComponent(m[2]!);
-    useChatPanes.getState().openChatPane({ unitId, sessionId: sid === "-" ? null : sid });
+    return { kind: "chat", unitId: decodeURIComponent(m[1]!), sessionId: sid === "-" ? null : sid };
   }
+  return null;
+}
+
+/** postMessage 载荷里带回的 URL → 重认领（主窗口 F5 后也能按 URL 对账） */
+function readoptByUrl(rawUrl: string): void {
+  const route = parsePopoutRoute(rawUrl.slice(rawUrl.indexOf("#")));
+  if (route === null) return;
+  if (route.kind === "terminal") {
+    void useTerminalStore.getState().readoptTerminal(route.terminalId);
+    return;
+  }
+  useChatPanes
+    .getState()
+    .openChatPane({ unitId: route.unitId, sessionId: route.sessionId });
 }
 
 let pollTimer: ReturnType<typeof setInterval> | null = null;

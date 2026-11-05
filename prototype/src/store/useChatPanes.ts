@@ -85,6 +85,21 @@ function nextPaneKey(): string {
   return `chatp_${Math.random().toString(36).slice(2, 9)}_${Date.now().toString(36)}`;
 }
 
+/** 窗格记录工厂（openChatPane / restoreRecord / createDraftRecord 三入口共用） */
+function makeRecord(unitId: string, sessionId: string | null): ChatPaneRecord {
+  return {
+    paneKey: nextPaneKey(),
+    unitId,
+    sessionId,
+    lineageId: sessionId !== null ? (lineageOfSession(sessionId) ?? sessionId) : null,
+    knownSessionIds: sessionId !== null ? new Set([sessionId]) : new Set(),
+    timeline: [],
+    busy: false,
+    draft: "",
+    restoring: false,
+  };
+}
+
 /** 快照时间线的本地序号（负数段，与全局 seq 空间天然隔离不撞 key） */
 let routeSeq = 0;
 
@@ -96,8 +111,11 @@ function lineageOfSession(sessionId: string): string | null {
   return row?.conversationId != null ? String(row.conversationId) : null;
 }
 
-/** openSession 的 runtimeId 落点：入参 → sessions[] → daemon 台账（尽力而为） */
-async function resolveRuntimeId(sessionId: string, hint?: string): Promise<string | null> {
+/**
+ * openSession 的 runtimeId 落点：入参 → sessions[] → daemon 台账（尽力而为）。
+ * 单源导出：focus 链 / sessionRoute 回放 / PopoutShell 三方共用（review Duplicated Code）。
+ */
+export async function runtimeIdOfSession(sessionId: string, hint?: string): Promise<string | null> {
   if (hint && hint !== "") return hint.replace(/^daemon:/, "");
   const row = useWorkbench.getState().sessions.find((s) => String(s.id) === sessionId);
   if (row) return String(row.runtimeId).replace(/^daemon:/, "");
@@ -139,23 +157,12 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
       get().focus(existing.paneKey, sid);
       return;
     }
-    const paneKey = nextPaneKey();
-    const record: ChatPaneRecord = {
-      paneKey,
-      unitId: input.unitId,
-      sessionId: sid,
-      lineageId: sid !== null ? (lineageOfSession(sid) ?? sid) : null,
-      knownSessionIds: sid !== null ? new Set([sid]) : new Set(),
-      timeline: [],
-      busy: false,
-      draft: "",
-      restoring: false,
-    };
-    set((s) => ({ panes: { ...s.panes, [paneKey]: record } }));
+    const record = makeRecord(input.unitId, sid);
+    set((s) => ({ panes: { ...s.panes, [record.paneKey]: record } }));
     // 画布开标签：createChatTab 会把游标翻到新窗格 → 订阅链（installChatPaneSync）
     // 触发 focus 恢复。标签标题在挂载侧按 unit 名校正。
     void import("./useTerminalStore.ts").then(({ useTerminalStore }) => {
-      useTerminalStore.getState().createChatTab(paneKey);
+      useTerminalStore.getState().createChatTab(record.paneKey);
     });
   },
 
@@ -229,45 +236,15 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
   restoreRecord: (unitId, sessionId) => {
     // bot 已不存在（被删/换机）：叶子丢弃，不造指向空单元的窗格
     if (!useWorkbench.getState().units.some((u) => u.id === unitId)) return null;
-    const paneKey = nextPaneKey();
-    set((s) => ({
-      panes: {
-        ...s.panes,
-        [paneKey]: {
-          paneKey,
-          unitId,
-          sessionId,
-          lineageId: sessionId !== null ? (lineageOfSession(sessionId) ?? sessionId) : null,
-          knownSessionIds: sessionId !== null ? new Set([sessionId]) : new Set(),
-          timeline: [],
-          busy: false,
-          draft: "",
-          restoring: false,
-        },
-      },
-    }));
-    return paneKey;
+    const record = makeRecord(unitId, sessionId);
+    set((s) => ({ panes: { ...s.panes, [record.paneKey]: record } }));
+    return record.paneKey;
   },
 
   createDraftRecord: () => {
-    const paneKey = nextPaneKey();
-    set((s) => ({
-      panes: {
-        ...s.panes,
-        [paneKey]: {
-          paneKey,
-          unitId: "",
-          sessionId: null,
-          lineageId: null,
-          knownSessionIds: new Set<string>(),
-          timeline: [],
-          busy: false,
-          draft: "",
-          restoring: false,
-        },
-      },
-    }));
-    return paneKey;
+    const record = makeRecord("", null);
+    set((s) => ({ panes: { ...s.panes, [record.paneKey]: record } }));
+    return record.paneKey;
   },
 
   focus: (paneKey, sessionOverride) => {
@@ -277,6 +254,15 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
     set({ focusedChatKey: paneKey });
     useShell.getState().setMainView("chat");
     if (paneKey === null) return;
+    // ①' 反向推画布游标（review P0）：focus 也从注册表侧发起（侧栏历史行 /
+    // 任务 chip / hash 回放命中**后台标签**的窗格），必须把标签组激活到前台
+    // —— 只换全局数据不切标签的话，可见窗格会渲染别人会话的内容。
+    // 幂等：focusedChatKey 已置位，画布订阅回打 handleCanvasFocusChange 时
+    // 同值短路，不会递归。
+    void import("./useTerminalStore.ts").then(({ useTerminalStore }) => {
+      const st = useTerminalStore.getState();
+      if (st.activeChatPaneKey !== paneKey) st.focusChatPaneTab(paneKey);
+    });
     const pane = get().panes[paneKey];
     if (pane === undefined) return;
 
@@ -309,7 +295,7 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
         : {},
     );
     void (async () => {
-      const runtimeId = await resolveRuntimeId(targetSid);
+      const runtimeId = await runtimeIdOfSession(targetSid);
       if (runtimeId === null) {
         set((s) =>
           s.panes[paneKey]

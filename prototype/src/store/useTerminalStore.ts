@@ -207,7 +207,11 @@ interface TerminalStoreState {
    * useChatPanes.installChatPaneSync 订阅它的变化驱动快照/恢复。
    */
   activeChatPaneKey: string | null;
-  maximizedInstanceId: string | null;
+  /**
+   * 最大化窗格的 id —— **双 kind 通用**（终端 instanceId 或 chat paneKey 皆可
+   * 入座；渲染侧按「能否在 instances 里查到」分流，见 TerminalPanel）。
+   */
+  maximizedPaneId: string | null;
   defaultProfileId: string;
   /** 首载重挂是否已尝试过（无论找没找到）—— 空态自动建标签必须等它，否则抢占重挂 */
   reattachDone: boolean;
@@ -233,8 +237,8 @@ interface TerminalStoreState {
     unitId?: string;
   }) => string;
 
-  /** 新建对话标签页（chatLeaf 单窗格组）；activate=false 只建标签不抢焦点（F5 种子重建用） */
-  createChatTab: (paneKey: string, activate?: boolean) => string;
+  /** 新建对话标签页（chatLeaf 单窗格组）并激活 */
+  createChatTab: (paneKey: string) => string;
 
   /** 自由拆分（支持任意嵌套左右/上下；目标与新窗格都可为终端或对话窗格） */
   splitPane: (opts?: {
@@ -420,7 +424,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
   groups: [],
   activeGroupId: null,
   activeInstanceId: null,
-  maximizedInstanceId: null,
+  maximizedPaneId: null,
   activeChatPaneKey: null,
   defaultProfileId: "pwsh",
   reattachDone: false,
@@ -496,7 +500,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
     return id;
   },
 
-  createChatTab: (paneKey, activate = true) => {
+  createChatTab: (paneKey) => {
     const groupId = `group_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`;
     const newGroup: TerminalTabGroup = {
       id: groupId,
@@ -504,11 +508,10 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
     };
     set((state) => ({
       groups: [...state.groups, newGroup],
-      // F5 种子重建不抢焦点：焦点由 hash 路由回放决定，抢了会跟它打架
-      ...(activate
-        ? { activeGroupId: groupId, activeInstanceId: null, activeChatPaneKey: paneKey }
-        : {}),
-      maximizedInstanceId: null,
+      activeGroupId: groupId,
+      activeInstanceId: null,
+      activeChatPaneKey: paneKey,
+      maximizedPaneId: null,
     }));
     return groupId;
   },
@@ -520,7 +523,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       activeGroupId: group.id,
       activeInstanceId: null,
       activeChatPaneKey: paneKey,
-      maximizedInstanceId: null,
+      maximizedPaneId: null,
     });
   },
 
@@ -560,7 +563,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         .filter((g) => g.id !== dragGroup.id)
         .map((g) => (g.id === targetGroup.id ? { ...g, rootLayout: grafted } : g)),
       activeGroupId: targetGroup.id,
-      maximizedInstanceId: null,
+      maximizedPaneId: null,
     }));
   },
 
@@ -617,7 +620,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         activeGroupId: group.id,
         activeInstanceId: instance.id,
         activeChatPaneKey: null,
-        maximizedInstanceId: null,
+        maximizedPaneId: null,
       };
     });
   },
@@ -653,7 +656,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         activeGroupId: group.id,
         activeInstanceId: null,
         activeChatPaneKey: opts.chatPaneKey,
-        maximizedInstanceId: null,
+        maximizedPaneId: null,
       }));
       return opts.chatPaneKey;
     }
@@ -694,7 +697,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       activeGroupId: group.id,
       activeInstanceId: newId,
       activeChatPaneKey: null,
-      maximizedInstanceId: null, // 拆分时自动解除最大化
+      maximizedPaneId: null, // 拆分时自动解除最大化
     }));
 
     return newId;
@@ -776,8 +779,8 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         activeGroupId: newActiveGroupId,
         activeInstanceId: newActiveInstanceId,
         ...(newActiveChatPaneKey !== state.activeChatPaneKey ? { activeChatPaneKey: newActiveChatPaneKey } : {}),
-        maximizedInstanceId:
-          state.maximizedInstanceId === instanceId ? null : state.maximizedInstanceId,
+        maximizedPaneId:
+          state.maximizedPaneId === instanceId ? null : state.maximizedPaneId,
       };
     });
   },
@@ -836,7 +839,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       activeGroupId: groupId,
       activeInstanceId: firstChat !== null ? null : firstTerminal,
       activeChatPaneKey: firstChat,
-      maximizedInstanceId: null,
+      maximizedPaneId: null,
     });
   },
 
@@ -860,7 +863,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       activeGroupId: keepGroupId,
       activeInstanceId: keepChats.length > 0 ? null : (keepLeaves[0] ?? null),
       activeChatPaneKey: keepChats[0] ?? null,
-      maximizedInstanceId: null,
+      maximizedPaneId: null,
     }));
   },
 
@@ -879,7 +882,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       activeGroupId: null,
       activeInstanceId: null,
       activeChatPaneKey: null,
-      maximizedInstanceId: null,
+      maximizedPaneId: null,
     });
   },
 
@@ -907,8 +910,8 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
   toggleMaximize: (instanceId?: string) => {
     const target = instanceId ?? get().activeInstanceId;
     set((state) => ({
-      maximizedInstanceId:
-        state.maximizedInstanceId === target ? null : (target ?? null),
+      maximizedPaneId:
+        state.maximizedPaneId === target ? null : (target ?? null),
     }));
   },
 
@@ -933,7 +936,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       groups: [],
       activeGroupId: null,
       activeInstanceId: null,
-      maximizedInstanceId: null,
+      maximizedPaneId: null,
     });
   },
 
@@ -1024,7 +1027,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
               activeGroupId: group.id,
               activeInstanceId: instance.id,
               activeChatPaneKey: null,
-              maximizedInstanceId: null,
+              maximizedPaneId: null,
             }));
             // 定时任务到点的意义就是「让我看到」：主视图不在工作区就切回来
             if (useShell.getState().mainView !== "chat") useShell.getState().setMainView("chat");

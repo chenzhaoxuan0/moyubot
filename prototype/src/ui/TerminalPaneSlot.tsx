@@ -85,7 +85,7 @@ export const TerminalPaneSlot = memo(function TerminalPaneSlot({
 }) {
   const mountRef = useRef<HTMLDivElement>(null);
   const activeInstanceId = useTerminalStore((s) => s.activeInstanceId);
-  const maximizedInstanceId = useTerminalStore((s) => s.maximizedInstanceId);
+  const maximizedPaneId = useTerminalStore((s) => s.maximizedPaneId);
   const setActiveInstance = useTerminalStore((s) => s.setActiveInstance);
   const splitPane = useTerminalStore((s) => s.splitPane);
   const closePane = useTerminalStore((s) => s.closePane);
@@ -100,7 +100,7 @@ export const TerminalPaneSlot = memo(function TerminalPaneSlot({
   const { dropHandlers, zoneOverlay } = usePaneDropZone(inst.id);
 
   const isActive = inst.id === activeInstanceId;
-  const isMaximized = inst.id === maximizedInstanceId;
+  const isMaximized = inst.id === maximizedPaneId;
 
   // 将会话的物理 DOM 容器挂载到当前 Slot
   useEffect(() => {

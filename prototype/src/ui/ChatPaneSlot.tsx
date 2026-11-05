@@ -11,7 +11,6 @@ import {
 import { useChatPanes } from "../store/useChatPanes.ts";
 import { useTerminalStore } from "../store/useTerminalStore.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
-import { useAppearance } from "../store/useAppearance.ts";
 import { useShell } from "../store/useShell.ts";
 import { Timeline, EmptyState } from "./Timeline.tsx";
 import { ChatViewport } from "./chat/ChatViewport.tsx";
@@ -20,7 +19,7 @@ import { PermissionDialog } from "./PermissionDialog.tsx";
 import { ChatTerminalDock } from "./ChatTerminalDock.tsx";
 import { useChatAccentStyle } from "./useChatAccentStyle.ts";
 import { usePaneDropZone } from "./usePaneDropZone.tsx";
-import { botAvatarStyle } from "./Sidebar.tsx";
+import { BotAvatar } from "./BotAvatar.tsx";
 import { cn } from "./cn.ts";
 
 /**
@@ -47,7 +46,7 @@ export const ChatPaneSlot = memo(function ChatPaneSlot({
 }) {
   const pane = useChatPanes((s) => s.panes[paneKey]);
   const focusedChatKey = useChatPanes((s) => s.focusedChatKey);
-  const maximizedId = useTerminalStore((s) => s.maximizedInstanceId);
+  const maximizedId = useTerminalStore((s) => s.maximizedPaneId);
   const unit = useWorkbench((s) => s.units.find((u) => u.id === pane?.unitId));
   const sessions = useWorkbench((s) => s.sessions);
   const runtimes = useWorkbench((s) => s.runtimes);
@@ -139,7 +138,7 @@ export const ChatPaneSlot = memo(function ChatPaneSlot({
                 e.stopPropagation();
                 splitTerminalBeside();
               }}
-              title="在右侧开一个终端（对话 | TUI 并排）"
+              title="在右侧开一个系统终端（已切到该 bot 的工作目录）；要与 Agent TUI 并排：先从「＋」派发 TUI 标签，再把它拖到本窗格边缘吸附"
               className="rounded p-0.5 text-ash hover:bg-line-soft hover:text-ink transition"
             >
               <SquareTerminal size={11} />
@@ -239,39 +238,24 @@ function LiveChatPane({
 /** 拆分出的「未选 bot」草稿窗格：先选人，选完即成该 bot 的草稿对话 */
 function BotChooserInline({ paneKey }: { paneKey: string }) {
   const units = useWorkbench((s) => s.units);
-  const avatarFrame = useAppearance((s) => s.avatarFrame);
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 overflow-y-auto">
       <MessageSquarePlus size={20} className="text-teal" />
       <p className="text-body-sm text-ink font-medium">选择一个 bot 开始对话</p>
       <div className="flex w-full max-w-[340px] flex-col gap-1">
-        {units.map((u) => {
-          const avatar = botAvatarStyle(u.name, avatarFrame);
-          return (
-            <button
-              key={u.id}
-              onClick={() => useChatPanes.getState().choosePaneUnit(paneKey, u.id)}
-              className="flex w-full items-center gap-2.5 rounded-btn px-2.5 py-2 text-left transition text-ink hover:bg-teal-tint hover:text-teal"
-            >
-              {u.avatar ? (
-                <img src={u.avatar} alt="" className={cn("h-6 w-6 shrink-0 object-cover", avatar?.shape)} />
-              ) : (
-                <span
-                  className={cn(
-                    "flex h-6 w-6 shrink-0 items-center justify-center bg-line-soft text-caption font-medium text-graphite",
-                    avatar?.shape,
-                  )}
-                >
-                  {u.name.slice(0, 1)}
-                </span>
-              )}
-              <span className="min-w-0 flex-1 truncate text-body-sm">{u.name}</span>
-              {u.identity?.role && (
-                <span className="shrink-0 truncate max-w-[140px] text-caption text-ash">{u.identity.role}</span>
-              )}
-            </button>
-          );
-        })}
+        {units.map((u) => (
+          <button
+            key={u.id}
+            onClick={() => useChatPanes.getState().choosePaneUnit(paneKey, u.id)}
+            className="flex w-full items-center gap-2.5 rounded-btn px-2.5 py-2 text-left transition text-ink hover:bg-teal-tint hover:text-teal"
+          >
+            <BotAvatar unit={u} size="sm" />
+            <span className="min-w-0 flex-1 truncate text-body-sm">{u.name}</span>
+            {u.identity?.role && (
+              <span className="shrink-0 truncate max-w-[140px] text-caption text-ash">{u.identity.role}</span>
+            )}
+          </button>
+        ))}
         {units.length === 0 && <p className="text-caption text-ash">还没有 bot —— 先在侧栏新建一个。</p>}
       </div>
     </div>

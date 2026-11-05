@@ -3,10 +3,8 @@ import { useChatPanes } from "../store/useChatPanes.ts";
 import { useTerminalStore, SUPPORTED_TERMINAL_PROFILES } from "../store/useTerminalStore.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { openNewTuiForUnit } from "../store/sessionOpen.ts";
-import { useAppearance } from "../store/useAppearance.ts";
-import { botAvatarStyle } from "./Sidebar.tsx";
+import { BotAvatar } from "./BotAvatar.tsx";
 import { ShellOrAgentIcon } from "./TerminalPaneSlot.tsx";
-import { cn } from "./cn.ts";
 
 /**
  * 新建会话页（docs/31 §三）—— 画布空态的主角：选 bot × 选形态
@@ -19,7 +17,6 @@ export function NewSessionPage() {
   const runtimes = useWorkbench((s) => s.runtimes);
   const activeUnitId = useWorkbench((s) => s.activeUnitId);
   const defaultProfileId = useTerminalStore((s) => s.defaultProfileId);
-  const avatarFrame = useAppearance((s) => s.avatarFrame);
 
   const bots = units.filter((u) => u.kind !== "project" || u.bindings.length > 0);
   const executors = runtimes.filter((r) => !r.testOnly);
@@ -46,18 +43,7 @@ export function NewSessionPage() {
                 onClick={() => useChatPanes.getState().openUnitChatPane(u.id)}
                 className="flex items-center gap-2.5 rounded-panel border border-line/60 bg-card px-3 py-2.5 text-left transition hover:border-teal/40 hover:bg-teal-tint/40"
               >
-                {u.avatar ? (
-                  <img src={u.avatar} alt="" className={cn("h-7 w-7 shrink-0 object-cover", botAvatarStyle(u.name, avatarFrame)?.shape)} />
-                ) : (
-                  <span
-                    className={cn(
-                      "flex h-7 w-7 shrink-0 items-center justify-center bg-line-soft text-body-sm font-medium text-graphite",
-                      botAvatarStyle(u.name, avatarFrame)?.shape,
-                    )}
-                  >
-                    {u.name.slice(0, 1)}
-                  </span>
-                )}
+                <BotAvatar unit={u} />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-body-sm text-ink">{u.name}</span>
                   <span className="block truncate text-caption text-ash">{u.identity?.role || "bot"}</span>
