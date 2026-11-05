@@ -719,19 +719,18 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => {
       if (get().isSplitDropNoOp(paneId, targetGroupId)) return;
       const direction: SplitDirection = zone === "left" || zone === "right" ? "horizontal" : "vertical";
       const newFirst = zone === "left" || zone === "top";
-      // 先摘出拖动标签（原组可能塌缩），再把目标组一分为二、新组承载该标签
+      // 先摘出拖动标签（原组可能塌缩），再把目标组一分为二、**新组只装拖动标签**。
+      // bug 修复：此前从旧 dropTabOntoPane 复制来的 order=[...target.tabOrder,
+      // paneId] 会把目标组整组复制进新组——同一标签同时出现在两边
       detachPaneFromGroup(paneId);
       set((s) => {
         if (s.groups[targetGroupId] === undefined) return {};
         const gid = newGroupId();
         const groups: Record<string, PaneGroup> = {
           ...s.groups,
-          [gid]: { id: gid, tabOrder: [], activePaneId: null, recentPaneIds: [] },
+          [gid]: { id: gid, tabOrder: [paneId], activePaneId: paneId, recentPaneIds: [paneId] },
         };
         const layout = splitGroupNode(s.layout ?? { type: "group", groupId: targetGroupId }, targetGroupId, gid, direction, newFirst);
-        const target = { ...groups[targetGroupId]! };
-        const order = [...target.tabOrder, paneId];
-        groups[gid] = { ...groups[gid]!, tabOrder: order, activePaneId: paneId, recentPaneIds: [paneId] };
         return normalize({ ...s, groups, layout, activeGroupId: gid, activePaneId: paneId, maximizedPaneId: null });
       });
     },
