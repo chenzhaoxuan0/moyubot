@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
 import { DaemonClient, defaultDaemonEndpoint } from "../adapters/daemon/client.ts";
-import { adoptTermRow, type DaemonTermRow, type TerminalInstanceItem } from "../store/useTerminalStore.ts";
+import { adoptTermRow, type CanvasPane, type DaemonTermRow } from "../store/useTerminalStore.ts";
 import { useWorkbench, selectActiveUnit } from "../store/useWorkbench.ts";
 import { asSessionId, asUnitId } from "../core/units.ts";
 import { runtimeIdOfSession } from "../store/useChatPanes.ts";
@@ -76,7 +76,7 @@ export function PopoutShell({ route }: { route: PopoutRoute }) {
  * 回放——与 F5 重挂同一套语义）。轮询台账发现 PTY 退出 → 就地展示「已退出」。
  */
 function TerminalPopout({ terminalId }: { terminalId: string }) {
-  const [inst, setInst] = useState<TerminalInstanceItem | null>(null);
+  const [inst, setInst] = useState<CanvasPane | null>(null);
   const [dead, setDead] = useState(false);
 
   useEffect(() => {
@@ -92,7 +92,7 @@ function TerminalPopout({ terminalId }: { terminalId: string }) {
           setDead(true);
           return;
         }
-        setInst((prev) => prev ?? adoptTermRow(row, useWorkbench.getState().units).instance);
+        setInst((prev) => prev ?? adoptTermRow(row, useWorkbench.getState().units));
       } catch {
         /* daemon 抖动：下轮再试 */
       }
@@ -116,7 +116,7 @@ function TerminalPopout({ terminalId }: { terminalId: string }) {
   if (inst === null) {
     return <div className="flex min-h-0 flex-1 items-center justify-center text-caption text-ash">正在连接终端…</div>;
   }
-  return <TerminalPaneSlot inst={inst} totalPanesInGroup={1} />;
+  return <TerminalPaneSlot pane={inst} />;
 }
 
 /* ------------------------------------------------------------- 对话弹出 */

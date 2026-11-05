@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { collectLeafIds, collectChatPaneKeys, useTerminalStore } from "./useTerminalStore.ts";
+import { useTerminalStore } from "./useTerminalStore.ts";
 import { useChatPanes } from "./useChatPanes.ts";
 import { useWorkbench } from "./useWorkbench.ts";
 
@@ -29,8 +29,8 @@ export interface PopoutEntry {
 interface CanvasPopoutsState {
   entries: readonly PopoutEntry[];
 
-  /** 标签右键入口：解析组（仅支持单窗格组弹出），交接并开窗 */
-  popoutTab: (groupId: string) => void;
+  /** 标签右键「弹出为独立窗口」（docs/32：标签=窗格，直接按 paneId 交接） */
+  popoutPane: (paneId: string) => void;
   /** 弹出终端窗格（释放不杀） */
   popoutTerminal: (terminalId: string, title: string) => void;
   /** 弹出对话窗格（摘窗格不杀会话） */
@@ -128,43 +128,32 @@ export const useCanvasPopouts = create<CanvasPopoutsState>((set, get) => {
   return {
     entries: [],
 
-    popoutTab: (groupId) => {
-      const st = useTerminalStore.getState();
-      const group = st.groups.find((g) => g.id === groupId);
-      if (!group) return;
-      const terms = collectLeafIds(group.rootLayout);
-      const chats = collectChatPaneKeys(group.rootLayout);
-      if (terms.length + chats.length !== 1) {
-        useWorkbench.getState().pushNotice(
-          "暂不支持整组弹出",
-          "这个标签里有分屏窗格 —— 目前弹出为单窗格窗口；先把窗格合并（关掉多余分屏）再弹出。",
-          { level: "warn" },
-        );
-        return;
-      }
-      if (terms.length === 1) {
-        const inst = st.instances.find((i) => i.id === terms[0]);
-        get().popoutTerminal(terms[0]!, inst?.title ?? "终端");
-        return;
-      }
-      const pane = useChatPanes.getState().panes[chats[0]!];
+    /** 标签右键「弹出为独立窗口」（docs/32：标签=窗格，无整组解析） */
+    popoutPane: (paneId) => {
+      const pane = useTerminalStore.getState().panes[paneId];
       if (pane === undefined) return;
-      const unit = useWorkbench.getState().units.find((u) => u.id === pane.unitId);
-      get().popoutChat(pane.unitId, pane.sessionId, unit ? `${unit.name} · 对话` : "对话");
+      if (pane.kind === "terminal") {
+        get().popoutTerminal(paneId, pane.title);
+        return;
+      }
+      const record = useChatPanes.getState().panes[paneId];
+      if (record === undefined) return;
+      const unit = useWorkbench.getState().units.find((u) => u.id === record.unitId);
+      get().popoutChat(record.unitId, record.sessionId, unit ? `${unit.name} · 对话` : "对话");
     },
 
     popoutTerminal: (terminalId, title) => {
-      // 交接：布局/实例表摘除 + 本地会话释放不杀（PTY 留 daemon 给 popout）
+      // 交接：从组里摘标签 + 本地会话释放不杀（PTY 留 daemon 给 popout）
       useTerminalStore.getState().releaseTerminalToPopout(terminalId);
       openWindow({ id: `pop_${terminalId}`, kind: "terminal", terminalId, title });
     },
 
     popoutChat: (unitId, sessionId, title) => {
-      // 摘窗格不杀会话：closeChatPane 走「删记录 + 摘叶子」的常规路径
+      // 摘标签不杀会话：closePane 走「删记录 + 组内摘除 + 空组塌缩」的常规路径
       const pane = Object.values(useChatPanes.getState().panes).find(
         (p) => p.unitId === unitId && p.sessionId === sessionId,
       );
-      if (pane !== undefined) useTerminalStore.getState().closeChatPane(pane.paneKey);
+      if (pane !== undefined) useTerminalStore.getState().closePane(pane.paneKey);
       openWindow({ id: `pop_c_${unitId}_${sessionId ?? "draft"}`, kind: "chat", unitId, sessionId, title });
     },
 

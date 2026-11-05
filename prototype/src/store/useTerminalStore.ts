@@ -2,30 +2,81 @@ import { create } from "zustand";
 import { terminalSessionRegistry, CHAT_DOCK_UNIT_ID } from "./TerminalSessionManager.ts";
 import { useChatPanes } from "./useChatPanes.ts";
 
+/**
+ * 会话画布 store（docs/32 组栈模型）—— **叶子=标签组（栈）**，窗格（终端/
+ * 对话）是组栈里的标签；每个分屏格子自带标签条，空组自动塌缩。对齐 orca
+ * `tab-types.ts` 的两层正交模型（分屏树只组合组，标签增删永远不碰树）。
+ *
+ * 焦点单轨：activePaneId 是唯一焦点游标（旧双轨 activeInstanceId↔
+ * activeChatPaneKey 收敛）——kind 查 panes[id].kind；useChatPanes 的焦点同步
+ * 器订阅它驱动「单活+快照注册表」的恢复链（chat 聚焦/失焦）。
+ *
+ * 持久化（canvasLayout v2）：panes/groups/layout/activeGroupId 一并落盘；
+ * 对话标签的身份在序列化层映射为稳定 id（运行时 paneKey 仍是会话内瞬态）。
+ */
+
 export type SplitDirection = "horizontal" | "vertical"; // horizontal = 左右 (row), vertical = 上下 (col)
 
-/**
- * 画布布局树（docs/31 会话画布）—— leaf 泛化为双 kind：
- * - "leaf" 终端窗格（系统终端 / Agent TUI，指向 TerminalInstanceItem）
- * - "chatLeaf" 对话窗格（结构化对话，paneKey 指向 useChatPanes 注册表）
- * 同一棵树里可任意混排（对话 | TUI 并排是杀手场景）。
- */
-export type LayoutNode =
+/** 窗格种类：终端（daemon PTY 视图）或对话（会话线视图） */
+export type PaneKind = "terminal" | "chat";
+
+/** 终端窗格的创建/挂载数据（沿用旧 TerminalInstanceItem 字段面） */
+export interface TerminalInstanceItem {
+  id: string;
+  title: string;
+  shell: string;
+  profileId: string;
+  icon: string;
+  cwd: string;
+  executorId?: string;
+  /** 所属 bot（终端跟随 bot：切换 bot 时激活它的专属标签页） */
+  unitId?: string;
+  createdAt: number;
+  /** 重挂（F5 找回 daemon 存活 PTY）时的一次性回放快照；新建标签没有它 */
+  attachScrollback?: string;
+  /** 来自重挂 —— 背后是活进程，不是占位标签，不许被启发式顺手关掉 */
+  reattached?: boolean;
+}
+
+/** 窗格 = 标签（docs/32：组栈里的一项） */
+export interface CanvasPane {
+  readonly id: string;
+  readonly kind: PaneKind;
+  title: string;
+  /* 终端专属字段（kind === "terminal"） */
+  shell?: string;
+  profileId?: string;
+  icon?: string;
+  cwd?: string;
+  executorId?: string;
+  unitId?: string;
+  createdAt?: number;
+  attachScrollback?: string;
+  reattached?: boolean;
+}
+
+/** 组 = 分屏格子 = 标签栈 */
+export interface PaneGroup {
+  readonly id: string;
+  /** 组内标签序（显示顺序） */
+  tabOrder: readonly string[];
+  /** 组内激活标签；null = 空组（normalize 会塌缩掉） */
+  activePaneId: string | null;
+  /** 组内 MRU（升序，尾 = 最近使用）——关标签按此恢复，不是视觉邻居 */
+  recentPaneIds: readonly string[];
+}
+
+/** 分屏树：叶子=组（组栈模型核心）；单组全幅时 layout 为 null */
+export type GroupLayoutNode =
+  | { type: "group"; groupId: string }
   | {
-      type: "leaf";
-      instanceId: string;
-    }
-  | {
-      type: "chatLeaf";
-      paneKey: string;
-    }
-  | {
-      type: "branch";
+      type: "split";
       id: string;
       direction: SplitDirection;
-      first: LayoutNode;
-      second: LayoutNode;
-      ratio: number; // 0.1 ~ 0.9, 默认 0.5
+      first: GroupLayoutNode;
+      second: GroupLayoutNode;
+      /** first 子树占比 0-1；|r-0.5|≤容差 时序列化省略（对齐 orca 口径） */
+      ratio?: number;
     };
 
 export interface TerminalProfile {
@@ -44,191 +95,101 @@ export const SUPPORTED_TERMINAL_PROFILES: TerminalProfile[] = [
   { id: "bash", name: "Git Bash", shell: "bash.exe", icon: "bash" },
 ];
 
-export interface TerminalInstanceItem {
-  id: string;
-  title: string;
-  shell: string;
-  profileId: string;
-  icon: string;
-  cwd: string;
-  executorId?: string;
-  /** 所属 bot（终端跟随 bot：切换 bot 时激活它的专属标签页） */
-  unitId?: string;
-  createdAt: number;
-  /** 重挂（F5 找回 daemon 存活 PTY）时的一次性回放快照；新建标签没有它 */
-  attachScrollback?: string;
-  /** 来自重挂 —— 背后是活进程，不是占位标签，不许被「换 bot 专属标签」的启发式顺手关掉 */
-  reattached?: boolean;
+/** 拖拽落点（docs/32 §四）：中央=入栈；四边=分出新组 */
+export type DropZone = "center" | "left" | "right" | "top" | "bottom";
+
+/* --------------------------------------------------------------- 树纯函数 */
+
+function newBranchId(): string {
+  return `br_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`;
 }
 
-export interface TerminalTabGroup {
-  id: string;
-  title?: string;
-  rootLayout: LayoutNode;
+/** 树中全部 groupId（顺序 = 布局序） */
+export function collectGroupIds(node: GroupLayoutNode | null): string[] {
+  if (node === null) return [];
+  if (node.type === "group") return [node.groupId];
+  return [...collectGroupIds(node.first), ...collectGroupIds(node.second)];
 }
 
-/** 递归获取树中所有终端窗格的 instanceId（dispose / 终端匹配专用；不含 chat 窗格） */
-export function collectLeafIds(node: LayoutNode | null): string[] {
-  if (!node) return [];
-  if (node.type === "leaf") return [node.instanceId];
-  if (node.type === "chatLeaf") return [];
-  return [...collectLeafIds(node.first), ...collectLeafIds(node.second)];
+/** 把指定叶子组替换为任意子树（拖拽分屏嫁接） */
+export function replaceGroupLeaf(
+  node: GroupLayoutNode,
+  groupId: string,
+  replacement: GroupLayoutNode,
+): GroupLayoutNode {
+  if (node.type === "group") return node.groupId === groupId ? replacement : node;
+  return { ...node, first: replaceGroupLeaf(node.first, groupId, replacement), second: replaceGroupLeaf(node.second, groupId, replacement) };
 }
 
-/** 递归获取树中所有 chat 窗格的 paneKey */
-export function collectChatPaneKeys(node: LayoutNode | null): string[] {
-  if (!node) return [];
-  if (node.type === "leaf") return [];
-  if (node.type === "chatLeaf") return [node.paneKey];
-  return [...collectChatPaneKeys(node.first), ...collectChatPaneKeys(node.second)];
+/** 摘掉指定组叶，兄弟提升（塌缩） */
+export function removeGroupLeaf(node: GroupLayoutNode, groupId: string): GroupLayoutNode | null {
+  if (node.type === "group") return node.groupId === groupId ? null : node;
+  const first = removeGroupLeaf(node.first, groupId);
+  const second = removeGroupLeaf(node.second, groupId);
+  if (first === null && second === null) return null;
+  if (first === null) return second;
+  if (second === null) return first;
+  return { ...node, first, second };
 }
 
-/** 树中窗格总数（双 kind，标签徽章 / mini-bar 判定用） */
-export function countLeaves(node: LayoutNode | null): number {
-  return collectLeafIds(node).length + collectChatPaneKeys(node).length;
-}
-
-/** 叶子是否就是指定窗格（instanceId 与 paneKey 命名空间不重叠，按 id 通配） */
-function leafMatches(node: LayoutNode, targetId: string): boolean {
-  if (node.type === "leaf") return node.instanceId === targetId;
-  if (node.type === "chatLeaf") return node.paneKey === targetId;
-  return false;
-}
-
-/** 递归找到包含指定窗格（任意 kind）的分组 */
-export function findGroupOfPane(
-  groups: readonly TerminalTabGroup[],
-  targetId: string,
-): TerminalTabGroup | undefined {
-  return groups.find((g) => paneInLayout(g.rootLayout, targetId));
-}
-
-function paneInLayout(node: LayoutNode | null, targetId: string): boolean {
-  if (!node) return false;
-  if (node.type === "leaf" || node.type === "chatLeaf") return leafMatches(node, targetId);
-  return paneInLayout(node.first, targetId) || paneInLayout(node.second, targetId);
-}
-
-/** 递归拆分指定窗格（任意 kind），新窗格由调用方给出（终端 leaf 或 chatLeaf） */
-export function splitTreeNode(
-  node: LayoutNode,
-  targetId: string,
-  newLeaf: LayoutNode,
+/** 指定组旁放新组（direction + 先后） */
+export function splitGroupNode(
+  node: GroupLayoutNode,
+  groupId: string,
+  newGroupId: string,
   direction: SplitDirection,
-): LayoutNode {
-  if (node.type === "leaf" || node.type === "chatLeaf") {
-    if (leafMatches(node, targetId)) {
-      return {
-        type: "branch",
-        id: `br_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`,
-        direction,
-        first: node,
-        second: newLeaf,
-        ratio: 0.5,
-      };
-    }
-    return node;
-  }
-  return {
-    ...node,
-    first: splitTreeNode(node.first, targetId, newLeaf, direction),
-    second: splitTreeNode(node.second, targetId, newLeaf, direction),
-  };
+  newFirst: boolean,
+): GroupLayoutNode {
+  return replaceGroupLeaf(node, groupId, {
+    type: "split",
+    id: newBranchId(),
+    direction,
+    first: newFirst ? { type: "group", groupId: newGroupId } : { type: "group", groupId },
+    second: newFirst ? { type: "group", groupId } : { type: "group", groupId: newGroupId },
+    ratio: 0.5,
+  });
 }
 
-/** 递归移除指定窗格（任意 kind），兄弟节点自动提升填补空间 */
-export function removeTreeNode(node: LayoutNode, targetId: string): LayoutNode | null {
-  if (node.type === "leaf" || node.type === "chatLeaf") {
-    return leafMatches(node, targetId) ? null : node;
-  }
-  const newFirst = removeTreeNode(node.first, targetId);
-  const newSecond = removeTreeNode(node.second, targetId);
-  if (!newFirst && !newSecond) return null;
-  if (!newFirst) return newSecond;
-  if (!newSecond) return newFirst;
-  return {
-    ...node,
-    first: newFirst,
-    second: newSecond,
-  };
+/** 树按 split.id 更新比例 */
+export function updateSplitRatio(node: GroupLayoutNode, splitId: string, ratio: number): GroupLayoutNode {
+  if (node.type === "group") return node;
+  if (node.id === splitId) return { ...node, ratio };
+  return { ...node, first: updateSplitRatio(node.first, splitId, ratio), second: updateSplitRatio(node.second, splitId, ratio) };
 }
 
-/** 把指定窗格（任意 kind）原地替换为另一棵子树（二期 drag-to-split：标签吸附嫁接） */
-export function replaceTreeNode(
-  node: LayoutNode,
-  targetId: string,
-  replacement: LayoutNode,
-): LayoutNode {
-  if (node.type === "leaf" || node.type === "chatLeaf") {
-    return leafMatches(node, targetId) ? replacement : node;
-  }
-  return {
-    ...node,
-    first: replaceTreeNode(node.first, targetId, replacement),
-    second: replaceTreeNode(node.second, targetId, replacement),
-  };
+/** 树里所有 split 节点（Splitter 渲染面） */
+export function collectSplits(node: GroupLayoutNode | null): Array<{ id: string; direction: SplitDirection }> {
+  if (node === null || node.type === "group") return [];
+  return [
+    { id: node.id, direction: node.direction },
+    ...collectSplits(node.first),
+    ...collectSplits(node.second),
+  ];
 }
 
-/** 分屏吸附区（拖标签到窗格边缘）：四向语义 */
-export type DropZone = "left" | "right" | "top" | "bottom";
-
-/** 取指定窗格的叶子节点本体（drag-to-split 嫁接时保住原叶子的 kind 与 id） */
-export function findLeafNode(node: LayoutNode | null, targetId: string): LayoutNode | null {
-  if (!node) return null;
-  if (node.type === "leaf" || node.type === "chatLeaf") return leafMatches(node, targetId) ? node : null;
-  return findLeafNode(node.first, targetId) ?? findLeafNode(node.second, targetId);
-}
-
-/** 递归更新分屏比例 */
-export function updateTreeRatio(
-  node: LayoutNode,
-  branchId: string,
-  ratio: number,
-): LayoutNode {
-  if (node.type === "leaf" || node.type === "chatLeaf") return node;
-  if (node.id === branchId) {
-    return { ...node, ratio };
-  }
-  return {
-    ...node,
-    first: updateTreeRatio(node.first, branchId, ratio),
-    second: updateTreeRatio(node.second, branchId, ratio),
-  };
-}
+/* --------------------------------------------------------------- state 接口 */
 
 interface TerminalStoreState {
-  instances: TerminalInstanceItem[];
-  groups: TerminalTabGroup[];
+  panes: Readonly<Record<string, CanvasPane>>;
+  groups: Readonly<Record<string, PaneGroup>>;
+  layout: GroupLayoutNode | null;
   activeGroupId: string | null;
-  activeInstanceId: string | null;
-  /**
-   * 焦点 chat 窗格的游标（docs/31）。焦点窗格可能是终端（activeInstanceId）
-   * 或对话（activeChatPaneKey），两者互斥：任一聚焦都清掉另一个。
-   * useChatPanes.installChatPaneSync 订阅它的变化驱动快照/恢复。
-   */
-  activeChatPaneKey: string | null;
-  /**
-   * 最大化窗格的 id —— **双 kind 通用**（终端 instanceId 或 chat paneKey 皆可
-   * 入座；渲染侧按「能否在 instances 里查到」分流，见 TerminalPanel）。
-   */
+  /** 唯一焦点游标（docs/32 单轨）：kind 查 panes[id].kind */
+  activePaneId: string | null;
   maximizedPaneId: string | null;
   defaultProfileId: string;
   /** 首载重挂是否已尝试过（无论找没找到）—— 空态自动建标签必须等它，否则抢占重挂 */
   reattachDone: boolean;
-  /**
-   * 派发在途登记（unitId → 过期时刻）。侧栏历史行 / 历史弹窗直点「TUI 恢复」后，
-   * 「终端跟随 bot」effect 会因标签还没落地（created 帧在途）而再派发一个**全新的**
-   * TUI —— 双进程竞态。登记 5s 内的派发意图，跟随 effect 看到即跳过。
-   */
+  /** 派发在途登记（unitId → 过期时刻）：防「标签还没落地又派发一个全新的」双进程竞态 */
   pendingUnitDispatch: Record<string, number>;
   notePendingUnitDispatch: (unitId: string) => void;
-  /** created 帧推送认领是否已装（幂等闸，防止重复订阅） */
+  /** created 帧推送认领是否已装（幂等闸） */
   claimInstalled: boolean;
   /** 终端启动 Antigravity 时是否默认携带 --dangerously-skip-permissions 免审批 */
   agyDefaultYolo: boolean;
   setAgyDefaultYolo: (val: boolean) => void;
 
-  /** 新建独立终端标签页 */
+  /** 新建终端标签（加进激活组；没有组就开新组） */
   createTab: (opts?: {
     profileId?: string;
     cwd?: string;
@@ -236,87 +197,54 @@ interface TerminalStoreState {
     title?: string;
     unitId?: string;
   }) => string;
-
-  /** 新建对话标签页（chatLeaf 单窗格组）并激活 */
+  /** 新建对话标签（paneKey 来自 useChatPanes 注册表），同样落进激活组 */
   createChatTab: (paneKey: string) => string;
 
-  /** 自由拆分（支持任意嵌套左右/上下；目标与新窗格都可为终端或对话窗格） */
+  /** 焦点主入口：激活某标签（置组内 activePaneId + activeGroupId） */
+  activatePane: (paneId: string) => void;
+  /** 旧名兼容（docs/31 遗留调用面）：chat 窗格激活 */
+  focusChatPaneTab: (paneKey: string) => void;
+  /** 激活某个分组格（焦点 = 组内激活标签） */
+  setActiveGroup: (groupId: string) => void;
+
+  /** 拆分当前组：新组承载新标签（终端或对话），返回新组 id */
   splitPane: (opts?: {
-    /** 拆分目标窗格（instanceId 或 paneKey，任意 kind）；缺省 = 焦点窗格 */
-    targetPaneId?: string;
-    /** 拆分方向 */
     direction?: SplitDirection;
-    /* —— 终端窗格的创建参数（chatPaneKey 存在时忽略） —— */
     profileId?: string;
     cwd?: string;
     executorId?: string;
     title?: string;
     unitId?: string;
-    /* —— 对话窗格：给出 paneKey 则新窗格为 chatLeaf —— */
     chatPaneKey?: string;
   }) => string | null;
 
-  /** 关闭单个终端窗格（若为标签页内最后一个窗格，则连带关闭标签页） */
-  closePane: (instanceId: string) => void;
+  /** 关标签（终端杀 PTY / 对话摘注册表不杀会话）；组空塌缩 */
+  closePane: (paneId: string) => void;
+  /** 标签右键：保留该标签，关掉同组其余 */
+  closeOtherPanes: (keepPaneId: string) => void;
+  /** 关整个分组格（组内全部标签；组从树摘除） */
+  closeGroup: (groupId: string) => void;
+  /** 跨组移动/组内重排（拖拽提交） */
+  movePaneToGroup: (paneId: string, toGroupId: string, index?: number) => void;
+  /** 拖标签五向落点（center=入栈并激活；四边=分出新组） */
+  dropPaneOnGroup: (paneId: string, targetGroupId: string, zone: DropZone) => void;
+  /** 拖自身组内最后一个标签到自身四边 = no-op 判定 */
+  isSplitDropNoOp: (paneId: string, targetGroupId: string) => boolean;
 
-  /** 关闭对话窗格（删窗格不杀会话；组内最后一个则连带关标签） */
-  closeChatPane: (paneKey: string) => void;
+  /** 最大化 / 还原窗格（双 kind 通用 id） */
+  toggleMaximize: (paneId?: string) => void;
+  /** 调整分屏分割线比例（提交式：拖动结束才调用） */
+  setSplitRatio: (splitId: string, ratio: number) => void;
 
-  /** 把焦点游标翻到某个 chat 窗格（点窗格本体 / 标签激活走这里） */
-  focusChatPaneTab: (paneKey: string) => void;
-
-  /** 标签拖动重排（二期）：把组挪到标签列表的指定下标 */
-  moveGroup: (groupId: string, toIndex: number) => void;
-
-  /** 拖标签吸附分屏（二期）：把拖动组的整棵布局子树嫁接到目标窗格的指定边 */
-  dropTabOntoPane: (dragGroupId: string, targetPaneId: string, zone: DropZone) => void;
-
-  /**
-   * 弹出独立窗口的交接（三期）：把终端窗格从布局与实例表里摘除，本地会话
-   * **释放不杀**（registry.release）——PTY 留在 daemon，等 popout / 归拢重认领。
-   * 返回是否摘干净（false = 布局里本就没有它）。
-   */
-  releaseTerminalToPopout: (terminalId: string) => boolean;
-
-  /**
-   * 重认领（三期归拢 / popout 关闭 / F5）：按 daemon 台账行把终端找回来
-   * （带 scrollback 回放）建标签并激活；已在标签里则只激活。
-   */
-  readoptTerminal: (terminalId: string) => Promise<void>;
-
-  /** 关闭整个标签页组 */
-  closeTab: (groupId: string) => void;
-
-  /** 标签右键：保留该组，杀掉其余全部（含各组分屏窗格）并激活保留组 */
-  closeOtherTabs: (keepGroupId: string) => void;
-
-  /** 标签右键：杀掉全部终端、清空所有标签组 */
-  closeAllTabs: () => void;
-
-  /** 设置当前活跃标签组 */
-  setActiveGroup: (groupId: string) => void;
-
-  /** 设置当前聚焦的窗格实例 */
-  setActiveInstance: (instanceId: string) => void;
-
-  /** 调整分屏分割线比例 */
-  setBranchRatio: (branchId: string, ratio: number) => void;
-
-  /** 最大化 / 还原窗格 */
-  toggleMaximize: (instanceId?: string) => void;
-
-  /** 重命名实例 */
-  renameInstance: (instanceId: string, title: string) => void;
-
-  /** 重命名标签页 */
-  renameTab: (groupId: string, title: string) => void;
+  /** 重命名标签 */
+  renamePane: (paneId: string, title: string) => void;
 
   /** 全部清空销毁 */
   clearAll: () => void;
 
   /**
-   * F5 重挂：把 daemon 里还活着的 PTY 找回来（terminal.list），逐个还原成标签。
-   * 没有它，刷新一次就积累一批孤儿进程 —— 界面上再也关不掉，直到手杀 daemon。
+   * F5 重挂：把 daemon 里还活着的 PTY 找回来（terminal.list），逐个还原成
+   * 标签（进默认组）。没有它，刷新一次就积累一批界面再也关不掉的孤儿进程。
    */
   reattachFromDaemon: () => Promise<void>;
 
@@ -326,10 +254,14 @@ interface TerminalStoreState {
    */
   installTerminalCreatedClaim: () => void;
 
-  // 兼容别名
-  createInstance: (opts?: { profileId?: string; cwd?: string; executorId?: string; title?: string }) => string;
-  closeInstance: (id: string) => void;
-  splitWithNew: (profileId?: string) => string | null;
+  /**
+   * 弹出独立窗口的交接（docs/31 三期）：把终端标签从组里摘除，本地会话
+   * **释放不杀**（registry.release）——PTY 留在 daemon 给 popout 重认领。
+   */
+  releaseTerminalToPopout: (terminalId: string) => boolean;
+
+  /** 重认领（归拢 / popout 关闭 / F5）：按台账行找回终端建标签并激活 */
+  readoptTerminal: (terminalId: string) => Promise<void>;
 }
 
 const TERMINAL_PREFS_KEY = "agent-workbench:terminal-prefs";
@@ -376,11 +308,11 @@ function shellToProfileId(shell: string): string {
   return "pwsh";
 }
 
-/** daemon 终端行 → 标签实例 + 独立标签组（重挂、created 推送认领、popout 共用一套还原逻辑） */
+/** daemon 终端行 → 窗格（重挂、created 推送认领、popout 共用一套还原逻辑） */
 export function adoptTermRow(
   t: DaemonTermRow,
   units: ReadonlyArray<{ id: string; name: string; rootPath?: string }>,
-): { instance: TerminalInstanceItem; group: TerminalTabGroup } {
+): CanvasPane {
   // 匹配 Bot：优先用终端记录的 unitId，兜底用工作目录匹配
   let targetUnitId = t.unitId;
   if (!targetUnitId && t.cwd) {
@@ -403,8 +335,9 @@ export function adoptTermRow(
     title = t.executor ?? "终端";
   }
 
-  const instance: TerminalInstanceItem = {
+  return {
     id: t.terminalId,
+    kind: "terminal",
     title,
     shell: t.shell,
     profileId,
@@ -416,630 +349,555 @@ export function adoptTermRow(
     attachScrollback: t.scrollback,
     reattached: true,
   };
-  return { instance, group: { id: `group_${t.terminalId}`, rootLayout: { type: "leaf", instanceId: t.terminalId } } };
 }
 
-export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
-  instances: [],
-  groups: [],
-  activeGroupId: null,
-  activeInstanceId: null,
-  maximizedPaneId: null,
-  activeChatPaneKey: null,
-  defaultProfileId: "pwsh",
-  reattachDone: false,
-  claimInstalled: false,
-  pendingUnitDispatch: {},
-  agyDefaultYolo: initialTerminalPrefs.agyDefaultYolo,
+function newGroupId(): string {
+  return `grp_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`;
+}
 
-  notePendingUnitDispatch: (unitId) => {
-    set((s) => ({ pendingUnitDispatch: { ...s.pendingUnitDispatch, [unitId]: Date.now() + 5000 } }));
-  },
+/** 焦点跟随用的辅助：组内下一个激活标签（关标签后按 MRU 恢复） */
+function nextActiveAfterClose(group: PaneGroup, closingPaneId: string): string | null {
+  const remaining = group.tabOrder.filter((id) => id !== closingPaneId);
+  if (remaining.length === 0) return null;
+  for (let i = group.recentPaneIds.length - 1; i >= 0; i--) {
+    const candidate = group.recentPaneIds[i]!;
+    if (remaining.includes(candidate)) return candidate;
+  }
+  return remaining[remaining.length - 1] ?? null;
+}
 
-  setAgyDefaultYolo: (val: boolean) => {
-    set({ agyDefaultYolo: val });
-    persistTerminalPrefs({ agyDefaultYolo: val });
-  },
+function touchRecent(group: PaneGroup, paneId: string): readonly string[] {
+  return [...group.recentPaneIds.filter((id) => id !== paneId), paneId];
+}
 
-  createTab: (opts = {}) => {
-    const profileId = opts.profileId ?? get().defaultProfileId;
-    const fallbackProfile: TerminalProfile = SUPPORTED_TERMINAL_PROFILES[0]!;
-    const profile: TerminalProfile =
-      SUPPORTED_TERMINAL_PROFILES.find((p) => p.id === profileId) ?? fallbackProfile;
-
-    let finalExecutorId = opts.executorId;
-    let finalTitle = opts.title;
-
-    // 当用户未显式指定 yolo 且全局偏好配置了 agy 默认走 yolo 时，直启 agy:yolo
-    const bareExec = finalExecutorId ? finalExecutorId.replace(/^daemon:/, "").toLowerCase() : "";
-    if (
-      (bareExec === "agy" || bareExec === "antigravity") &&
-      get().agyDefaultYolo
-    ) {
-      finalExecutorId = "agy:yolo";
-      if (!finalTitle) finalTitle = "Antigravity (YOLO)";
+export const useTerminalStore = create<TerminalStoreState>((set, get) => {
+  /* ---- 内部：把窗格放进组（建组可选）；返回 [groupId, paneId] 焦点对 ---- */
+  const addPaneToGroup = (
+    pane: CanvasPane,
+    opts: { groupId?: string; activate?: boolean; title?: string } = {},
+  ): string => {
+    const state = get();
+    const groups = { ...state.groups };
+    let targetGroupId = opts.groupId ?? state.activeGroupId;
+    if (targetGroupId === null || groups[targetGroupId] === undefined) {
+      // 没有可落点的组：开新组（树没有就单组全幅）
+      targetGroupId = newGroupId();
+      groups[targetGroupId] = { id: targetGroupId, tabOrder: [], activePaneId: null, recentPaneIds: [] };
     }
-
-    const id = `term_${Math.random().toString(36).slice(2, 9)}_${Date.now().toString(36)}`;
-    const count = get().instances.filter((i) => i.profileId === profile.id).length + 1;
-    const title =
-      finalTitle ??
-      (finalExecutorId
-        ? finalExecutorId.endsWith(":yolo")
-          ? `${finalExecutorId.replace(/:yolo$/, "")} (YOLO)`
-          : `${finalExecutorId} (pwsh)`
-        : `${profile.name} #${count}`);
-
-    const newInst: TerminalInstanceItem = {
-      id,
-      title,
-      shell: profile.shell,
-      profileId: profile.id,
-      icon: finalExecutorId ? finalExecutorId : profile.icon,
-      cwd: opts.cwd ?? "",
-      executorId: finalExecutorId,
-      unitId: opts.unitId,
-      createdAt: Date.now(),
+    const group = groups[targetGroupId]!;
+    groups[targetGroupId] = {
+      ...group,
+      tabOrder: [...group.tabOrder, pane.id],
+      activePaneId: opts.activate === false ? group.activePaneId : pane.id,
+      recentPaneIds: opts.activate === false ? group.recentPaneIds : touchRecent(group, pane.id),
     };
-
-    const groupId = `group_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`;
-    const newGroup: TerminalTabGroup = {
-      id: groupId,
-      title,
-      rootLayout: { type: "leaf", instanceId: id },
-    };
-
-    set((state) => ({
-      instances: [...state.instances, newInst],
-      groups: [...state.groups, newGroup],
-      activeGroupId: groupId,
-      activeInstanceId: id,
-      activeChatPaneKey: null,
-    }));
-
-    return id;
-  },
-
-  createChatTab: (paneKey) => {
-    const groupId = `group_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`;
-    const newGroup: TerminalTabGroup = {
-      id: groupId,
-      rootLayout: { type: "chatLeaf", paneKey },
-    };
-    set((state) => ({
-      groups: [...state.groups, newGroup],
-      activeGroupId: groupId,
-      activeInstanceId: null,
-      activeChatPaneKey: paneKey,
-      maximizedPaneId: null,
-    }));
-    return groupId;
-  },
-
-  focusChatPaneTab: (paneKey) => {
-    const group = findGroupOfPane(get().groups, paneKey);
-    if (!group) return;
     set({
-      activeGroupId: group.id,
-      activeInstanceId: null,
-      activeChatPaneKey: paneKey,
-      maximizedPaneId: null,
+      panes: { ...state.panes, [pane.id]: pane },
+      groups,
+      // 单组全幅约定（docs/32）：layout 只在组数 >1 时存在
+      layout:
+        Object.keys(groups).length > 1
+          ? (state.layout ?? { type: "group", groupId: targetGroupId })
+          : null,
+      ...(opts.activate === false
+        ? {}
+        : { activeGroupId: targetGroupId, activePaneId: pane.id }),
     });
-  },
+    return targetGroupId;
+  };
 
-  moveGroup: (groupId, toIndex) => {
-    set((state) => {
-      const from = state.groups.findIndex((g) => g.id === groupId);
-      if (from < 0) return {};
-      const next = state.groups.slice();
-      const [moved] = next.splice(from, 1);
-      const clamped = Math.max(0, Math.min(next.length, toIndex));
-      next.splice(clamped, 0, moved!);
-      return { groups: next };
-    });
-  },
-
-  dropTabOntoPane: (dragGroupId, targetPaneId, zone) => {
-    const { groups } = get();
-    const dragGroup = groups.find((g) => g.id === dragGroupId);
-    const targetGroup = findGroupOfPane(groups, targetPaneId);
-    // 拖自己组 onto 自己组的窗格 = 无操作；目标不存在同样静默
-    if (!dragGroup || !targetGroup || dragGroup.id === targetGroup.id) return;
-    const targetLeaf = findLeafNode(targetGroup.rootLayout, targetPaneId);
-    if (!targetLeaf) return;
-    const direction: SplitDirection = zone === "left" || zone === "right" ? "horizontal" : "vertical";
-    const dragFirst = zone === "left" || zone === "top";
-    const branch: LayoutNode = {
-      type: "branch",
-      id: `br_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`,
-      direction,
-      first: dragFirst ? dragGroup.rootLayout : targetLeaf,
-      second: dragFirst ? targetLeaf : dragGroup.rootLayout,
-      ratio: 0.5,
-    };
-    const grafted = replaceTreeNode(targetGroup.rootLayout, targetPaneId, branch);
-    set((state) => ({
-      groups: state.groups
-        .filter((g) => g.id !== dragGroup.id)
-        .map((g) => (g.id === targetGroup.id ? { ...g, rootLayout: grafted } : g)),
-      activeGroupId: targetGroup.id,
-      maximizedPaneId: null,
-    }));
-  },
-
-  releaseTerminalToPopout: (terminalId) => {
-    const group = findGroupOfPane(get().groups, terminalId);
-    if (!group) return false;
-    // 释放本地会话（不杀 PTY）——popout 窗口重新 subscribe 接管
-    terminalSessionRegistry.release(terminalId);
-    set((state) => {
-      const updatedLayout = removeTreeNode(group.rootLayout, terminalId);
-      const groups =
-        updatedLayout === null
-          ? state.groups.filter((g) => g.id !== group.id)
-          : state.groups.map((g) => (g.id === group.id ? { ...g, rootLayout: updatedLayout } : g));
-      return {
-        groups,
-        instances: state.instances.filter((i) => i.id !== terminalId),
-        ...(state.activeInstanceId === terminalId
-          ? {
-              activeInstanceId: collectLeafIds(updatedLayout)[0] ?? null,
-              activeChatPaneKey: updatedLayout === null ? state.activeChatPaneKey : collectChatPaneKeys(updatedLayout)[0] ?? state.activeChatPaneKey,
-            }
-          : {}),
-      };
-    });
-    return true;
-  },
-
-  readoptTerminal: async (terminalId) => {
-    // 已在标签里：只激活（双开同一 PTY 会两处 xterm 抢同一画布）
-    const existingGroup = findGroupOfPane(get().groups, terminalId);
-    if (existingGroup) {
-      get().setActiveGroup(existingGroup.id);
-      get().setActiveInstance(terminalId);
-      return;
-    }
-    let row: DaemonTermRow | undefined;
-    try {
-      const { DaemonClient, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
-      const client = DaemonClient.get(defaultDaemonEndpoint());
-      const list = await client.rpc<DaemonTermRow[]>("terminal.list", null, 10000);
-      row = list.find((t) => t.terminalId === terminalId);
-    } catch {
-      return; // daemon 抖动：静默放弃，F5 重挂是兜底
-    }
-    if (row === undefined) return; // PTY 已死：没有可认领的东西
-    const { useWorkbench } = await import("./useWorkbench.ts");
-    const { instance, group } = adoptTermRow(row, useWorkbench.getState().units);
-    set((s) => {
-      if (s.instances.some((i) => i.id === terminalId)) return {}; // 竞态兜底
-      return {
-        instances: [...s.instances, instance],
-        groups: [...s.groups, group],
-        activeGroupId: group.id,
-        activeInstanceId: instance.id,
-        activeChatPaneKey: null,
-        maximizedPaneId: null,
-      };
-    });
-  },
-
-  splitPane: (opts = {}) => {
-    const { activeInstanceId, activeChatPaneKey, groups, instances } = get();
-    // 拆分目标：显式指定（任意 kind）→ 焦点窗格（chat 游标优先）→ 首个窗格
-    const targetId =
-      opts.targetPaneId ??
-      activeChatPaneKey ??
-      activeInstanceId ??
-      collectLeafIds(groups[0]?.rootLayout ?? null)[0] ??
-      collectChatPaneKeys(groups[0]?.rootLayout ?? null)[0];
-    if (!targetId) {
-      return get().createTab(opts);
-    }
-
-    // 找到包含该目标的标签组
-    const group = findGroupOfPane(groups, targetId);
-    if (!group) {
-      return get().createTab(opts);
-    }
-
-    const direction: SplitDirection = opts.direction ?? "horizontal";
-
-    // 对话窗格落在目标旁边（对话|对话、终端|对话 混排都是合法组合）
-    if (opts.chatPaneKey !== undefined) {
-      const chatLayout = splitTreeNode(group.rootLayout, targetId, { type: "chatLeaf", paneKey: opts.chatPaneKey }, direction);
-      set((state) => ({
-        groups: state.groups.map((g) =>
-          g.id === group.id ? { ...g, rootLayout: chatLayout } : g,
-        ),
-        activeGroupId: group.id,
-        activeInstanceId: null,
-        activeChatPaneKey: opts.chatPaneKey,
-        maximizedPaneId: null,
-      }));
-      return opts.chatPaneKey;
-    }
-
-    const targetInst = instances.find((i) => i.id === targetId);
-    const profileId = opts.profileId ?? targetInst?.profileId ?? get().defaultProfileId;
-    const fallbackProfile: TerminalProfile = SUPPORTED_TERMINAL_PROFILES[0]!;
-    const profile: TerminalProfile =
-      SUPPORTED_TERMINAL_PROFILES.find((p) => p.id === profileId) ?? fallbackProfile;
-
-    const newId = `term_${Math.random().toString(36).slice(2, 9)}_${Date.now().toString(36)}`;
-    const count = instances.filter((i) => i.profileId === profile.id).length + 1;
-    const title =
-      opts.title ??
-      (opts.executorId
-        ? `${opts.executorId} (pwsh)`
-        : `${profile.name} #${count}`);
-
-    const newInst: TerminalInstanceItem = {
-      id: newId,
-      title,
-      shell: profile.shell,
-      profileId: profile.id,
-      icon: opts.executorId ? opts.executorId : profile.icon,
-      cwd: opts.cwd ?? targetInst?.cwd ?? "",
-      executorId: opts.executorId,
-      unitId: opts.unitId,
-      createdAt: Date.now(),
-    };
-
-    const updatedLayout = splitTreeNode(group.rootLayout, targetId, { type: "leaf", instanceId: newId }, direction);
-
-    set((state) => ({
-      instances: [...state.instances, newInst],
-      groups: state.groups.map((g) =>
-        g.id === group.id ? { ...g, rootLayout: updatedLayout } : g,
-      ),
-      activeGroupId: group.id,
-      activeInstanceId: newId,
-      activeChatPaneKey: null,
-      maximizedPaneId: null, // 拆分时自动解除最大化
-    }));
-
-    return newId;
-  },
-
-  closeChatPane: (paneKey) => {
-    const group = findGroupOfPane(get().groups, paneKey);
-    useChatPanes.getState().handlePaneClosed(paneKey);
-    if (!group) return;
-    // 关窗格不杀会话（docs/31 §四）：只摘布局叶子；组内最后一个叶子连带关标签
-    const updatedLayout = removeTreeNode(group.rootLayout, paneKey);
-    if (!updatedLayout) {
-      get().closeTab(group.id);
-      return;
-    }
-    set((state) => ({
-      groups: state.groups.map((g) =>
-        g.id === group.id ? { ...g, rootLayout: updatedLayout } : g,
-      ),
-      ...(state.activeChatPaneKey === paneKey ? { activeChatPaneKey: null } : {}),
-    }));
-  },
-
-  closePane: (instanceId: string) => {
-    terminalSessionRegistry.dispose(instanceId);
-
-    set((state) => {
-      const group = state.groups.find((g) =>
-        collectLeafIds(g.rootLayout).includes(instanceId),
-      );
-      if (!group) {
-        return {
-          instances: state.instances.filter((i) => i.id !== instanceId),
-        };
+  /* ---- 内部：规范化——空组塌缩、单组收平、焦点自愈 ---- */
+  const normalize = (s: {
+    panes: Readonly<Record<string, CanvasPane>>;
+    groups: Readonly<Record<string, PaneGroup>>;
+    layout: GroupLayoutNode | null;
+    activeGroupId: string | null;
+    activePaneId: string | null;
+    maximizedPaneId: string | null;
+  }): Partial<TerminalStoreState> => {
+    const groups = { ...s.groups };
+    let layout = s.layout;
+    // 空组摘叶
+    for (const g of Object.values(groups)) {
+      if (g.tabOrder.length === 0 && (layout === null || collectGroupIds(layout).includes(g.id))) {
+        if (layout !== null) {
+          const next = removeGroupLeaf(layout, g.id);
+          layout = next !== null && next.type === "group" ? null : next;
+        }
+        delete groups[g.id];
       }
-
-      const updatedLayout = removeTreeNode(group.rootLayout, instanceId);
-      const newInstances = state.instances.filter((i) => i.id !== instanceId);
-
-      let newGroups = state.groups;
-      let newActiveGroupId = state.activeGroupId;
-      let newActiveInstanceId = state.activeInstanceId;
-      let newActiveChatPaneKey = state.activeChatPaneKey;
-
-      if (!updatedLayout) {
-        // 该组已无任何窗格，关闭整个组
-        const gIdx = state.groups.findIndex((g) => g.id === group.id);
-        newGroups = state.groups.filter((g) => g.id !== group.id);
-        if (state.activeGroupId === group.id) {
-          if (newGroups.length > 0) {
-            const nextIdx = Math.max(0, gIdx - 1);
-            newActiveGroupId = newGroups[nextIdx]?.id ?? null;
-            const nextRoot = newGroups[nextIdx]?.rootLayout ?? null;
-            newActiveInstanceId = collectLeafIds(nextRoot)[0] ?? null;
-            newActiveChatPaneKey = collectChatPaneKeys(nextRoot)[0] ?? null;
-          } else {
-            newActiveGroupId = null;
-            newActiveInstanceId = null;
-            newActiveChatPaneKey = null;
-          }
+    }
+    // 单组收平
+    if (layout !== null && layout.type === "group") layout = null;
+    // 焦点自愈：组没了/标签没了 → 落到仍在的最后一个激活标签
+    let { activeGroupId, activePaneId } = s;
+    if (activeGroupId !== null && groups[activeGroupId] === undefined) activeGroupId = null;
+    if (activePaneId !== null && s.panes[activePaneId] === undefined) activePaneId = null;
+    if (activeGroupId === null || groups[activeGroupId] === undefined) {
+      const firstGroup = Object.values(groups)[0];
+      if (firstGroup !== undefined) {
+        activeGroupId = firstGroup.id;
+        if (activePaneId === null || !firstGroup.tabOrder.includes(activePaneId)) {
+          activePaneId = firstGroup.activePaneId ?? firstGroup.tabOrder[firstGroup.tabOrder.length - 1] ?? null;
         }
       } else {
-        // 更新组内布局树
-        newGroups = state.groups.map((g) =>
-          g.id === group.id ? { ...g, rootLayout: updatedLayout } : g,
+        activeGroupId = null;
+        activePaneId = null;
+      }
+    }
+    const maximizedPaneId = s.maximizedPaneId !== null && s.panes[s.maximizedPaneId] === undefined ? null : s.maximizedPaneId;
+    return { groups, layout, activeGroupId, activePaneId, ...(maximizedPaneId !== s.maximizedPaneId ? { maximizedPaneId } : {}) };
+  };
+
+  /* ---- 内部：从组里摘标签（不删 pane 记录；返回受影响的组快照） ---- */
+  const detachPaneFromGroup = (paneId: string): void => {
+    const state = get();
+    for (const g of Object.values(state.groups)) {
+      if (!g.tabOrder.includes(paneId)) continue;
+      const tabOrder = g.tabOrder.filter((id) => id !== paneId);
+      const activePaneId = g.activePaneId === paneId ? nextActiveAfterClose(g, paneId) : g.activePaneId;
+      set((s) => ({
+        groups: {
+          ...s.groups,
+          [g.id]: { ...g, tabOrder, activePaneId, recentPaneIds: g.recentPaneIds.filter((id) => id !== paneId) },
+        },
+      }));
+      return;
+    }
+  };
+
+  return {
+    panes: {},
+    groups: {},
+    layout: null,
+    activeGroupId: null,
+    activePaneId: null,
+    maximizedPaneId: null,
+    defaultProfileId: "pwsh",
+    reattachDone: false,
+    claimInstalled: false,
+    pendingUnitDispatch: {},
+    agyDefaultYolo: initialTerminalPrefs.agyDefaultYolo,
+
+    notePendingUnitDispatch: (unitId) => {
+      set((s) => ({ pendingUnitDispatch: { ...s.pendingUnitDispatch, [unitId]: Date.now() + 5000 } }));
+    },
+
+    setAgyDefaultYolo: (val) => {
+      set({ agyDefaultYolo: val });
+      persistTerminalPrefs({ agyDefaultYolo: val });
+    },
+
+    createTab: (opts = {}) => {
+      const profileId = opts.profileId ?? get().defaultProfileId;
+      const fallbackProfile: TerminalProfile = SUPPORTED_TERMINAL_PROFILES[0]!;
+      const profile: TerminalProfile =
+        SUPPORTED_TERMINAL_PROFILES.find((p) => p.id === profileId) ?? fallbackProfile;
+
+      let finalExecutorId = opts.executorId;
+      let finalTitle = opts.title;
+
+      // 当用户未显式指定 yolo 且全局偏好配置了 agy 默认走 yolo 时，直启 agy:yolo
+      const bareExec = finalExecutorId ? finalExecutorId.replace(/^daemon:/, "").toLowerCase() : "";
+      if ((bareExec === "agy" || bareExec === "antigravity") && get().agyDefaultYolo) {
+        finalExecutorId = "agy:yolo";
+        if (!finalTitle) finalTitle = "Antigravity (YOLO)";
+      }
+
+      const id = `term_${Math.random().toString(36).slice(2, 9)}_${Date.now().toString(36)}`;
+      const count = Object.values(get().panes).filter((p) => p.kind === "terminal" && p.profileId === profile.id).length + 1;
+      const title =
+        finalTitle ??
+        (finalExecutorId
+          ? finalExecutorId.endsWith(":yolo")
+            ? `${finalExecutorId.replace(/:yolo$/, "")} (YOLO)`
+            : `${finalExecutorId} (pwsh)`
+          : `${profile.name} #${count}`);
+
+      const pane: CanvasPane = {
+        id,
+        kind: "terminal",
+        title,
+        shell: profile.shell,
+        profileId: profile.id,
+        icon: finalExecutorId ? finalExecutorId : profile.icon,
+        cwd: opts.cwd ?? "",
+        executorId: finalExecutorId,
+        unitId: opts.unitId,
+        createdAt: Date.now(),
+      };
+      addPaneToGroup(pane);
+      return id;
+    },
+
+    createChatTab: (paneKey) => {
+      addPaneToGroup({ id: paneKey, kind: "chat", title: "对话" });
+      return paneKey;
+    },
+
+    activatePane: (paneId) => {
+      const state = get();
+      if (state.panes[paneId] === undefined) return;
+      for (const g of Object.values(state.groups)) {
+        if (!g.tabOrder.includes(paneId)) continue;
+        set((s) => ({
+          activeGroupId: g.id,
+          activePaneId: paneId,
+          groups: { ...s.groups, [g.id]: { ...g, activePaneId: paneId, recentPaneIds: touchRecent(g, paneId) } },
+        }));
+        return;
+      }
+    },
+
+    focusChatPaneTab: (paneKey) => get().activatePane(paneKey),
+
+    setActiveGroup: (groupId) => {
+      const group = get().groups[groupId];
+      if (group === undefined) return;
+      const paneId = group.activePaneId ?? group.tabOrder[group.tabOrder.length - 1] ?? null;
+      set((s) => ({
+        activeGroupId: groupId,
+        activePaneId: paneId,
+        ...(paneId !== null
+          ? { groups: { ...s.groups, [groupId]: { ...group, activePaneId: paneId, recentPaneIds: touchRecent(group, paneId) } } }
+          : {}),
+        maximizedPaneId: null,
+      }));
+    },
+
+    splitPane: (opts = {}) => {
+      const state = get();
+      // 拆分对象 = 激活组（docs/32：分屏的原子是组）
+      const sourceGroupId = state.activeGroupId ?? Object.keys(state.groups)[0] ?? null;
+      const direction: SplitDirection = opts.direction ?? "horizontal";
+      const gid = newGroupId();
+      const groups: Record<string, PaneGroup> = {
+        ...state.groups,
+        [gid]: { id: gid, tabOrder: [], activePaneId: null, recentPaneIds: [] },
+      };
+      if (opts.chatPaneKey !== undefined) {
+        set((s) => ({
+          groups,
+          layout:
+            sourceGroupId === null
+              ? null
+              : splitGroupNode(s.layout ?? { type: "group", groupId: sourceGroupId }, sourceGroupId, gid, direction, false),
+        }));
+        addPaneToGroup(
+          { id: opts.chatPaneKey, kind: "chat", title: "对话" },
+          { groupId: gid },
         );
-        if (state.activeInstanceId === instanceId) {
-          // 混排组里终端关掉后，焦点让给剩下的 chat 窗格（若有）
-          newActiveInstanceId = collectLeafIds(updatedLayout)[0] ?? null;
-          if (newActiveInstanceId === null) {
-            newActiveChatPaneKey = collectChatPaneKeys(updatedLayout)[0] ?? null;
-          }
-        }
+        return gid;
       }
-
-      return {
-        instances: newInstances,
-        groups: newGroups,
-        activeGroupId: newActiveGroupId,
-        activeInstanceId: newActiveInstanceId,
-        ...(newActiveChatPaneKey !== state.activeChatPaneKey ? { activeChatPaneKey: newActiveChatPaneKey } : {}),
-        maximizedPaneId:
-          state.maximizedPaneId === instanceId ? null : state.maximizedPaneId,
+      // 终端新标签直接构造后入组（createTab 的字段逻辑内联，避免二次 set 抖动）
+      const profileId = opts.profileId ?? state.defaultProfileId;
+      const profile = SUPPORTED_TERMINAL_PROFILES.find((p) => p.id === profileId) ?? SUPPORTED_TERMINAL_PROFILES[0]!;
+      const id = `term_${Math.random().toString(36).slice(2, 9)}_${Date.now().toString(36)}`;
+      const count = Object.values(state.panes).filter((p) => p.kind === "terminal" && p.profileId === profileId).length + 1;
+      const pane: CanvasPane = {
+        id,
+        kind: "terminal",
+        title: opts.title ?? (opts.executorId ? `${opts.executorId} (pwsh)` : `${profile.name} #${count}`),
+        shell: profile.shell,
+        profileId: profile.id,
+        icon: opts.executorId ? opts.executorId : profile.icon,
+        cwd: opts.cwd ?? "",
+        executorId: opts.executorId,
+        unitId: opts.unitId,
+        createdAt: Date.now(),
       };
-    });
-  },
+      set((s) => ({
+        groups,
+        layout:
+          sourceGroupId === null
+            ? null
+            : splitGroupNode(s.layout ?? { type: "group", groupId: sourceGroupId }, sourceGroupId, gid, direction, false),
+      }));
+      addPaneToGroup(pane, { groupId: gid });
+      return gid;
+    },
 
-  closeTab: (groupId: string) => {
-    const group = get().groups.find((g) => g.id === groupId);
-    if (!group) return;
+    closePane: (paneId) => {
+      const pane = get().panes[paneId];
+      if (pane === undefined) return;
+      if (pane.kind === "terminal") terminalSessionRegistry.dispose(paneId);
+      else useChatPanes.getState().handlePaneClosed(paneId);
+      detachPaneFromGroup(paneId);
+      set((s) => {
+        const panes = { ...s.panes };
+        delete panes[paneId];
+        return normalize({ ...s, panes });
+      });
+    },
 
-    const leafIds = collectLeafIds(group.rootLayout);
-    leafIds.forEach((id) => terminalSessionRegistry.dispose(id));
-    // chat 窗格摘注册表记录（不杀会话）；焦点游标归位交给下面的激活逻辑
-    for (const paneKey of collectChatPaneKeys(group.rootLayout)) {
-      useChatPanes.getState().handlePaneClosed(paneKey);
-    }
-
-    set((state) => {
-      const gIdx = state.groups.findIndex((g) => g.id === groupId);
-      const newGroups = state.groups.filter((g) => g.id !== groupId);
-      const newInstances = state.instances.filter((i) => !leafIds.includes(i.id));
-
-      let newActiveGroupId = state.activeGroupId;
-      let newActiveInstanceId = state.activeInstanceId;
-      let newActiveChatPaneKey = state.activeChatPaneKey;
-
-      if (state.activeGroupId === groupId) {
-        if (newGroups.length > 0) {
-          const nextIdx = Math.max(0, gIdx - 1);
-          newActiveGroupId = newGroups[nextIdx]?.id ?? null;
-          const nextRoot = newGroups[nextIdx]?.rootLayout ?? null;
-          newActiveInstanceId = collectLeafIds(nextRoot)[0] ?? null;
-          newActiveChatPaneKey = collectChatPaneKeys(nextRoot)[0] ?? null;
-        } else {
-          newActiveGroupId = null;
-          newActiveInstanceId = null;
-          newActiveChatPaneKey = null;
+    closeOtherPanes: (keepPaneId) => {
+      const state = get();
+      const pane = state.panes[keepPaneId];
+      if (pane === undefined) return;
+      for (const g of Object.values(state.groups)) {
+        if (!g.tabOrder.includes(keepPaneId)) continue;
+        for (const id of g.tabOrder) {
+          if (id === keepPaneId) continue;
+          const p = state.panes[id];
+          if (p === undefined) continue;
+          if (p.kind === "terminal") terminalSessionRegistry.dispose(id);
+          else useChatPanes.getState().handlePaneClosed(id);
         }
+        set((s) => {
+          const panes = { ...s.panes };
+          for (const id of g.tabOrder) if (id !== keepPaneId) delete panes[id];
+          const groups = {
+            ...s.groups,
+            [g.id]: { ...g, tabOrder: [keepPaneId], activePaneId: keepPaneId, recentPaneIds: [keepPaneId] },
+          };
+          return normalize({ ...s, panes, groups, activeGroupId: g.id, activePaneId: keepPaneId });
+        });
+        return;
       }
+    },
 
-      return {
-        instances: newInstances,
-        groups: newGroups,
-        activeGroupId: newActiveGroupId,
-        activeInstanceId: newActiveInstanceId,
-        ...(newActiveChatPaneKey !== state.activeChatPaneKey ? { activeChatPaneKey: newActiveChatPaneKey } : {}),
-      };
-    });
-  },
-
-  setActiveGroup: (groupId: string) => {
-    const group = get().groups.find((g) => g.id === groupId);
-    if (!group) return;
-    // 组内首个窗格可能是 chat：两种游标互斥，谁在前聚焦谁
-    const firstTerminal = collectLeafIds(group.rootLayout)[0] ?? null;
-    const firstChat = collectChatPaneKeys(group.rootLayout)[0] ?? null;
-    set({
-      activeGroupId: groupId,
-      activeInstanceId: firstChat !== null ? null : firstTerminal,
-      activeChatPaneKey: firstChat,
-      maximizedPaneId: null,
-    });
-  },
-
-  // tab 右键三件套（ZCode SidePaneTabTrigger 同款）—— 批量关闭是显式杀进程语义
-  closeOtherTabs: (keepGroupId) => {
-    const { groups } = get();
-    const keep = groups.find((g) => g.id === keepGroupId);
-    if (!keep || groups.length <= 1) return;
-    for (const g of groups) {
-      if (g.id === keepGroupId) continue;
-      for (const id of collectLeafIds(g.rootLayout)) terminalSessionRegistry.dispose(id);
-      for (const paneKey of collectChatPaneKeys(g.rootLayout)) {
-        useChatPanes.getState().handlePaneClosed(paneKey);
+    closeGroup: (groupId) => {
+      const group = get().groups[groupId];
+      if (group === undefined) return;
+      for (const id of group.tabOrder) {
+        const p = get().panes[id];
+        if (p === undefined) continue;
+        if (p.kind === "terminal") terminalSessionRegistry.dispose(id);
+        else useChatPanes.getState().handlePaneClosed(id);
       }
-    }
-    const keepLeaves = collectLeafIds(keep.rootLayout);
-    const keepChats = collectChatPaneKeys(keep.rootLayout);
-    set((state) => ({
-      groups: state.groups.filter((g) => g.id === keepGroupId),
-      instances: state.instances.filter((i) => keepLeaves.includes(i.id)),
-      activeGroupId: keepGroupId,
-      activeInstanceId: keepChats.length > 0 ? null : (keepLeaves[0] ?? null),
-      activeChatPaneKey: keepChats[0] ?? null,
-      maximizedPaneId: null,
-    }));
-  },
-
-  closeAllTabs: () => {
-    const { groups } = get();
-    if (groups.length === 0) return;
-    for (const g of groups) {
-      for (const id of collectLeafIds(g.rootLayout)) terminalSessionRegistry.dispose(id);
-      for (const paneKey of collectChatPaneKeys(g.rootLayout)) {
-        useChatPanes.getState().handlePaneClosed(paneKey);
-      }
-    }
-    set({
-      groups: [],
-      instances: [],
-      activeGroupId: null,
-      activeInstanceId: null,
-      activeChatPaneKey: null,
-      maximizedPaneId: null,
-    });
-  },
-
-  setActiveInstance: (instanceId: string) => {
-    const group = get().groups.find((g) =>
-      collectLeafIds(g.rootLayout).includes(instanceId),
-    );
-    set({
-      activeInstanceId: instanceId,
-      activeChatPaneKey: null,
-      activeGroupId: group ? group.id : get().activeGroupId,
-    });
-  },
-
-  setBranchRatio: (branchId: string, ratio: number) => {
-    const clamped = Math.max(0.1, Math.min(0.9, ratio));
-    set((state) => ({
-      groups: state.groups.map((g) => ({
-        ...g,
-        rootLayout: updateTreeRatio(g.rootLayout, branchId, clamped),
-      })),
-    }));
-  },
-
-  toggleMaximize: (instanceId?: string) => {
-    const target = instanceId ?? get().activeInstanceId;
-    set((state) => ({
-      maximizedPaneId:
-        state.maximizedPaneId === target ? null : (target ?? null),
-    }));
-  },
-
-  renameInstance: (instanceId: string, title: string) => {
-    set((state) => ({
-      instances: state.instances.map((i) =>
-        i.id === instanceId ? { ...i, title } : i,
-      ),
-    }));
-  },
-
-  renameTab: (groupId: string, title: string) => {
-    set((state) => ({
-      groups: state.groups.map((g) => (g.id === groupId ? { ...g, title } : g)),
-    }));
-  },
-
-  clearAll: () => {
-    terminalSessionRegistry.disposeAll();
-    set({
-      instances: [],
-      groups: [],
-      activeGroupId: null,
-      activeInstanceId: null,
-      maximizedPaneId: null,
-    });
-  },
-
-  reattachFromDaemon: async () => {
-    // 用户这次会话已经建过标签（终端或对话窗格）就不动 —— 重挂只在首载跑一次
-    if (get().groups.length > 0 || get().reattachDone) {
-      set({ reattachDone: true });
-      return;
-    }
-    let list: DaemonTermRow[];
-    let client: { rpc: <T = unknown>(method: string, params?: unknown, timeoutMs?: number) => Promise<T> } | null = null;
-    try {
-      const { DaemonClient, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
-      client = DaemonClient.get(defaultDaemonEndpoint());
-      list = await client.rpc<DaemonTermRow[]>("terminal.list", null, 10000);
-    } catch {
-      set({ reattachDone: true }); // daemon 没起：放行空态自动建标签
-      return;
-    }
-    if (get().groups.length > 0 || get().reattachDone) {
-      set({ reattachDone: true });
-      return;
-    }
-    if (list.length === 0) {
-      set({ reattachDone: true });
-      return;
-    }
-
-    const { useWorkbench } = await import("./useWorkbench.ts");
-    const units = useWorkbench.getState().units;
-
-    // 全面放开：每个存活的 PTY 都还原成标签 —— 同一 Bot 的多终端
-    // （手动一个 + 定时任务 TUI 一个）是合法并存，不在这里替用户清理。
-    // 对话页小终端除外：它归 ChatTerminalDock 自己认领（unitId 标记）。
-    const adopted = list
-      .filter((t) => t.unitId !== CHAT_DOCK_UNIT_ID)
-      .map((t) => adoptTermRow(t, units));
-
-    const activeUnitId = useWorkbench.getState().activeUnitId;
-    const initialActiveInst = activeUnitId
-      ? (adopted.find((a) => a.instance.unitId === activeUnitId)?.instance ?? adopted[0]?.instance)
-      : adopted[0]?.instance;
-    const initialActiveGroup = initialActiveInst
-      ? (adopted.find((a) => a.instance === initialActiveInst)?.group ?? adopted[0]?.group)
-      : undefined;
-
-    set({
-      instances: adopted.map((a) => a.instance),
-      groups: adopted.map((a) => a.group),
-      activeGroupId: initialActiveGroup?.id ?? null,
-      activeInstanceId: initialActiveInst?.id ?? null,
-      activeChatPaneKey: null,
-      reattachDone: true,
-    });
-  },
-
-  installTerminalCreatedClaim: () => {
-    if (get().claimInstalled) return;
-    set({ claimInstalled: true });
-    void (async () => {
-      const { DaemonClient, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
-      const client = DaemonClient.get(defaultDaemonEndpoint());
-      // WS 是懒连接（首个 rpc 才拨）：不主动 ensureConnected 的话，
-      // 静默的前端永远收不到 created 帧 —— 认领必须先把管道撑开
-      await client.ensureConnected().catch(() => {
-        // daemon 未起：订阅仍在，将来任何 rpc 触发重连后帧自然恢复
+      set((s) => {
+        const panes = { ...s.panes };
+        for (const id of group.tabOrder) delete panes[id];
+        const groups = { ...s.groups };
+        delete groups[groupId];
+        let layout = s.layout;
+        if (layout !== null) {
+          const next = removeGroupLeaf(layout, groupId);
+          layout = next !== null && next.type === "group" ? null : next;
+        }
+        return normalize({ ...s, panes, groups, layout });
       });
-      client.onTerminalFrame((f) => {
-        if (f.kind !== "created") return;
-        if (get().instances.some((i) => i.id === f.terminalId)) return;
-        // 对话页小终端不进标签树：它有自己的挂载点（ChatTerminalDock），
-        // 认领成 TUI 标签会出现两处 xterm 抢同一块 PTY 画布
-        if (f.unitId === CHAT_DOCK_UNIT_ID) return;
-        void (async () => {
-          try {
-            // created 帧只带档案字段；补拉一次 list 拿 scrollback —— 认领前的
-            // 输出（TUI 启动横幅）只有它有，认领后的实时帧由订阅自然接管
-            const list = await client.rpc<DaemonTermRow[]>("terminal.list", null, 10000);
-            const row = list.find((t) => t.terminalId === f.terminalId);
-            if (row === undefined) return; // 创建即秒退的终端：不建占位标签
-            const { useWorkbench } = await import("./useWorkbench.ts");
-            const { useShell } = await import("./useShell.ts");
-            const { instance, group } = adoptTermRow(row, useWorkbench.getState().units);
-            if (get().instances.some((i) => i.id === f.terminalId)) return; // 双帧竞态兜底
-            set((s) => ({
-              instances: [...s.instances, instance],
-              groups: [...s.groups, group],
-              activeGroupId: group.id,
-              activeInstanceId: instance.id,
-              activeChatPaneKey: null,
-              maximizedPaneId: null,
-            }));
-            // 定时任务到点的意义就是「让我看到」：主视图不在工作区就切回来
-            if (useShell.getState().mainView !== "chat") useShell.getState().setMainView("chat");
-          } catch {
-            // daemon 断连等瞬时失败：放弃这一次，F5 重挂是兜底
-          }
-        })();
-      });
-    })();
-  },
+    },
 
-  createInstance: (opts) => get().createTab(opts),
-  closeInstance: (id) => get().closePane(id),
-  splitWithNew: (profileId) => get().splitPane({ profileId, direction: "horizontal" }),
-}));
+    movePaneToGroup: (paneId, toGroupId, index) => {
+      const state = get();
+      if (state.panes[paneId] === undefined || state.groups[toGroupId] === undefined) return;
+      const fromGroup = Object.values(state.groups).find((g) => g.tabOrder.includes(paneId));
+      if (fromGroup === undefined) return;
+      if (fromGroup.id === toGroupId) {
+        // 组内重排
+        set((s) => {
+          const g = s.groups[toGroupId]!;
+          const order = g.tabOrder.filter((id) => id !== paneId);
+          const at = index === undefined ? order.length : Math.max(0, Math.min(order.length, index));
+          order.splice(at, 0, paneId);
+          return { groups: { ...s.groups, [toGroupId]: { ...g, tabOrder: order } } };
+        });
+        return;
+      }
+      detachPaneFromGroup(paneId);
+      set((s) => {
+        const target = s.groups[toGroupId]!;
+        const order = [...target.tabOrder];
+        const at = index === undefined ? order.length : Math.max(0, Math.min(order.length, index));
+        order.splice(at, 0, paneId);
+        const groups = {
+          ...s.groups,
+          [toGroupId]: { ...target, tabOrder: order, activePaneId: paneId, recentPaneIds: touchRecent(target, paneId) },
+        };
+        return normalize({ ...s, groups, activeGroupId: toGroupId, activePaneId: paneId });
+      });
+    },
+
+    dropPaneOnGroup: (paneId, targetGroupId, zone) => {
+      const state = get();
+      if (state.panes[paneId] === undefined || state.groups[targetGroupId] === undefined) return;
+      if (zone === "center") {
+        get().movePaneToGroup(paneId, targetGroupId);
+        return;
+      }
+      if (get().isSplitDropNoOp(paneId, targetGroupId)) return;
+      const direction: SplitDirection = zone === "left" || zone === "right" ? "horizontal" : "vertical";
+      const newFirst = zone === "left" || zone === "top";
+      // 先摘出拖动标签（原组可能塌缩），再把目标组一分为二、新组承载该标签
+      detachPaneFromGroup(paneId);
+      set((s) => {
+        if (s.groups[targetGroupId] === undefined) return {};
+        const gid = newGroupId();
+        const groups: Record<string, PaneGroup> = {
+          ...s.groups,
+          [gid]: { id: gid, tabOrder: [], activePaneId: null, recentPaneIds: [] },
+        };
+        const layout = splitGroupNode(s.layout ?? { type: "group", groupId: targetGroupId }, targetGroupId, gid, direction, newFirst);
+        const target = { ...groups[targetGroupId]! };
+        const order = [...target.tabOrder, paneId];
+        groups[gid] = { ...groups[gid]!, tabOrder: order, activePaneId: paneId, recentPaneIds: [paneId] };
+        return normalize({ ...s, groups, layout, activeGroupId: gid, activePaneId: paneId, maximizedPaneId: null });
+      });
+    },
+
+    isSplitDropNoOp: (paneId, targetGroupId) => {
+      const state = get();
+      const fromGroup = Object.values(state.groups).find((g) => g.tabOrder.includes(paneId));
+      if (fromGroup === undefined) return false;
+      // 拖自己组里最后一个标签到自身四边：分出来的新组还是它，等于没动
+      return fromGroup.id === targetGroupId && fromGroup.tabOrder.length === 1;
+    },
+
+    toggleMaximize: (paneId) => {
+      const target = paneId ?? get().activePaneId;
+      set((s) => ({ maximizedPaneId: s.maximizedPaneId === target ? null : (target ?? null) }));
+    },
+
+    setSplitRatio: (splitId, ratio) => {
+      const clamped = Math.max(0.08, Math.min(0.92, ratio));
+      set((s) => (s.layout === null ? {} : { layout: updateSplitRatio(s.layout, splitId, clamped) }));
+    },
+
+    renamePane: (paneId, title) => {
+      set((s) => {
+        const pane = s.panes[paneId];
+        if (pane === undefined) return {};
+        return { panes: { ...s.panes, [paneId]: { ...pane, title } } };
+      });
+    },
+
+    clearAll: () => {
+      terminalSessionRegistry.disposeAll();
+      set({ panes: {}, groups: {}, layout: null, activeGroupId: null, activePaneId: null, maximizedPaneId: null });
+    },
+
+    reattachFromDaemon: async () => {
+      // 用户这次会话已经建过标签就不动 —— 重挂只在首载跑一次
+      if (get().activeGroupId !== null || get().reattachDone) {
+        set({ reattachDone: true });
+        return;
+      }
+      let list: DaemonTermRow[];
+      try {
+        const { DaemonClient, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
+        const client = DaemonClient.get(defaultDaemonEndpoint());
+        list = await client.rpc<DaemonTermRow[]>("terminal.list", null, 10000);
+      } catch {
+        set({ reattachDone: true }); // daemon 没起：放行空态
+        return;
+      }
+      if (get().activeGroupId !== null || get().reattachDone) {
+        set({ reattachDone: true });
+        return;
+      }
+      // 对话页小终端除外：它归 ChatTerminalDock 自己认领（unitId 标记）
+      const adopted = list.filter((t) => t.unitId !== CHAT_DOCK_UNIT_ID).map((t) => t);
+      if (adopted.length === 0) {
+        set({ reattachDone: true });
+        return;
+      }
+
+      const { useWorkbench } = await import("./useWorkbench.ts");
+      const units = useWorkbench.getState().units;
+      const panes: Record<string, CanvasPane> = {};
+      const groupId = newGroupId();
+      const tabOrder: string[] = [];
+      for (const row of adopted) {
+        const pane = adoptTermRow(row, units);
+        panes[pane.id] = pane;
+        tabOrder.push(pane.id);
+      }
+      const activeUnitId = useWorkbench.getState().activeUnitId;
+      const initialPane = activeUnitId
+        ? (tabOrder.find((id) => panes[id]!.unitId === activeUnitId) ?? tabOrder[0])
+        : tabOrder[0];
+      set({
+        panes,
+        groups: { [groupId]: { id: groupId, tabOrder, activePaneId: initialPane ?? null, recentPaneIds: initialPane !== undefined ? [initialPane!] : [] } },
+        layout: null,
+        activeGroupId: groupId,
+        activePaneId: initialPane ?? null,
+        reattachDone: true,
+      });
+    },
+
+    installTerminalCreatedClaim: () => {
+      if (get().claimInstalled) return;
+      set({ claimInstalled: true });
+      void (async () => {
+        const { DaemonClient, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
+        const client = DaemonClient.get(defaultDaemonEndpoint());
+        // WS 是懒连接（首个 rpc 才拨）：认领必须先把管道撑开
+        await client.ensureConnected().catch(() => {});
+        client.onTerminalFrame((f) => {
+          if (f.kind !== "created") return;
+          if (get().panes[f.terminalId] !== undefined) return;
+          // 对话页小终端不进标签树：它有自己的挂载点（ChatTerminalDock）
+          if (f.unitId === CHAT_DOCK_UNIT_ID) return;
+          void (async () => {
+            try {
+              // created 帧只带档案字段；补拉一次 list 拿 scrollback（启动横幅只有它有）
+              const list = await client.rpc<DaemonTermRow[]>("terminal.list", null, 10000);
+              const row = list.find((t) => t.terminalId === f.terminalId);
+              if (row === undefined) return; // 创建即秒退的终端：不建占位标签
+              const { useWorkbench } = await import("./useWorkbench.ts");
+              const { useShell } = await import("./useShell.ts");
+              const pane = adoptTermRow(row, useWorkbench.getState().units);
+              if (get().panes[f.terminalId] !== undefined) return; // 双帧竞态兜底
+              addPaneToGroup(pane);
+              // 定时任务到点的意义就是「让我看到」：主视图不在工作区就切回来
+              if (useShell.getState().mainView !== "chat") useShell.getState().setMainView("chat");
+            } catch {
+              // daemon 断连等瞬时失败：放弃这一次，F5 重挂是兜底
+            }
+          })();
+        });
+      })();
+    },
+
+    releaseTerminalToPopout: (terminalId) => {
+      const pane = get().panes[terminalId];
+      if (pane === undefined || pane.kind !== "terminal") return false;
+      // 释放本地会话（不杀 PTY）——popout 窗口重新 subscribe 接管
+      terminalSessionRegistry.release(terminalId);
+      detachPaneFromGroup(terminalId);
+      set((s) => {
+        const panes = { ...s.panes };
+        delete panes[terminalId];
+        return normalize({ ...s, panes });
+      });
+      return true;
+    },
+
+    readoptTerminal: async (terminalId) => {
+      // 已在标签里：只激活（双开同一 PTY 会两处 xterm 抢同一画布）
+      if (get().panes[terminalId] !== undefined) {
+        get().activatePane(terminalId);
+        return;
+      }
+      let row: DaemonTermRow | undefined;
+      try {
+        const { DaemonClient, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
+        const client = DaemonClient.get(defaultDaemonEndpoint());
+        const list = await client.rpc<DaemonTermRow[]>("terminal.list", null, 10000);
+        row = list.find((t) => t.terminalId === terminalId);
+      } catch {
+        return; // daemon 抖动：静默放弃，F5 重挂是兜底
+      }
+      if (row === undefined) return; // PTY 已死：没有可认领的东西
+      const { useWorkbench } = await import("./useWorkbench.ts");
+      addPaneToGroup(adoptTermRow(row, useWorkbench.getState().units));
+    },
+  };
+});
+
+/* ------------------------------------------------------- 兼容别名（docs/31 遗留面） */
+
+/** 按窗格 id 找所属组（消费方：TUI 活标签激活 / popout / 布局恢复） */
+export function findGroupOfPane(
+  groups: Readonly<Record<string, PaneGroup>>,
+  paneId: string,
+): PaneGroup | undefined {
+  return Object.values(groups).find((g) => g.tabOrder.includes(paneId));
+}
+
+/** 树/组状态里的全部窗格 id（持久化与清理用） */
+export function allPaneIds(groups: Readonly<Record<string, PaneGroup>>): string[] {
+  return Object.values(groups).flatMap((g) => [...g.tabOrder]);
+}

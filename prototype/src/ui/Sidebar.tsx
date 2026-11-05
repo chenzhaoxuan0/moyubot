@@ -67,7 +67,7 @@ import { collapseForkVersions } from "./forkHistory.ts";
 import { executorIconSrc } from "./executorIcon.ts";
 import { useHistoryPrefs } from "../store/useHistoryPrefs.ts";
 import { useSidebarSelection } from "../store/useSidebarSelection.ts";
-import { useTerminalStore, collectLeafIds } from "../store/useTerminalStore.ts";
+import { useTerminalStore } from "../store/useTerminalStore.ts";
 import { useChatPanes } from "../store/useChatPanes.ts";
 import { openNewTuiForUnit as sessionOpenOpenNewTui } from "../store/sessionOpen.ts";
 import { useSidePane } from "../store/useSidePane.ts";
@@ -612,11 +612,10 @@ function openEntryInTui(e: UnitHistoryEntry, unit: WorkUnit): void {
   };
   const st = useTerminalStore.getState();
   if (e.terminalId != null && e.terminalId !== "") {
-    const live = st.instances.find((i) => i.id === e.terminalId);
-    if (live) {
-      const group = st.groups.find((g) => collectLeafIds(g.rootLayout).includes(live.id));
-      if (group) st.setActiveGroup(group.id);
-      st.setActiveInstance(live.id);
+    const live = st.panes[e.terminalId];
+    if (live !== undefined) {
+      // docs/32：activatePane = 组内激活 + 焦点组切换一步到位
+      st.activatePane(live.id);
       useShell.getState().setMainView("chat");
       markOpened();
       return;
@@ -776,8 +775,8 @@ function UnitRow({
   const mainView = useShell((s) => s.mainView);
   /** 该 bot 名下有闲时托管任务正在执行（打勾任务跑起来，bot 行亮灯） */
   const hasExecutingTask = useBacklog((s) => s.items.some((i) => i.status === "executing" && i.unitId === unit.id));
-  /** 终端标签实例（TUI 还开着的历史行 → 点行直切那个标签，不发 resume） */
-  const terminalInstances = useTerminalStore((s) => s.instances);
+  /** 终端标签（TUI 还开着的历史行 → 点行直切那个标签，不发 resume） */
+  const terminalPanes = useTerminalStore((s) => s.panes);
   const sessionStatusById = useMemo(() => {
     const m = new Map<string, string>();
     for (const x of sessions) m.set(String(x.id), x.status);
@@ -1126,7 +1125,7 @@ function UnitRow({
             const canChat = e.sessionId !== null;
             // TUI 还开着（前端有它的标签）也算「可在 TUI 打开」——点击会直切那个标签
             const hasLiveTab =
-              e.terminalId != null && e.terminalId !== "" && terminalInstances.some((i) => i.id === e.terminalId);
+              e.terminalId != null && e.terminalId !== "" && terminalPanes[e.terminalId] !== undefined;
             const canTui = hasLiveTab || resumeArgsFor(e.runtimeId, e.resumeRef) !== null;
             // 默认打开方式：用户覆盖优先，缺省按来源（对话页建 → 聊天页，TUI 建 → TUI）；
             // 来源不可用才交叉回落（headless 无 cli_ref → TUI；TUI 无 resumeRef → 聊天页），

@@ -255,13 +255,13 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
     useShell.getState().setMainView("chat");
     if (paneKey === null) return;
     // ①' 反向推画布游标（review P0）：focus 也从注册表侧发起（侧栏历史行 /
-    // 任务 chip / hash 回放命中**后台标签**的窗格），必须把标签组激活到前台
+    // 任务 chip / hash 回放命中**后台格**的窗格），必须把它激活到前台
     // —— 只换全局数据不切标签的话，可见窗格会渲染别人会话的内容。
     // 幂等：focusedChatKey 已置位，画布订阅回打 handleCanvasFocusChange 时
-    // 同值短路，不会递归。
+    // 同值短路，不会递归。（docs/32：单轨 activePaneId）
     void import("./useTerminalStore.ts").then(({ useTerminalStore }) => {
       const st = useTerminalStore.getState();
-      if (st.activeChatPaneKey !== paneKey) st.focusChatPaneTab(paneKey);
+      if (st.activePaneId !== paneKey) st.activatePane(paneKey);
     });
     const pane = get().panes[paneKey];
     if (pane === undefined) return;
@@ -361,11 +361,18 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
  */
 export function installChatPaneSync(): () => void {
   const unsubCanvas = import("./useTerminalStore.ts").then(({ useTerminalStore }) => {
-    let prev = useTerminalStore.getState().activeChatPaneKey;
+    // docs/32 焦点单轨：游标是 activePaneId（终端或对话皆可）；chat 侧只关心
+    // 它指向对话窗格的时刻 —— 投影成 chatKey 再比前后，终端↔终端切换不打扰
+    const chatKeyOf = (paneId: string | null): string | null => {
+      if (paneId === null) return null;
+      return useTerminalStore.getState().panes[paneId]?.kind === "chat" ? paneId : null;
+    };
+    let prev = chatKeyOf(useTerminalStore.getState().activePaneId);
     return useTerminalStore.subscribe((s) => {
-      if (s.activeChatPaneKey === prev) return;
-      prev = s.activeChatPaneKey;
-      useChatPanes.getState().handleCanvasFocusChange(s.activeChatPaneKey);
+      const cur = chatKeyOf(s.activePaneId);
+      if (cur === prev) return;
+      prev = cur;
+      useChatPanes.getState().handleCanvasFocusChange(cur);
     });
   });
 

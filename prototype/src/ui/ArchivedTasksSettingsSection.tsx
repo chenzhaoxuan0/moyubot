@@ -21,7 +21,7 @@ import { asSessionId, asUnitId, isResidentUnit } from "../core/units.ts";
 import { AUTO_ARCHIVE_DAY_OPTIONS, useHistoryPrefs } from "../store/useHistoryPrefs.ts";
 import { useShell } from "../store/useShell.ts";
 import { useSidePane } from "../store/useSidePane.ts";
-import { collectLeafIds, useTerminalStore } from "../store/useTerminalStore.ts";
+import { useTerminalStore } from "../store/useTerminalStore.ts";
 import { useChatPanes } from "../store/useChatPanes.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { resumeArgsFor } from "./HistoryPane.tsx";
@@ -180,11 +180,9 @@ export function ArchivedTasksSettingsSection(): ReactElement {
   const handleOpenInTui = (entry: UnitHistoryEntry): void => {
     const st = useTerminalStore.getState();
     if (entry.terminalId) {
-      const live = st.instances.find((i) => i.id === entry.terminalId);
-      if (live) {
-        const group = st.groups.find((g) => collectLeafIds(g.rootLayout).includes(live.id));
-        if (group) st.setActiveGroup(group.id);
-        st.setActiveInstance(live.id);
+      const live = st.panes[entry.terminalId];
+      if (live !== undefined) {
+        st.activatePane(live.id);
         const sh = useShell.getState();
         sh.setMainView("chat");
         sh.closeSettings();

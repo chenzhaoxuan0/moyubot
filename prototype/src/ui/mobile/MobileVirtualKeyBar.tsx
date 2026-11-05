@@ -169,7 +169,7 @@ export interface MobileVirtualKeyBarProps {
 }
 
 export function MobileVirtualKeyBar({ target = "main" }: MobileVirtualKeyBarProps) {
-  const activeMainInstanceId = useTerminalStore((s) => s.activeInstanceId);
+  const activeMainInstanceId = useTerminalStore((s) => s.activePaneId);
   const activeChatTabId = useChatTerminal((s) => s.activeTabId);
   const chatTabs = useChatTerminal((s) => s.tabs);
 
