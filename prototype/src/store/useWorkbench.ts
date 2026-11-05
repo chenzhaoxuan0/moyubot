@@ -2240,14 +2240,21 @@ function consumeEvents(adapter: RuntimeAdapter): void {
       useWorkbench.setState((s) => {
         // 谱系过滤（底栏任务栏的配套）：时间线只收「活跃视图」的事件。规则：
         // 台账已认识、又不是活跃会话的 → 丢弃（被切走的运行中对话不再把事件
-        // 灌进新视图 —— 它的流由任务栏 useTaskbar 跟踪，回来时 openSession 的
-        // 谱系回放整段重建，不丢数据）；台账不认识的 → 收（run() 的 fork/续聊
+        // 灌进新视图）；台账不认识的 → 收（run() 的 fork/续聊
         // 开新段流程在 startSession 的 await 期间就要靠泵实时入账，那时
         // activeSessionId 还没翻过去，fork 落位的 fresh 过滤依赖这些行已在）。
         if ("sessionId" in event) {
           const sid = String(event.sessionId);
           const isActive = s.activeSessionId !== null && String(s.activeSessionId) === sid;
-          if (!isActive && s.sessions.some((x) => String(x.id) === sid)) return {};
+          if (!isActive && s.sessions.some((x) => String(x.id) === sid)) {
+            // docs/31 会话画布：被丢弃的事件转投 chat 窗格注册表 —— 分屏里
+            // 非焦点对话窗格的快照时间线照常滚动（焦点窗格走全局链路不重复入账）。
+            // 动态 import 避开 useWorkbench ↔ useChatPanes 的模块环。
+            void import("./useChatPanes.ts").then(({ useChatPanes }) => {
+              useChatPanes.getState().routeEvent(event);
+            });
+            return {};
+          }
         }
         return { timeline: [...s.timeline, { id: ++seq, event, at: Date.now() }] };
       });

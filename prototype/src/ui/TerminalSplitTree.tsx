@@ -5,6 +5,7 @@ import {
   type SplitDirection,
 } from "../store/useTerminalStore.ts";
 import { TerminalPaneSlot } from "./TerminalPaneSlot.tsx";
+import { ChatPaneSlot } from "./ChatPaneSlot.tsx";
 import { cn } from "./cn.ts";
 
 /** 可拖拽的分屏分割线 */
@@ -93,6 +94,11 @@ export function TerminalSplitTree({
     );
   }
 
+  // 对话窗格（docs/31）：注册表里已删的窗格（竞态关闭）不渲染
+  if (node.type === "chatLeaf") {
+    return <ChatPaneSlot key={node.paneKey} paneKey={node.paneKey} totalPanesInGroup={totalPanesInGroup} />;
+  }
+
   // 分支节点：横向（左右）或纵向（上下）拆分
   const isHoriz = node.direction === "horizontal";
   const ratio = node.ratio;
@@ -101,6 +107,9 @@ export function TerminalSplitTree({
     const nextRatio = Math.max(0.08, Math.min(0.92, ratio + deltaPct));
     setBranchRatio(node.id, nextRatio);
   };
+
+  const leafKeyOf = (n: LayoutNode): string =>
+    n.type === "leaf" ? n.instanceId : n.type === "chatLeaf" ? n.paneKey : n.id;
 
   return (
     <div
@@ -115,7 +124,7 @@ export function TerminalSplitTree({
         className="relative h-full w-full overflow-hidden"
       >
         <TerminalSplitTree
-          key={node.first.type === "leaf" ? node.first.instanceId : node.first.id}
+          key={leafKeyOf(node.first)}
           node={node.first}
           totalPanesInGroup={totalPanesInGroup}
         />
@@ -130,7 +139,7 @@ export function TerminalSplitTree({
         className="relative h-full w-full overflow-hidden"
       >
         <TerminalSplitTree
-          key={node.second.type === "leaf" ? node.second.instanceId : node.second.id}
+          key={leafKeyOf(node.second)}
           node={node.second}
           totalPanesInGroup={totalPanesInGroup}
         />

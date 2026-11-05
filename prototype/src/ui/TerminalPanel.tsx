@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   SquareTerminal,
   Terminal,
@@ -12,23 +12,40 @@ import {
   Rows2,
   Maximize2,
   Minimize2,
+  MessageSquarePlus,
 } from "lucide-react";
 import { useWorkbench } from "../store/useWorkbench.ts";
-import { useShell } from "../store/useShell.ts";
 import {
   useTerminalStore,
   SUPPORTED_TERMINAL_PROFILES,
   collectLeafIds,
+  collectChatPaneKeys,
+  countLeaves,
 } from "../store/useTerminalStore.ts";
+import { useChatPanes } from "../store/useChatPanes.ts";
 import { terminalSessionRegistry } from "../store/TerminalSessionManager.ts";
 import { TerminalSplitTree } from "./TerminalSplitTree.tsx";
 import { TerminalPaneSlot, ShellOrAgentIcon } from "./TerminalPaneSlot.tsx";
+import { ChatPaneSlot } from "./ChatPaneSlot.tsx";
+import { NewSessionPage } from "./NewSessionPage.tsx";
 import { useAppearance } from "../store/useAppearance.ts";
 import { dispatchTerminal } from "../adapters/daemon/client.ts";
 import { useIsMobile } from "./mobile/useIsMobile.ts";
 import { cn } from "./cn.ts";
 import { QuickContextMenu, quickMenuFromEvent, type QuickMenuState } from "./QuickContextMenu.tsx";
 
+/**
+ * 会话画布（docs/31）—— 终端与对话窗格的统一标签容器。
+ *
+ * 由旧「终端画布」泛化而来：标签组（groups）× 递归分屏树（rootLayout）里
+ * 的叶子可以是终端（leaf.instanceId）或对话（chatLeaf.paneKey）。「＋」下拉
+ * 的分组顺序：对话 → Agent CLI (TUI·派发) → 原生系统终端 → 自由分屏。
+ * 空态是新建会话页（选 bot × 选形态）。
+ *
+ * 旧「终端跟随 bot 自动派发 TUI」已随 conversationView 互斥开关一起退役：
+ * 画布常驻后「进入终端视图」这个触发点不存在了，终端窗格只由显式动作
+ * （＋下拉 / 拆分 / 侧栏 TUI 恢复 / 派发认领 / F5 重挂）创建。
+ */
 export function TerminalPanel({
   variant = "dock",
   onClose,
@@ -41,7 +58,6 @@ export function TerminalPanel({
   const unit = useWorkbench((s) => s.units.find((u) => u.id === s.activeUnitId));
   const activeRuntimeId = useWorkbench((s) => s.activeRuntimeId);
   const runtimes = useWorkbench((s) => s.runtimes);
-  const runtime = useWorkbench((s) => s.runtimes.find((r) => r.id === s.activeRuntimeId));
   const { isMobile } = useIsMobile();
 
   const isCanvas = variant === "canvas";
@@ -56,6 +72,7 @@ export function TerminalPanel({
     groups,
     activeGroupId,
     activeInstanceId,
+    activeChatPaneKey,
     maximizedInstanceId,
     defaultProfileId,
     createTab,
@@ -68,109 +85,14 @@ export function TerminalPanel({
     toggleMaximize,
   } = useTerminalStore();
 
+  // chat 窗格注册表（标签标题 / 工具条自适应用）
+  const chatPanes = useChatPanes((s) => s.panes);
+  const units = useWorkbench((s) => s.units);
+
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   // 标签右键三件套（ZCode SidePaneTabTrigger 同款）
   const [tabMenu, setTabMenu] = useState<QuickMenuState | null>(null);
-
-  // 当前 bot 绑定的默认执行器（bindings.primary 优先；旧数据的裸 id 修复到注册表
-  // 命名空间；绑定的执行器已不存在时回落全局默认）。没有 bot 绑定时跟随全局默认。
-  const boundExecutor = useMemo(() => {
-    const binding = unit?.bindings.find((b) => b.primary) ?? unit?.bindings[0];
-    const rid = binding?.runtimeId;
-    if (!rid) return activeRuntimeId;
-    return (
-      runtimes.find((r) => r.id === rid)?.id ??
-      runtimes.find((r) => r.id === `daemon:${rid}`)?.id ??
-      activeRuntimeId
-    );
-  }, [unit, runtimes, activeRuntimeId]);
-
-  // 终端跟随 bot：切到某个 bot 时激活它的专属标签页（进程保持存活）；
-  // 还没有就**经派发系统**为它开绑定执行器的 TUI（记入历史、免审批、带「派发」徽章
-  // —— 用过的会话都有迹可循）。派发是异步的，用 pending 集合挡住重复触发；
-  // 失败退回手动开（旧行为）。
-  // ⚠ StrictMode 会把 effect 双调用 —— 全程用 getState() 读实时状态 + ref 防重，
-  // 不幂等的写法会建出两个标签（实测）。
-  // ⚠ 画布虽常驻挂载（hidden 裁剪），跟随逻辑只在**终端视图真正可见**时生效：
-  //    开屏就给当前 bot 悄悄起一个用户没要的 TUI 是注意力扰乱（尤其人还在看
-  //    历史会话列表时）；首次切到终端视图的那一刻才跟随。
-  const conversationView = useShell((s) => s.conversationView);
-  const lastFollowedUnitRef = useRef<string | null | undefined>(undefined);
-  const pendingDispatchRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (isCanvas && conversationView !== "terminal") return;
-    const uid = unit?.id ?? null;
-    if (lastFollowedUnitRef.current === uid) return;
-    lastFollowedUnitRef.current = uid;
-
-    const st = useTerminalStore.getState();
-    if (!uid || !unit) {
-      // 等 F5 重挂先跑完：不等的话这个默认标签会先落地，重挂守卫 sees 非空直接放弃，
-      // daemon 里活着的终端从此找不回来。reattachDone 在 daemon 不可用时也会置位。
-      if (st.groups.length === 0 && st.reattachDone) st.createTab({ profileId: st.defaultProfileId });
-      return;
-    }
-    const execName = runtimes.find((r) => r.id === boundExecutor)?.presentation.displayName ?? boundExecutor;
-    // 优先匹配已有的 bot 专属终端（无感复用重挂存活终端，或同工作目录/执行器的存活会话）
-    const own = st.instances.find(
-      (i) => i.unitId === uid || (i.cwd && i.cwd === unit.rootPath && i.executorId === boundExecutor),
-    );
-    if (own) {
-      if (!own.unitId) {
-        own.unitId = uid;
-        own.title = `${unit.name} · ${execName} (TUI)`;
-      }
-      const group = st.groups.find((g) => collectLeafIds(g.rootLayout).includes(own.id));
-      if (group) st.setActiveGroup(group.id);
-      st.setActiveInstance(own.id);
-      return;
-    }
-    // 已派发过但标签还没落地（created 帧在途）——别再发一次
-    if (pendingDispatchRef.current.has(uid)) return;
-    // 侧栏历史行 / 历史弹窗刚派发过 TUI 恢复（resume 在途）：同理不再发全新的
-    if ((st.pendingUnitDispatch[uid] ?? 0) > Date.now()) return;
-    const bareId = boundExecutor.replace(/^daemon:/, "");
-    if (isCanvas && bareId !== "") {
-      pendingDispatchRef.current.add(uid);
-      void dispatchTerminal({ unitId: unit.id, unitName: unit.name, rootPath: unit.rootPath, runtimeId: bareId })
-        .catch((err: unknown) => {
-          // daemon 不可达等：退回手动开，bot 切换不至于没有终端
-          console.error("[TerminalPanel] 派发终端失败，退回手动:", err);
-          useTerminalStore.getState().createTab({ profileId: "pwsh", cwd: unit.rootPath, executorId: boundExecutor, unitId: uid, title: `${unit.name} · ${execName} (TUI)` });
-        })
-        .finally(() => {
-          // 停留几秒再清：created 帧认领有延迟，清早了会双发
-          setTimeout(() => pendingDispatchRef.current.delete(uid), 3000);
-        });
-      return;
-    }
-    // 启动引导期先建的普适标签（bot 列表还没到）：唯一且无标记时换成 bot 专属标签。
-    // 重挂标签不算数 —— 它背后是活进程，换标签不能顺手杀进程。
-    const untagged = st.instances.filter((i) => !i.unitId && !i.reattached);
-    const soleGroup = st.groups.length === 1 ? st.groups[0] : undefined;
-    if (untagged.length === 1 && soleGroup) {
-      st.closeTab(soleGroup.id);
-    }
-    st.createTab({
-      profileId: "pwsh",
-      cwd: unit.rootPath,
-      executorId: boundExecutor,
-      unitId: uid,
-      title: `${unit.name} · ${execName} (TUI)`,
-    });
-    // 只在切换 bot（或首开）时走一次
-  }, [unit?.id, unit, boundExecutor, isCanvas, runtimes, conversationView]);
-
-  // 上面那个 effect 被 ref 挡住只跑一次；「无 bot 首启 + daemon 里也没活终端」时，
-  // 默认标签要等 reattachDone 翻位后在这里补建，否则首屏永远没有终端。
-  // 同样只在终端视图可见时补 —— 开屏不建空终端标签。
-  const reattachDone = useTerminalStore((s) => s.reattachDone);
-  useEffect(() => {
-    if (!reattachDone || unit || (isCanvas && conversationView !== "terminal")) return;
-    const st = useTerminalStore.getState();
-    if (st.groups.length === 0) st.createTab({ profileId: st.defaultProfileId });
-  }, [reattachDone, unit, isCanvas, conversationView]);
 
   // 点击外部关闭下拉菜单
   useEffect(() => {
@@ -184,14 +106,14 @@ export function TerminalPanel({
     return () => window.removeEventListener("mousedown", handleClickOutside);
   }, [menuOpen]);
 
-  // 清屏当前活跃窗格
+  // 清屏当前活跃窗格（终端语义）
   const handleClear = () => {
     if (activeInstanceId) {
       terminalSessionRegistry.get(activeInstanceId)?.clear();
     }
   };
 
-  // 重启当前活跃窗格
+  // 重启当前活跃窗格（终端语义）
   const handleRestart = () => {
     if (activeInstanceId) {
       void terminalSessionRegistry.get(activeInstanceId)?.restart();
@@ -204,6 +126,17 @@ export function TerminalPanel({
       profileId: defaultProfileId,
       cwd: unit?.rootPath,
     });
+  };
+
+  // 新建对话标签（「＋」下拉第一组）：当前 bot 直开；没选 bot 开未选态窗格
+  const handleNewChat = () => {
+    setMenuOpen(false);
+    if (unit) {
+      useChatPanes.getState().openUnitChatPane(unit.id);
+      return;
+    }
+    const draftKey = useChatPanes.getState().createDraftRecord();
+    useTerminalStore.getState().createChatTab(draftKey);
   };
 
   // 选择 Profile 新建系统终端
@@ -242,6 +175,17 @@ export function TerminalPanel({
     });
   };
 
+  // 工具条「向右/向下拆分」：焦点是 chat 窗格 → 拆一个草稿对话窗格在旁边；
+  // 焦点是终端 → 原行为（终端兄弟窗格）
+  const handleSplit = (direction: "horizontal" | "vertical") => {
+    if (activeChatPaneKey !== null) {
+      const draftKey = useChatPanes.getState().createDraftRecord();
+      splitPane({ targetPaneId: activeChatPaneKey, chatPaneKey: draftKey, direction });
+      return;
+    }
+    splitPane({ direction });
+  };
+
   // 获取可用的 Agent 执行器列表
   const executorOptions = useMemo(() => {
     return runtimes.filter((r) => !r.testOnly);
@@ -249,14 +193,40 @@ export function TerminalPanel({
 
   const activeGroup = groups.find((g) => g.id === activeGroupId) ?? groups[0];
   const activeLeaves = useMemo(() => {
-    return activeGroup ? collectLeafIds(activeGroup.rootLayout) : [];
+    return activeGroup ? countLeaves(activeGroup.rootLayout) : 0;
   }, [activeGroup]);
 
   const maximizedInst = useMemo(() => {
     return instances.find((i) => i.id === maximizedInstanceId);
   }, [instances, maximizedInstanceId]);
+  /** 最大化游标落在 chat 窗格上（toggleMaximize 对任意窗格 id 通用） */
+  const maximizedChatPaneKey =
+    maximizedInstanceId !== null && maximizedInst === undefined ? maximizedInstanceId : null;
+
+  /** 标签标题：显式命名 → 单窗格（终端实例名 / 对话 bot 名）→ 分屏摘要 */
+  const tabTitleOf = (groupId: string): { title: string; isSplit: boolean; chatPaneKey: string | null } => {
+    const g = groups.find((x) => x.id === groupId);
+    if (!g) return { title: "终端", isSplit: false, chatPaneKey: null };
+    const paneCount = countLeaves(g.rootLayout);
+    const isSplit = paneCount > 1;
+    if (g.title) return { title: g.title, isSplit, chatPaneKey: null };
+    if (isSplit) return { title: `分屏 (${paneCount} 窗格)`, isSplit: true, chatPaneKey: null };
+    const termId = collectLeafIds(g.rootLayout)[0];
+    if (termId !== undefined) {
+      return { title: instances.find((i) => i.id === termId)?.title || "终端", isSplit: false, chatPaneKey: null };
+    }
+    const chatKey = collectChatPaneKeys(g.rootLayout)[0] ?? null;
+    if (chatKey !== null) {
+      const pane = chatPanes[chatKey];
+      const unitName = pane ? units.find((u) => u.id === pane.unitId)?.name : undefined;
+      return { title: unitName ? `${unitName} · 对话` : "新对话", isSplit: false, chatPaneKey: chatKey };
+    }
+    return { title: "终端", isSplit: false, chatPaneKey: null };
+  };
 
   const resolvedTheme = useAppearance((s) => s.resolvedAppearance);
+  /** 焦点窗格类型：chat → 工具条收起终端专属动作（清屏/重启），其余照旧 */
+  const focusedIsChat = activeChatPaneKey !== null;
 
   return (
     <div
@@ -277,15 +247,7 @@ export function TerminalPanel({
         >
           {groups.map((group) => {
             const isGroupActive = group.id === activeGroupId;
-            const leaves = collectLeafIds(group.rootLayout);
-            const firstInst = instances.find((i) => i.id === leaves[0]);
-            const isSplitGroup = leaves.length > 1;
-
-            const tabTitle =
-              group.title ||
-              (isSplitGroup
-                ? `分屏 (${leaves.length} 窗格)`
-                : firstInst?.title || "终端");
+            const { title: tabTitle, isSplit: isSplitGroup, chatPaneKey } = tabTitleOf(group.id);
 
             return (
               <div
@@ -324,15 +286,21 @@ export function TerminalPanel({
               >
                 {isSplitGroup ? (
                   <Columns2 size={12} className="shrink-0 text-teal" />
+                ) : chatPaneKey !== null ? (
+                  <MessageSquarePlus size={12} className="shrink-0 text-teal" />
                 ) : (
-                  <ShellOrAgentIcon icon={firstInst?.icon || "pwsh"} />
+                  <ShellOrAgentIcon
+                    icon={
+                      instances.find((i) => i.id === collectLeafIds(group.rootLayout)[0])?.icon || "pwsh"
+                    }
+                  />
                 )}
 
                 <span className="truncate flex-1 min-w-0">{tabTitle}</span>
 
                 {/* 派发徽章：autoterm_ 前缀 = 经派发系统（自动化/待办/手动派发），
                     会进该 bot 的历史；普通标签没有它 */}
-                {firstInst?.id.startsWith("autoterm_") && (
+                {collectLeafIds(group.rootLayout)[0]?.startsWith("autoterm_") && (
                   <span
                     title="派发终端 —— 经过派发系统，会记入该 bot 的历史会话"
                     className="shrink-0 rounded bg-violet-500/15 px-1 py-0.2 text-[9px] font-semibold text-violet-400 font-sans"
@@ -344,7 +312,7 @@ export function TerminalPanel({
                 {/* 分屏窗格数量小徽章 */}
                 {isSplitGroup && (
                   <span className="shrink-0 rounded bg-teal/10 px-1 py-0.2 text-[9px] text-teal font-sans">
-                    {leaves.length}P
+                    {countLeaves(group.rootLayout)}P
                   </span>
                 )}
 
@@ -355,7 +323,7 @@ export function TerminalPanel({
                     e.stopPropagation();
                     closeTab(group.id);
                   }}
-                  title="关闭标签页"
+                  title="关闭标签页（对话标签不杀会话）"
                   aria-label={`关闭标签页 ${tabTitle}`}
                   className={cn(
                     "flex shrink-0 items-center justify-center rounded text-ash transition",
@@ -377,21 +345,33 @@ export function TerminalPanel({
           })}
         </div>
 
-        {/* 新建终端按钮与下拉菜单（包含交互式 Agent TUI、系统终端、分屏操作） */}
+        {/* 新建终端按钮与下拉菜单（对话 / Agent 执行器 / 系统 Shell / 分屏操作） */}
         <div className="relative flex items-center ml-1.5 shrink-0" ref={menuRef}>
           <div className="flex items-center rounded-btn bg-line-soft/40 hover:bg-line-soft text-ash hover:text-ink transition">
+            {/* 移动端不放「对话」快捷钮：手机有自己的对话视图分支
+                （MobileLayout 的 conversationView），画布内开对话窗格会双头 */}
+            {!isMobile && (
+              <button
+                type="button"
+                onClick={handleNewChat}
+                title="新建对话（当前 bot）"
+                className="flex items-center p-1 hover:text-teal transition"
+              >
+                <MessageSquarePlus size={13} />
+              </button>
+            )}
             <button
               type="button"
               onClick={handleNewDefault}
               title="新建终端 (PowerShell 7)"
-              className="flex items-center p-1 hover:text-teal transition"
+              className="flex items-center border-l border-line/30 p-1 hover:text-teal transition"
             >
               <Plus size={13} />
             </button>
             <button
               type="button"
               onClick={() => setMenuOpen(!menuOpen)}
-              title="选择 Agent 执行器或系统 Shell (ZCode, Claude, Codex, WSL, CMD...)"
+              title="选择对话 / Agent 执行器 / 系统 Shell (ZCode, Claude, Codex, WSL, CMD...)"
               className="flex items-center px-1 py-1 text-ash/80 hover:text-ink border-l border-line/30 transition"
             >
               <ChevronDown size={11} />
@@ -421,7 +401,7 @@ export function TerminalPanel({
                 <div className="flex items-center justify-between pb-2 mb-1.5 border-b border-line/50 px-1 shrink-0">
                   <div className="flex items-center gap-1.5">
                     <Zap size={13} className="text-teal" />
-                    <span className="text-body-sm font-semibold text-ink">选择派发执行器或终端</span>
+                    <span className="text-body-sm font-semibold text-ink">新建会话窗格</span>
                   </div>
                   <button
                     type="button"
@@ -438,6 +418,31 @@ export function TerminalPanel({
                 className="min-h-0 flex-1 overflow-y-auto overscroll-contain touch-pan-y scrollbar-thin flex flex-col pr-0.5"
                 style={{ WebkitOverflowScrolling: "touch" }}
               >
+                {/* 分组 0：对话会话（docs/31：画布的第一等窗格；移动端隐藏——
+                    手机的对话入口是顶栏形态切换，画布内开对话窗格会双头） */}
+                {!isMobile && (
+                  <>
+                    <div className="px-2 py-1 text-[11px] font-semibold text-teal/80 tracking-wide uppercase flex items-center gap-1 shrink-0">
+                      <MessageSquarePlus size={11} />
+                      <span>对话</span>
+                    </div>
+                    <button
+                      onClick={handleNewChat}
+                      className="flex w-full items-center rounded text-left text-ink hover:bg-teal-tint hover:text-teal active:bg-teal-tint transition gap-2.5 px-2.5 py-1.5 text-body-sm"
+                    >
+                      <MessageSquarePlus size={13} className="shrink-0 text-teal" />
+                      <span className="flex-1 text-caption font-mono font-medium truncate">
+                        {unit ? `与 ${unit.name} 对话` : "新对话（先选 bot）"}
+                      </span>
+                      <span className="rounded bg-line-soft px-1 py-0.2 text-[9px] font-sans text-ash shrink-0">
+                        结构化时间线
+                      </span>
+                    </button>
+
+                    <div className="my-1.5 h-px bg-line/50 shrink-0" />
+                  </>
+                )}
+
                 {/* 分组 1：Agent 执行器 —— 全部经派发系统打开 */}
                 <div className="px-2 py-1 text-[11px] font-semibold text-teal/80 tracking-wide uppercase flex items-center gap-1 shrink-0">
                   <Zap size={11} />
@@ -519,7 +524,7 @@ export function TerminalPanel({
                     <button
                       onClick={() => {
                         setMenuOpen(false);
-                        splitPane({ direction: "horizontal" });
+                        handleSplit("horizontal");
                       }}
                       className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink hover:bg-teal-tint hover:text-teal transition"
                     >
@@ -529,7 +534,7 @@ export function TerminalPanel({
                     <button
                       onClick={() => {
                         setMenuOpen(false);
-                        splitPane({ direction: "vertical" });
+                        handleSplit("vertical");
                       }}
                       className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink hover:bg-teal-tint hover:text-teal transition"
                     >
@@ -551,7 +556,7 @@ export function TerminalPanel({
               {/* 向右拆分 */}
               <button
                 type="button"
-                onClick={() => splitPane({ direction: "horizontal" })}
+                onClick={() => handleSplit("horizontal")}
                 title="向右拆分当前窗格 (Split Right)"
                 className="flex items-center gap-1 rounded-btn px-2 py-0.5 text-caption text-ash hover:bg-line-soft hover:text-ink transition"
               >
@@ -562,7 +567,7 @@ export function TerminalPanel({
               {/* 向下拆分 */}
               <button
                 type="button"
-                onClick={() => splitPane({ direction: "vertical" })}
+                onClick={() => handleSplit("vertical")}
                 title="向下拆分当前窗格 (Split Down)"
                 className="flex items-center gap-1 rounded-btn px-2 py-0.5 text-caption text-ash hover:bg-line-soft hover:text-ink transition"
               >
@@ -590,29 +595,31 @@ export function TerminalPanel({
             </>
           )}
 
-          {/* 清屏 */}
-          <button
-            type="button"
-            onClick={handleClear}
-            title="清空当前窗格屏幕 (Ctrl+L 重绘)"
-            className="flex items-center gap-1 rounded-btn px-2 py-0.5 text-caption text-ash hover:bg-line-soft hover:text-ink transition"
-          >
-            <Trash2 size={12} />
-            <span className="hidden sm:inline">清屏</span>
-          </button>
+          {/* 清屏（终端语义：焦点在 chat 窗格时隐藏） */}
+          {!focusedIsChat && (
+            <button
+              type="button"
+              onClick={handleClear}
+              title="清空当前窗格屏幕 (Ctrl+L 重绘)"
+              className="flex items-center gap-1 rounded-btn px-2 py-0.5 text-caption text-ash hover:bg-line-soft hover:text-ink transition"
+            >
+              <Trash2 size={12} />
+              <span className="hidden sm:inline">清屏</span>
+            </button>
+          )}
 
-          {/* 重启当前终端进程 */}
-          <button
-            type="button"
-            onClick={handleRestart}
-            title="重启当前终端进程"
-            className="flex items-center gap-1 rounded-btn px-2 py-0.5 text-caption text-ash hover:bg-teal-tint hover:text-teal transition"
-          >
-            <RotateCw size={12} />
-            <span className="hidden sm:inline">重启</span>
-          </button>
-
-          {/* 主画布模式下的视图切换按钮已随会话历史一并移除 */}
+          {/* 重启当前终端进程（终端语义：焦点在 chat 窗格时隐藏） */}
+          {!focusedIsChat && (
+            <button
+              type="button"
+              onClick={handleRestart}
+              title="重启当前终端进程"
+              className="flex items-center gap-1 rounded-btn px-2 py-0.5 text-caption text-ash hover:bg-teal-tint hover:text-teal transition"
+            >
+              <RotateCw size={12} />
+              <span className="hidden sm:inline">重启</span>
+            </button>
+          )}
 
           {/* 关闭终端（非画布态） */}
           {!isCanvas && (
@@ -629,26 +636,11 @@ export function TerminalPanel({
         </div>
       </div>
 
-      {/* 终端内容区：完全无限制的自由递归分屏树 */}
-      {unit === undefined ? (
-        <div className="flex min-h-0 flex-1 items-center justify-center px-4 text-center">
-          <p className="text-body-sm text-ash">
-            终端需要一个工作目录才能启动。请在左侧侧边栏选择一个 bot 或项目。
-          </p>
-        </div>
-      ) : groups.length === 0 ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 text-center">
-          <p className="text-body-sm text-ash">当前没有打开的终端实例。</p>
-          <button
-            onClick={handleNewDefault}
-            className="flex items-center gap-1.5 rounded-btn bg-teal px-3 py-1.5 text-caption font-medium text-canvas hover:bg-teal-hover transition shadow"
-          >
-            <Plus size={13} />
-            <span>新建 PowerShell 7 终端</span>
-          </button>
-        </div>
+      {/* 画布内容区：无标签 = 新建会话页；有标签 = 最大化窗格或递归分屏树 */}
+      {groups.length === 0 ? (
+        <NewSessionPage />
       ) : maximizedInst ? (
-        /* 当前窗格最大化展示 */
+        /* 当前终端窗格最大化展示 */
         <div className="min-h-0 flex-1 relative overflow-hidden">
           <TerminalPaneSlot
             key={maximizedInst.id}
@@ -656,13 +648,18 @@ export function TerminalPanel({
             totalPanesInGroup={1}
           />
         </div>
+      ) : maximizedChatPaneKey !== null ? (
+        /* 当前对话窗格最大化展示 */
+        <div className="min-h-0 flex-1 relative overflow-hidden">
+          <ChatPaneSlot key={maximizedChatPaneKey} paneKey={maximizedChatPaneKey} totalPanesInGroup={1} />
+        </div>
       ) : activeGroup ? (
         /* 自由递归分屏树展示 */
         <div className="min-h-0 flex-1 relative overflow-hidden">
           <TerminalSplitTree
             key={activeGroup.id}
             node={activeGroup.rootLayout}
-            totalPanesInGroup={activeLeaves.length}
+            totalPanesInGroup={activeLeaves}
           />
         </div>
       ) : null}

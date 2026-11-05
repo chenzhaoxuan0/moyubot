@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { RuntimeEvent } from "../core/events.ts";
-import { asSessionId, asUnitId, type SessionSource, type SessionStatus } from "../core/units.ts";
+import { type SessionSource, type SessionStatus } from "../core/units.ts";
 import {
   DaemonClient,
   defaultDaemonEndpoint,
@@ -9,6 +9,7 @@ import {
 } from "../adapters/daemon/client.ts";
 import { runtimeSwitchBlocked, useWorkbench } from "./useWorkbench.ts";
 import { useShell } from "./useShell.ts";
+import { useChatPanes } from "./useChatPanes.ts";
 import { useHistoryPrefs } from "./useHistoryPrefs.ts";
 
 /**
@@ -195,7 +196,7 @@ let nonce = 0;
 let attached = false;
 /** 活动行节流游标：sessionId → 上次正文更新时刻 */
 const lastTextAt = new Map<string, number>();
-/** 当前「被看着」的会话（mainView/conversationView/activeSessionId 三者的合取） */
+/** 当前「被看着」的会话（mainView + chat 窗格焦点 + activeSessionId 三者的合取） */
 let visibleSession: string | null = null;
 /** minimize() → 离开侦测的交接：标题在时间线清空前取好，跨过同一次 set（时间线
  *  里没有用户消息时为 null，交给 makeTaskEntry 的兜底标题） */
@@ -259,12 +260,18 @@ export const useTaskbar = create<TaskbarStore>((set, get) => ({
       entries: s.entries.filter((e) => e.sessionId !== sessionId),
       expandSignal: { sessionId, nonce: ++nonce, rect: chipRectOf(sessionId) },
     }));
-    // 无论哪种跳法都要把主视图带回对话页：openSession 只换数据不动视图，
-    // 用户停在待办页点 chip 的话会「什么都没发生」
-    sh.setMainView("chat");
-    sh.setConversationView("chat");
-    if (String(wb.activeSessionId ?? "") === sessionId) return;
-    void wb.openSession({ sessionId: asSessionId(sessionId), unitId: asUnitId(entry.unitId), runtimeId: entry.runtimeId });
+    // 无论哪种跳法都要把主视图带回聊天页：openSession 只换数据不动视图，
+    // 用户停在待办页点 chip 的话会「什么都没发生」（docs/31：开/聚焦对话窗格，
+    // openChatPane 内部自带 setMainView）
+    if (String(wb.activeSessionId ?? "") === sessionId) {
+      sh.setMainView("chat");
+      return;
+    }
+    useChatPanes.getState().openChatPane({
+      unitId: String(entry.unitId),
+      sessionId,
+      runtimeId: entry.runtimeId,
+    });
   },
 
   dismiss: (sessionId) => {
@@ -494,10 +501,10 @@ function buildEntry(sid: string, mode: "leave" | "minimize", titleOverride: stri
 /**
  * 「切走正在运行的对话 → 压缩进底栏」的触发器。
  *
- * 订阅 useShell + useWorkbench 两个 store，任何一次 set 后重算「当前被看着的
- * 会话」：mainView === chat 且 conversationView === chat 且 activeSessionId 非空。
- * 看不见的时刻若它是 running/awaiting_* → 进榜 + 发压缩动画信号（此刻旧视图
- * DOM 还没重渲染，是量源矩形的唯一窗口）；重新看见 → 出榜（已读）。
+ * 订阅 useShell + useWorkbench + useChatPanes 三个 store，任何一次 set 后重算
+ * 「当前被看着的会话」：mainView === chat 且焦点在 chat 窗格且 activeSessionId
+ * 非空。看不见的时刻若它是 running/awaiting_* → 进榜 + 发压缩动画信号（此刻
+ * 旧视图 DOM 还没重渲染，是量源矩形的唯一窗口）；重新看见 → 出榜（已读）。
  * minimize() 的显式折叠也从这里过（minimizeStash 交接标题）。
  */
 function attachLeaveWatch(set: SetFn, get: () => TaskbarStore): void {
@@ -526,12 +533,16 @@ function attachLeaveWatch(set: SetFn, get: () => TaskbarStore): void {
   };
   useShell.subscribe(check);
   useWorkbench.subscribe(check);
+  useChatPanes.subscribe(check);
   visibleSession = computeVisibleSession();
 }
 
 function computeVisibleSession(): string | null {
   const sh = useShell.getState();
-  if (sh.mainView !== "chat" || sh.conversationView !== "chat") return null;
+  if (sh.mainView !== "chat") return null;
+  // docs/31 会话画布：焦点在终端窗格/空态时对话不可见（全局 activeSessionId
+  // 只是焦点 chat 窗格的镜像，窗格没聚焦就不算「被看着」）
+  if (useChatPanes.getState().focusedChatKey === null) return null;
   const wb = useWorkbench.getState();
   return wb.activeSessionId !== null ? String(wb.activeSessionId) : null;
 }

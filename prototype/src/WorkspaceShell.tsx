@@ -7,16 +7,12 @@ import { WorklistPage } from "./ui/WorklistPage.tsx";
 import { ProposalBanner } from "./ui/ProposalBanner.tsx";
 import { ImageStudioPage } from "./ui/ImageStudioPage.tsx";
 import { CommandCenter } from "./ui/CommandCenter.tsx";
-import { Composer } from "./ui/Composer.tsx";
 import { DesktopTopOverlay } from "./ui/DesktopTopOverlay.tsx";
 import { SettingsPage } from "./ui/SettingsPage.tsx";
 import { SourceControlPage } from "./ui/SourceControlPage.tsx";
-import { PermissionDialog } from "./ui/PermissionDialog.tsx";
-import { Timeline, EmptyState } from "./ui/Timeline.tsx";
-import { ChatTerminalDock } from "./ui/ChatTerminalDock.tsx";
 import { useWorkbench } from "./store/useWorkbench.ts";
-import { useChatAccentStyle } from "./ui/useChatAccentStyle.ts";
 import { useTerminalStore } from "./store/useTerminalStore.ts";
+import { installChatPaneSync, restoreChatPaneSeedsFromSession } from "./store/useChatPanes.ts";
 import { Sidebar } from "./ui/Sidebar.tsx";
 import { TerminalPanel } from "./ui/TerminalPanel.tsx";
 import { WorkspaceHeader } from "./ui/WorkspaceHeader.tsx";
@@ -43,8 +39,9 @@ import { cn } from "./ui/cn.ts";
  *     工作区头部那颗状态感知的开关按钮
  *     —— ZCode 的 DesktopTopOverlay / WorkspaceHeaderActionSection 同款约定
  *
- * 会话区形态（docs/13 统一 Web 化）：结构化对话（默认）与终端画布可切换，
- * 终端画布持久挂载（隐藏不卸载）。
+ * 会话区形态（docs/31 会话画布）：结构化对话与终端窗格统一进一张标签画布
+ * （TerminalPanel canvas），互斥的 conversationView 开关已退役（移动端布局
+ * 内部保留）；画布常驻挂载。
  *
  * 与 ZCode 的差异：ZCode 右侧是内嵌浏览器，本项目右侧换成标签页面板
  * —— 因为「多工具平等切换 + 能力对比」比内嵌浏览器更核心。
@@ -81,11 +78,21 @@ export function WorkspaceShell() {
   }, [activeUnitId]);
 
   // 首载重挂：F5 后把 daemon 里还活着的终端进程找回成标签（带最近输出回放）。
-  // 不找回的话那些 PTY 就是界面再也关不掉的孤儿进程。
+  // 不找回的话那些 PTY 就是界面再也关不掉的孤儿进程。chat 标签的种子重建必须
+  // 等 reattach 收尾 —— 先建 chat 标签会让 reattach 的「已有标签」守卫跳过，
+  // 终端从此找不回（docs/31）。
   useEffect(() => {
-    void useTerminalStore.getState().reattachFromDaemon();
+    void useTerminalStore
+      .getState()
+      .reattachFromDaemon()
+      .finally(() => {
+        restoreChatPaneSeedsFromSession();
+      });
     // created 帧推送认领：定时任务的 TUI 派发一到点就自动弹标签，不等刷新
     useTerminalStore.getState().installTerminalCreatedClaim();
+    // chat 窗格焦点同步器（docs/31）：画布游标 ↔ 注册表快照/恢复
+    const unChatPaneSync = installChatPaneSync();
+    return unChatPaneSync;
   }, []);
 
   // 手机布局下右上角三钮整体隐藏：与头部的会话形态切换（对话/终端 TUI）重叠、
@@ -286,12 +293,6 @@ function SidePaneTopOverlay() {
 
 function ConversationSlot() {
   const mainView = useShell((s) => s.mainView);
-  const conversationView = useShell((s) => s.conversationView);
-  // 与 Timeline 同源判空（raw timeline 为空 ⇔ 归并后 items 为空 —— 归并只在
-  // 既有事件间插 divider，不会无中生有）
-  const timelineEmpty = useWorkbench((s) => s.timeline.length === 0);
-  // 本 bot 对话强调色（2026-10-28）：见 ui/useChatAccentStyle.ts
-  const chatAccentStyle = useChatAccentStyle();
 
   return (
     <Panel minSize="30%" className="min-w-0">
@@ -316,40 +317,12 @@ function ConversationSlot() {
           <SourceControlPage />
         </main>
       ) : (
+        /* 会话画布（docs/31）：对话与终端窗格统一标签容器，常驻挂载 ——
+           互斥的 conversationView 开关退役，切视图不杀进程、不丢缓冲 */
         <main className="@container flex h-full min-h-0 flex-col" aria-label="会话">
-          {/* 工作区头部：Agent 身份卡 + 会话形态切换（对话/终端） */}
+          {/* 工作区头部：Agent 身份卡 + 新建会话入口 */}
           <WorkspaceHeader />
-
-          {/* 结构化对话视图（docs/13：默认形态）—— 归一化事件流渲染 */}
-          {conversationView === "chat" && (
-            <div className="chat-conversation-root relative flex min-h-0 flex-1 flex-col" style={chatAccentStyle}>
-              <Timeline />
-              <PermissionDialog />
-              <Composer />
-              {/* 对话页小终端：在输入框下方（ZCode 同款），与 TUI 终端页互相独立 */}
-              <ChatTerminalDock />
-              {/* 空态主角：绝对居中于本列（减固定预留 pb-32 ≈ 输入区常态高）。
-                  此前它挂在 Timeline 滚动区里 min-h-full 居中，居中参考是「输入区
-                  之上的剩余空间」—— 列宽收窄时输入区工具栏先换行（变高，主角上移），
-                  随标签按 640/560/480 收纳总宽回落后又解除换行（变矮，主角下移），
-                  图标过 480 容器档再缩一号，主角就被推着跳了两段。固定预留让位置
-                  只跟列高走，与输入区/终端坞的一切高度变化解耦；pointer-events-none
-                  不挡交互（纯展示内容）。 */}
-              {timelineEmpty && (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center pb-32">
-                  <EmptyState />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* 终端画布持久挂载：切换视图时不杀进程、不丢缓冲，切回瞬间即达 */}
-          <div
-            className={cn(
-              "min-h-0 flex-1 flex-col",
-              conversationView === "terminal" ? "flex" : "hidden",
-            )}
-          >
+          <div className="flex min-h-0 flex-1 flex-col">
             <TerminalPanel variant="canvas" />
           </div>
         </main>

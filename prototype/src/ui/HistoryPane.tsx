@@ -37,6 +37,7 @@ import { useWorkbench } from "../store/useWorkbench.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { useHistoryPrefs } from "../store/useHistoryPrefs.ts";
 import { useTerminalStore } from "../store/useTerminalStore.ts";
+import { useChatPanes } from "../store/useChatPanes.ts";
 import { asSessionId, asUnitId, SESSION_SOURCE_LABEL, type SessionSource } from "../core/units.ts";
 import { useShell } from "../store/useShell.ts";
 import { collapseForkVersions } from "./forkHistory.ts";
@@ -223,10 +224,8 @@ export function HistoryPane({
         const wb = useWorkbench.getState();
         // 当前 bot 不重复 selectUnit —— 那会清掉正在看的聊天时间线
         if (String(wb.activeUnitId) !== String(unitId)) wb.selectUnit(asUnitId(unitId));
-        // TUI 恢复的落点就是终端画布：切过去，别让用户对着聊天页猜终端在哪
-        const sh = useShell.getState();
-        sh.setMainView("chat");
-        sh.setConversationView("terminal");
+        // TUI 恢复的落点是终端窗格标签（docs/31 画布常驻，created 帧认领会激活）
+        useShell.getState().setMainView("chat");
         // 打开即已读：熄掉侧栏的「完成未读」绿灯
         useHistoryPrefs
           .getState()
@@ -238,20 +237,16 @@ export function HistoryPane({
   };
 
   /**
-   * 在聊天页继续（ADR 0012 resume-in-chat）：headless 会话从 daemon 账本重建
-   * 时间线；可恢复（live / cli_ref）时接回执行器，否则打开只读段。
+   * 在对话窗格继续（ADR 0012 resume-in-chat + docs/31 画布）：headless 会话从
+   * daemon 账本重建时间线；可恢复（live / cli_ref）时接回执行器，否则打开只读段。
    * 与 TUI 恢复互补：TUI 走执行器自己的存储（原生原味），这里走 host 账本投影。
    */
   const handleOpenInChat = (e: UnitHistoryEntry): void => {
     // unitId 用面板自身的所属 bot：entry.unitId 是 daemon 的可选字段，且面板
     // 固定属于一个 bot（见 Sidebar.openEntryInChat 同注）
     if (e.sessionId === null) return;
-    void useWorkbench
-      .getState()
-      .openSession({ sessionId: asSessionId(e.sessionId), unitId: asUnitId(unitId), runtimeId: e.runtimeId });
-    const sh = useShell.getState();
-    sh.setMainView("chat");
-    sh.setConversationView("chat");
+    // 幂等开窗格：已有就聚焦（窗格内切到那段），没有就开标签
+    useChatPanes.getState().openChatPane({ unitId: String(unitId), sessionId: e.sessionId, runtimeId: e.runtimeId });
     // 打开即已读：熄掉侧栏的「完成未读」绿灯
     useHistoryPrefs.getState().markViewed([e.key, `session-${e.sessionId}`]);
     onFinished();
@@ -326,9 +321,7 @@ export function HistoryPane({
       .then(() => {
         const wb = useWorkbench.getState();
         if (String(wb.activeUnitId) !== String(unitId)) wb.selectUnit(asUnitId(unitId));
-        const sh = useShell.getState();
-        sh.setMainView("chat");
-        sh.setConversationView("terminal");
+        useShell.getState().setMainView("chat");
         onFinished();
       })
       .catch((err2: unknown) => console.error("[HistoryPane] 原生会话 TUI 恢复失败:", err2))

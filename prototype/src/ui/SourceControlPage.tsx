@@ -64,12 +64,12 @@ function asRpcError(err: unknown): RpcErrorShape {
   return { message: String(err) };
 }
 
-/** 开终端并把用户带到看得见它的地方：sourceControl 视图下 TerminalPanel 不挂载，
- *  只 createTab 的话标签建在后台、用户原地不动（Codex 评审 P2） */
+/** 开终端并把用户带到看得见它的地方：sourceControl 视图下画布不在前台，
+ *  只 createTab 的话标签建在后台、用户原地不动（Codex 评审 P2；
+ *  docs/31 后 createTab 自带激活，无需视图切换） */
 function openTerminalAt(cwd: string, title: string): void {
   useTerminalStore.getState().createTab({ cwd, title });
   useShell.getState().setMainView("chat");
-  useShell.getState().setConversationView("terminal");
 }
 
 /** 路径比对统一分隔符并大小写不敏感：git 输出正斜杠、Windows 本地字符串反斜杠，

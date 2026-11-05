@@ -33,10 +33,12 @@ import type { AutomationDialogRequest } from "../ui/AutomationDialog.tsx";
 export type MainView = "chat" | "automations" | "image" | "backlog" | "sourceControl";
 
 /**
- * 会话内视图（docs/13 统一 Web 化：决策拍板「新会话默认结构化聊天」）：
+ * 会话内视图（docs/13 引入；docs/31 会话画布后**语义降级为移动端布局内部态**）：
+ * 桌面端对话与终端已统一进画布标签（TerminalPanel canvas + ChatPaneSlot），
+ * 互斥开关退役、桌面链路零消费；手机布局（MobileLayout）没有多窗格画布，
+ * 仍用这个二态切换组织「对话 / 终端」两页。
  * - chat 为结构化对话（Timeline + Composer，消费 RuntimeEvent 归一化事件流）
  * - terminal 为终端画布（TUI 原生体验，xterm 画布持久挂载）
- * trajectory 轨迹透视不随本轮恢复，需要时从 git 历史取（TrajectoryView.tsx）。
  */
 export type ConversationView = "chat" | "terminal";
 

@@ -68,6 +68,8 @@ import { executorIconSrc } from "./executorIcon.ts";
 import { useHistoryPrefs } from "../store/useHistoryPrefs.ts";
 import { useSidebarSelection } from "../store/useSidebarSelection.ts";
 import { useTerminalStore, collectLeafIds } from "../store/useTerminalStore.ts";
+import { useChatPanes } from "../store/useChatPanes.ts";
+import { openNewTuiForUnit as sessionOpenOpenNewTui } from "../store/sessionOpen.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { QuickContextMenu, quickMenuFromEvent, type QuickMenuState } from "./QuickContextMenu.tsx";
 import { cn } from "./cn.ts";
@@ -580,8 +582,9 @@ function guardsOf(u: WorkUnit): BotWriteGuards {
 /* --------------------------------------------------- 历史会话的打开与状态灯 */
 
 /**
- * 在聊天页打开一条历史会话（ADR 0012 resume-in-chat）。
- * 侧栏子列表直点与右键菜单共用 —— 点击历史行 = 左侧栏的「垂直标签页」切换。
+ * 在画布里打开一条历史会话的对话窗格（ADR 0012 resume-in-chat + docs/31）。
+ * 侧栏子列表直点与右键菜单共用。幂等口径：按段/会话线找窗格，找到就聚焦
+ * （窗格内切到那段），没有就开新标签 —— 不再有「对话/终端」视图切换。
  * unitId 由调用方传行所属 bot 而不是读 entry.unitId：后者是 daemon 的可选
  * 字段（TS 契约 unitId?），且跨单元展示的行（别的 bot 的历史折进本列表）条目
  * 归属与行归属可以不同 —— 点击语义是「在这个 bot 的语境里打开它」，行所属
@@ -592,21 +595,12 @@ function openEntryInChat(e: UnitHistoryEntry, ownerUnitId: string): void {
   const sid = e.sessionId;
   // 只要用户点开该会话，立即标为已读消除绿灯
   useHistoryPrefs.getState().markViewed([e.key, `session-${sid}`]);
-  void useWorkbench
-    .getState()
-    .openSession({ sessionId: asSessionId(sid), unitId: asUnitId(ownerUnitId), runtimeId: e.runtimeId })
-    .then(() => {
-      if (String(useWorkbench.getState().activeSessionId) !== sid) return;
-      const sh = useShell.getState();
-      sh.setMainView("chat");
-      sh.setConversationView("chat");
-    });
+  useChatPanes.getState().openChatPane({ unitId: ownerUnitId, sessionId: sid, runtimeId: e.runtimeId });
 }
 
 /**
  * 在 TUI 中重现一条历史会话（各家 --resume 口径见 HistoryPane 的 RESUME_ARGS）。
- * 派发前登记 pending（useTerminalStore），防止紧接着的「终端跟随 bot」effect
- * 因标签还没落地又派发一个全新 TUI（双进程竞态）。
+ * 派发前登记 pending（useTerminalStore），防止标签落地前的重复派发（双进程竞态）。
  * TUI 本身还开着（前端有它的标签）时**不发 resume** —— 直接切到那个标签；
  * 此时 resume 会双开同一原生会话（存储锁冲突），且切标签才是用户要的「回到它」。
  */
@@ -623,9 +617,7 @@ function openEntryInTui(e: UnitHistoryEntry, unit: WorkUnit): void {
       const group = st.groups.find((g) => collectLeafIds(g.rootLayout).includes(live.id));
       if (group) st.setActiveGroup(group.id);
       st.setActiveInstance(live.id);
-      const sh = useShell.getState();
-      sh.setMainView("chat");
-      sh.setConversationView("terminal");
+      useShell.getState().setMainView("chat");
       markOpened();
       return;
     }
@@ -647,49 +639,20 @@ function openEntryInTui(e: UnitHistoryEntry, unit: WorkUnit): void {
     resumeRef: e.resumeRef,
   })
     .then(() => {
-      const sh = useShell.getState();
-      sh.setMainView("chat");
-      sh.setConversationView("terminal");
+      useShell.getState().setMainView("chat");
       markOpened();
     })
     .catch((err: unknown) => console.error("[Sidebar] TUI 恢复失败:", err));
 }
 
-/** bot 主绑定执行器（bindings.primary 优先，回落全局当前）—— TerminalPanel boundExecutor 同款口径 */
-function boundExecutorOf(unit: WorkUnit): string {
-  const wb = useWorkbench.getState();
-  const binding = unit.bindings.find((b) => b.primary) ?? unit.bindings[0];
-  const rid = binding?.runtimeId;
-  if (rid === undefined || rid === "") return wb.activeRuntimeId;
-  return (
-    wb.runtimes.find((r) => r.id === rid)?.id ??
-    wb.runtimes.find((r) => r.id === `daemon:${rid}`)?.id ??
-    wb.activeRuntimeId
-  );
-}
-
-/** 在该 bot 的工作空间直接起一个绑定执行器的全新 TUI（「新建会话」的终端形态） */
+/** 在该 bot 的工作空间直接起一个绑定执行器的全新 TUI —— 单源实现在 store/sessionOpen.ts */
 function openNewTuiForUnit(unit: WorkUnit): void {
-  const bare = boundExecutorOf(unit).replace(/^daemon:/, "");
-  if (bare === "") return;
-  const wb = useWorkbench.getState();
-  if (String(wb.activeUnitId) !== String(unit.id)) wb.selectUnit(asUnitId(unit.id));
-  useTerminalStore.getState().notePendingUnitDispatch(unit.id);
-  void dispatchTerminal({ unitId: unit.id, unitName: unit.name, rootPath: unit.rootPath, runtimeId: bare })
-    .then(() => {
-      const sh = useShell.getState();
-      sh.setMainView("chat");
-      sh.setConversationView("terminal");
-    })
-    .catch((err: unknown) => console.error("[Sidebar] 新建 TUI 派发失败:", err));
+  sessionOpenOpenNewTui(unit);
 }
 
-/** 在该 bot 的工作空间开一个全新对话页（bot 行悬浮 ＋ 按钮与右键菜单共用） */
+/** 给该 bot 开一个对话窗格：已有窗格就聚焦，没有就开草稿窗格（bot 行右键「新建会话」） */
 function openNewChatForUnit(unit: WorkUnit): void {
-  useWorkbench.getState().selectUnit(asUnitId(unit.id));
-  const sh = useShell.getState();
-  sh.setMainView("chat");
-  sh.setConversationView("chat");
+  useChatPanes.getState().openUnitChatPane(unit.id);
 }
 
 /** 状态灯的五种形态（对齐 ZCode deriveTaskLeadingIndicator 的「空闲不显示」原则） */

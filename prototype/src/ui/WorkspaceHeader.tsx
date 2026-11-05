@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
-import { Check, ChevronDown, FolderOpen, PanelBottom, RotateCw, Smartphone, X } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, MessageSquarePlus, PanelBottom, Plus, RotateCw, Smartphone, Terminal, X, Zap } from "lucide-react";
 import { useShell } from "../store/useShell.ts";
 import { useWorkbench, selectActiveUnit } from "../store/useWorkbench.ts";
 import { useTaskbar } from "../store/useTaskbar.ts";
@@ -7,12 +7,19 @@ import { useSidePane } from "../store/useSidePane.ts";
 import { sidePaneOccupies } from "../core/sidePaneTabs.ts";
 import { listEditors, openInEditor, type DaemonEditorInfo } from "../adapters/daemon/client.ts";
 import { useIsMobile } from "./mobile/useIsMobile.ts";
-import { ConversationViewSwitch } from "./ConversationViewSwitch.tsx";
+import { useChatPanes } from "../store/useChatPanes.ts";
+import { openNewTuiForUnit } from "../store/sessionOpen.ts";
+import { useTerminalStore } from "../store/useTerminalStore.ts";
+import { QuickContextMenu, quickMenuFromEvent, type QuickMenuState } from "./QuickContextMenu.tsx";
 import { TitleBarClearance, onTitleBarContextMenu } from "./WindowControls.tsx";
 import { cn } from "./cn.ts";
 
 /**
- * 工作区头部 —— 只留高频操作：单元身份卡（左）＋ 会话形态切换（右）。
+ * 工作区头部 —— 只留高频操作：单元身份卡（左）＋ 新建会话入口（右）。
+ *
+ * 旧「会话形态切换（对话/终端）」已随 conversationView 互斥开关退役
+ * （docs/31）：对话与终端统一进画布标签，头部原位换「新建会话」菜单
+ * （对话 / TUI / 系统终端 —— 与画布「＋」下拉同源的快捷口）。
  *
  * 低频状态项（工作中 / 历史会话 / 移动端远控 / 后台守护通道）已迁往右侧栏的
  * 底部状态条（见 StatusIndicators.tsx）：它们是「想看时去看」的信息，不是每一步
@@ -22,7 +29,7 @@ import { cn } from "./cn.ts";
  * 3rem 的对齐带给它。
  *
  * 溢出阶梯（@container，宽→窄依次让位）：① 一句话角色（<1100）② 文件夹
- * （<560）③ 手机切换钮短标签 + 切换器标签图标化（<560）④ 折叠到底栏钮
+ * （<560）③ 手机切换钮短标签 + 新建钮标签图标化（<560）④ 折叠对话到底栏钮
  * （<480 隐）⑤ 名称硬裁（overflow-hidden 无省略号）⑥ 右区左缘裁切兜底
  * （min-w-0 + overflow-hidden —— 行尾窗口控制钮让位带 shrink-0 永不被侵占，
  * 极限压缩时宁可裁左缘也绝不滑进控制钮带）。「切回手机视图」是唯一回手机
@@ -31,13 +38,14 @@ import { cn } from "./cn.ts";
 export function WorkspaceHeader() {
   const sidebarCollapsed = useShell((s) => s.sidebarCollapsed);
   const activeSessionId = useWorkbench((s) => s.activeSessionId);
+  const unit = useWorkbench(selectActiveUnit);
+  const [newMenu, setNewMenu] = useState<QuickMenuState | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   /** 同步完成的就地确认态（✓ 2 秒）：RPC 常在几十 ms 内完成，转圈一闪而过
    *  等于没有反馈——通知中心有事实源行，按钮自身也要有看得见的收尾 */
   const [syncDone, setSyncDone] = useState(false);
 
   const { preference, setPreference, windowIsMobile } = useIsMobile();
-  const unit = useWorkbench(selectActiveUnit);
   const isSteward = unit?.id === "steward";
   const mainView = useShell((s) => s.mainView);
   // 面板是否占位决定右侧内边距：收起时让出右上浮层重开钮的对齐带（pr-12）
@@ -175,12 +183,52 @@ export function WorkspaceHeader() {
           </>
         )}
 
-        {/* 会话形态切换（结构化对话 | 终端 TUI）—— 最高优先级，任何宽度都在
-            （<560 标签图标化，阶梯③，见该组件注释）。面板收起时它是头部最右
-            （让位带里是右上浮层的重开钮）；面板展开时右侧是隔壁面板列。挤压
-            全由左侧身份卡按阶梯吸收 */}
-        <ConversationViewSwitch />
+        {/* 新建会话（docs/31：替代旧「对话/终端」形态切换钮的原位入口）——
+            与画布「＋」下拉同源的三形态快捷口：<560 标签收起只剩图标（阶梯③） */}
+        <button
+          onClick={(e) =>
+            setNewMenu(
+              quickMenuFromEvent(e, [
+                {
+                  label: unit ? `新对话 · ${unit.name}` : "新对话（先选 bot）",
+                  icon: MessageSquarePlus,
+                  onSelect: () => {
+                    if (unit) useChatPanes.getState().openUnitChatPane(unit.id);
+                    else {
+                      const draftKey = useChatPanes.getState().createDraftRecord();
+                      useTerminalStore.getState().createChatTab(draftKey);
+                    }
+                  },
+                },
+                ...(unit
+                  ? [
+                      {
+                        label: `新 TUI · ${unit.name}`,
+                        icon: Zap,
+                        onSelect: () => openNewTuiForUnit(unit),
+                      },
+                    ]
+                  : []),
+                {
+                  label: "系统终端 (PowerShell 7)",
+                  icon: Terminal,
+                  onSelect: () => {
+                    useTerminalStore.getState().createTab({ cwd: unit?.rootPath });
+                    useShell.getState().setMainView("chat");
+                  },
+                },
+              ]),
+            )
+          }
+          aria-label="新建会话"
+          title="新建会话：对话 / Agent TUI / 系统终端 —— 建好的窗格进画布标签，可自由拆分并排"
+          className="flex h-7 shrink-0 items-center gap-1.5 rounded-btn border border-teal/40 bg-teal-tint/40 px-2 text-caption font-medium text-teal transition hover:bg-teal hover:text-white"
+        >
+          <Plus size={13} className="shrink-0" />
+          <span className="hidden @min-[560px]:inline">新建会话</span>
+        </button>
       </div>
+      <QuickContextMenu menu={newMenu} onClose={() => setNewMenu(null)} />
 
       {/* 面板收起时本列顶到窗口右缘：no-drag 占位让出窗口控制钮带 + 浮层钮
           对齐带。shrink-0 + 前方全部可收缩 = 让位带在任意宽度下都完整保有

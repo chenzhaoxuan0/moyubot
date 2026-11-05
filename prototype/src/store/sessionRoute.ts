@@ -12,8 +12,8 @@
  *   4. 快捷键：Alt+← / Alt+→ = history.back / forward。
  *
  * hash 形态：#/u/<unitId> 或 #/u/<unitId>/s/<sessionId>；无单元时 #/。
- * 只编码会话身份 —— mainView / conversationView 等视图态仍归 useShell，
- * 路由回放时把它们带回聊天页（与点击历史行的行为一致）。
+ * 只编码会话身份 —— mainView 等视图态仍归 useShell，路由回放时带回聊天页
+ * （docs/31 后回放经 openChatPane 开/聚焦对话窗格，与点击历史行同一条路）。
  */
 
 import { useWorkbench } from "./useWorkbench.ts";
@@ -94,22 +94,20 @@ async function applyTarget(target: RouteTarget): Promise<void> {
     const rows = await fetchSessions(defaultDaemonEndpoint());
     runtimeId = rows.find((r) => String(r.id) === target.sessionId)?.runtimeId;
   } catch {
-    /* daemon 抖动：下面 openSession 会给出更具体的提示 */
+    /* daemon 抖动：下面 openChatPane 会给出更具体的提示 */
   }
   if (runtimeId === undefined) {
     wb.pushNotice("路由恢复失败", `台账里没有会话 ${target.sessionId}，或执行器不可用。`, { level: "warn" });
     return;
   }
-  await wb.openSession({
-    sessionId: asSessionId(target.sessionId),
-    unitId: asUnitId(target.unitId),
+  // docs/31 会话画布：回放 = 开/聚焦对话窗格（幂等；openSession 权威重建在
+  // focus 链内部完成）。互斥的 conversationView 已退役。
+  const { useChatPanes } = await import("./useChatPanes.ts");
+  useChatPanes.getState().openChatPane({
+    unitId: target.unitId,
+    sessionId: target.sessionId,
     runtimeId,
   });
-  if (String(useWorkbench.getState().activeSessionId) === target.sessionId) {
-    const sh = useShell.getState();
-    sh.setMainView("chat");
-    sh.setConversationView("chat");
-  }
 }
 
 let started = false;

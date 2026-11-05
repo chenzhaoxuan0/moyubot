@@ -22,6 +22,7 @@ import { AUTO_ARCHIVE_DAY_OPTIONS, useHistoryPrefs } from "../store/useHistoryPr
 import { useShell } from "../store/useShell.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { collectLeafIds, useTerminalStore } from "../store/useTerminalStore.ts";
+import { useChatPanes } from "../store/useChatPanes.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { resumeArgsFor } from "./HistoryPane.tsx";
 import { executorIconSrc } from "./executorIcon.ts";
@@ -170,19 +171,9 @@ export function ArchivedTasksSettingsSection(): ReactElement {
   const handleOpenInChat = (entry: UnitHistoryEntry): void => {
     if (!entry.sessionId) return;
     const ownerUnitId = entry.unitId || (units[0]?.id ?? "");
-    void useWorkbench
-      .getState()
-      .openSession({
-        sessionId: asSessionId(entry.sessionId),
-        unitId: asUnitId(ownerUnitId),
-        runtimeId: entry.runtimeId,
-      })
-      .then(() => {
-        const sh = useShell.getState();
-        sh.setMainView("chat");
-        sh.setConversationView("chat");
-        sh.closeSettings();
-      });
+    // docs/31 会话画布：幂等开/聚焦对话窗格（内部带回聊天页），再退出设置覆盖层
+    useChatPanes.getState().openChatPane({ unitId: ownerUnitId, sessionId: entry.sessionId, runtimeId: entry.runtimeId });
+    useShell.getState().closeSettings();
   };
 
   // 处理在 TUI 中重现
@@ -196,7 +187,6 @@ export function ArchivedTasksSettingsSection(): ReactElement {
         st.setActiveInstance(live.id);
         const sh = useShell.getState();
         sh.setMainView("chat");
-        sh.setConversationView("terminal");
         sh.closeSettings();
         return;
       }
@@ -219,7 +209,6 @@ export function ArchivedTasksSettingsSection(): ReactElement {
       .then(() => {
         const sh = useShell.getState();
         sh.setMainView("chat");
-        sh.setConversationView("terminal");
         sh.closeSettings();
       })
       .catch((err: unknown) => {

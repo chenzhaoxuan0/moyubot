@@ -1,12 +1,23 @@
 import { create } from "zustand";
 import { terminalSessionRegistry, CHAT_DOCK_UNIT_ID } from "./TerminalSessionManager.ts";
+import { useChatPanes } from "./useChatPanes.ts";
 
 export type SplitDirection = "horizontal" | "vertical"; // horizontal = 左右 (row), vertical = 上下 (col)
 
+/**
+ * 画布布局树（docs/31 会话画布）—— leaf 泛化为双 kind：
+ * - "leaf" 终端窗格（系统终端 / Agent TUI，指向 TerminalInstanceItem）
+ * - "chatLeaf" 对话窗格（结构化对话，paneKey 指向 useChatPanes 注册表）
+ * 同一棵树里可任意混排（对话 | TUI 并排是杀手场景）。
+ */
 export type LayoutNode =
   | {
       type: "leaf";
       instanceId: string;
+    }
+  | {
+      type: "chatLeaf";
+      paneKey: string;
     }
   | {
       type: "branch";
@@ -56,28 +67,63 @@ export interface TerminalTabGroup {
   rootLayout: LayoutNode;
 }
 
-/** 递归获取树中所有 leaf 的 instanceId */
+/** 递归获取树中所有终端窗格的 instanceId（dispose / 终端匹配专用；不含 chat 窗格） */
 export function collectLeafIds(node: LayoutNode | null): string[] {
   if (!node) return [];
   if (node.type === "leaf") return [node.instanceId];
+  if (node.type === "chatLeaf") return [];
   return [...collectLeafIds(node.first), ...collectLeafIds(node.second)];
 }
 
-/** 递归拆分指定 leaf */
+/** 递归获取树中所有 chat 窗格的 paneKey */
+export function collectChatPaneKeys(node: LayoutNode | null): string[] {
+  if (!node) return [];
+  if (node.type === "leaf") return [];
+  if (node.type === "chatLeaf") return [node.paneKey];
+  return [...collectChatPaneKeys(node.first), ...collectChatPaneKeys(node.second)];
+}
+
+/** 树中窗格总数（双 kind，标签徽章 / mini-bar 判定用） */
+export function countLeaves(node: LayoutNode | null): number {
+  return collectLeafIds(node).length + collectChatPaneKeys(node).length;
+}
+
+/** 叶子是否就是指定窗格（instanceId 与 paneKey 命名空间不重叠，按 id 通配） */
+function leafMatches(node: LayoutNode, targetId: string): boolean {
+  if (node.type === "leaf") return node.instanceId === targetId;
+  if (node.type === "chatLeaf") return node.paneKey === targetId;
+  return false;
+}
+
+/** 递归找到包含指定窗格（任意 kind）的分组 */
+export function findGroupOfPane(
+  groups: readonly TerminalTabGroup[],
+  targetId: string,
+): TerminalTabGroup | undefined {
+  return groups.find((g) => paneInLayout(g.rootLayout, targetId));
+}
+
+function paneInLayout(node: LayoutNode | null, targetId: string): boolean {
+  if (!node) return false;
+  if (node.type === "leaf" || node.type === "chatLeaf") return leafMatches(node, targetId);
+  return paneInLayout(node.first, targetId) || paneInLayout(node.second, targetId);
+}
+
+/** 递归拆分指定窗格（任意 kind），新窗格由调用方给出（终端 leaf 或 chatLeaf） */
 export function splitTreeNode(
   node: LayoutNode,
   targetId: string,
-  newId: string,
+  newLeaf: LayoutNode,
   direction: SplitDirection,
 ): LayoutNode {
-  if (node.type === "leaf") {
-    if (node.instanceId === targetId) {
+  if (node.type === "leaf" || node.type === "chatLeaf") {
+    if (leafMatches(node, targetId)) {
       return {
         type: "branch",
         id: `br_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`,
         direction,
-        first: { type: "leaf", instanceId: targetId },
-        second: { type: "leaf", instanceId: newId },
+        first: node,
+        second: newLeaf,
         ratio: 0.5,
       };
     }
@@ -85,15 +131,15 @@ export function splitTreeNode(
   }
   return {
     ...node,
-    first: splitTreeNode(node.first, targetId, newId, direction),
-    second: splitTreeNode(node.second, targetId, newId, direction),
+    first: splitTreeNode(node.first, targetId, newLeaf, direction),
+    second: splitTreeNode(node.second, targetId, newLeaf, direction),
   };
 }
 
-/** 递归移除指定 leaf，兄弟节点自动提升填补空间 */
+/** 递归移除指定窗格（任意 kind），兄弟节点自动提升填补空间 */
 export function removeTreeNode(node: LayoutNode, targetId: string): LayoutNode | null {
-  if (node.type === "leaf") {
-    return node.instanceId === targetId ? null : node;
+  if (node.type === "leaf" || node.type === "chatLeaf") {
+    return leafMatches(node, targetId) ? null : node;
   }
   const newFirst = removeTreeNode(node.first, targetId);
   const newSecond = removeTreeNode(node.second, targetId);
@@ -113,7 +159,7 @@ export function updateTreeRatio(
   branchId: string,
   ratio: number,
 ): LayoutNode {
-  if (node.type === "leaf") return node;
+  if (node.type === "leaf" || node.type === "chatLeaf") return node;
   if (node.id === branchId) {
     return { ...node, ratio };
   }
@@ -129,6 +175,12 @@ interface TerminalStoreState {
   groups: TerminalTabGroup[];
   activeGroupId: string | null;
   activeInstanceId: string | null;
+  /**
+   * 焦点 chat 窗格的游标（docs/31）。焦点窗格可能是终端（activeInstanceId）
+   * 或对话（activeChatPaneKey），两者互斥：任一聚焦都清掉另一个。
+   * useChatPanes.installChatPaneSync 订阅它的变化驱动快照/恢复。
+   */
+  activeChatPaneKey: string | null;
   maximizedInstanceId: string | null;
   defaultProfileId: string;
   /** 首载重挂是否已尝试过（无论找没找到）—— 空态自动建标签必须等它，否则抢占重挂 */
@@ -146,7 +198,7 @@ interface TerminalStoreState {
   agyDefaultYolo: boolean;
   setAgyDefaultYolo: (val: boolean) => void;
 
-  /** 新建独立标签页 */
+  /** 新建独立终端标签页 */
   createTab: (opts?: {
     profileId?: string;
     cwd?: string;
@@ -155,18 +207,33 @@ interface TerminalStoreState {
     unitId?: string;
   }) => string;
 
-  /** 自由拆分当前窗格（支持任意嵌套左右 / 上下分屏） */
+  /** 新建对话标签页（chatLeaf 单窗格组）；activate=false 只建标签不抢焦点（F5 种子重建用） */
+  createChatTab: (paneKey: string, activate?: boolean) => string;
+
+  /** 自由拆分（支持任意嵌套左右/上下；目标与新窗格都可为终端或对话窗格） */
   splitPane: (opts?: {
-    targetInstanceId?: string;
+    /** 拆分目标窗格（instanceId 或 paneKey，任意 kind）；缺省 = 焦点窗格 */
+    targetPaneId?: string;
+    /** 拆分方向 */
     direction?: SplitDirection;
+    /* —— 终端窗格的创建参数（chatPaneKey 存在时忽略） —— */
     profileId?: string;
     cwd?: string;
     executorId?: string;
     title?: string;
-  }) => string;
+    unitId?: string;
+    /* —— 对话窗格：给出 paneKey 则新窗格为 chatLeaf —— */
+    chatPaneKey?: string;
+  }) => string | null;
 
-  /** 关闭单个窗格（若为标签页内最后一个窗格，则连带关闭标签页） */
+  /** 关闭单个终端窗格（若为标签页内最后一个窗格，则连带关闭标签页） */
   closePane: (instanceId: string) => void;
+
+  /** 关闭对话窗格（删窗格不杀会话；组内最后一个则连带关标签） */
+  closeChatPane: (paneKey: string) => void;
+
+  /** 把焦点游标翻到某个 chat 窗格（点窗格本体 / 标签激活走这里） */
+  focusChatPaneTab: (paneKey: string) => void;
 
   /** 关闭整个标签页组 */
   closeTab: (groupId: string) => void;
@@ -213,7 +280,7 @@ interface TerminalStoreState {
   // 兼容别名
   createInstance: (opts?: { profileId?: string; cwd?: string; executorId?: string; title?: string }) => string;
   closeInstance: (id: string) => void;
-  splitWithNew: (profileId?: string) => string;
+  splitWithNew: (profileId?: string) => string | null;
 }
 
 const TERMINAL_PREFS_KEY = "agent-workbench:terminal-prefs";
@@ -309,6 +376,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
   activeGroupId: null,
   activeInstanceId: null,
   maximizedInstanceId: null,
+  activeChatPaneKey: null,
   defaultProfileId: "pwsh",
   reattachDone: false,
   claimInstalled: false,
@@ -377,25 +445,74 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       groups: [...state.groups, newGroup],
       activeGroupId: groupId,
       activeInstanceId: id,
+      activeChatPaneKey: null,
     }));
 
     return id;
   },
 
+  createChatTab: (paneKey, activate = true) => {
+    const groupId = `group_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`;
+    const newGroup: TerminalTabGroup = {
+      id: groupId,
+      rootLayout: { type: "chatLeaf", paneKey },
+    };
+    set((state) => ({
+      groups: [...state.groups, newGroup],
+      // F5 种子重建不抢焦点：焦点由 hash 路由回放决定，抢了会跟它打架
+      ...(activate
+        ? { activeGroupId: groupId, activeInstanceId: null, activeChatPaneKey: paneKey }
+        : {}),
+      maximizedInstanceId: null,
+    }));
+    return groupId;
+  },
+
+  focusChatPaneTab: (paneKey) => {
+    const group = findGroupOfPane(get().groups, paneKey);
+    if (!group) return;
+    set({
+      activeGroupId: group.id,
+      activeInstanceId: null,
+      activeChatPaneKey: paneKey,
+      maximizedInstanceId: null,
+    });
+  },
+
   splitPane: (opts = {}) => {
-    const { activeInstanceId, activeGroupId, groups, instances } = get();
-    const targetId = opts.targetInstanceId ?? activeInstanceId ?? instances[0]?.id;
+    const { activeInstanceId, activeChatPaneKey, groups, instances } = get();
+    // 拆分目标：显式指定（任意 kind）→ 焦点窗格（chat 游标优先）→ 首个窗格
+    const targetId =
+      opts.targetPaneId ??
+      activeChatPaneKey ??
+      activeInstanceId ??
+      collectLeafIds(groups[0]?.rootLayout ?? null)[0] ??
+      collectChatPaneKeys(groups[0]?.rootLayout ?? null)[0];
     if (!targetId) {
       return get().createTab(opts);
     }
 
-    // 找到包含该 targetId 的标签组
-    const group = groups.find((g) => collectLeafIds(g.rootLayout).includes(targetId)) ??
-      groups.find((g) => g.id === activeGroupId) ??
-      groups[0];
-
+    // 找到包含该目标的标签组
+    const group = findGroupOfPane(groups, targetId);
     if (!group) {
       return get().createTab(opts);
+    }
+
+    const direction: SplitDirection = opts.direction ?? "horizontal";
+
+    // 对话窗格落在目标旁边（对话|对话、终端|对话 混排都是合法组合）
+    if (opts.chatPaneKey !== undefined) {
+      const chatLayout = splitTreeNode(group.rootLayout, targetId, { type: "chatLeaf", paneKey: opts.chatPaneKey }, direction);
+      set((state) => ({
+        groups: state.groups.map((g) =>
+          g.id === group.id ? { ...g, rootLayout: chatLayout } : g,
+        ),
+        activeGroupId: group.id,
+        activeInstanceId: null,
+        activeChatPaneKey: opts.chatPaneKey,
+        maximizedInstanceId: null,
+      }));
+      return opts.chatPaneKey;
     }
 
     const targetInst = instances.find((i) => i.id === targetId);
@@ -420,11 +537,11 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       icon: opts.executorId ? opts.executorId : profile.icon,
       cwd: opts.cwd ?? targetInst?.cwd ?? "",
       executorId: opts.executorId,
+      unitId: opts.unitId,
       createdAt: Date.now(),
     };
 
-    const direction: SplitDirection = opts.direction ?? "horizontal";
-    const updatedLayout = splitTreeNode(group.rootLayout, targetId, newId, direction);
+    const updatedLayout = splitTreeNode(group.rootLayout, targetId, { type: "leaf", instanceId: newId }, direction);
 
     set((state) => ({
       instances: [...state.instances, newInst],
@@ -433,10 +550,29 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       ),
       activeGroupId: group.id,
       activeInstanceId: newId,
+      activeChatPaneKey: null,
       maximizedInstanceId: null, // 拆分时自动解除最大化
     }));
 
     return newId;
+  },
+
+  closeChatPane: (paneKey) => {
+    const group = findGroupOfPane(get().groups, paneKey);
+    useChatPanes.getState().handlePaneClosed(paneKey);
+    if (!group) return;
+    // 关窗格不杀会话（docs/31 §四）：只摘布局叶子；组内最后一个叶子连带关标签
+    const updatedLayout = removeTreeNode(group.rootLayout, paneKey);
+    if (!updatedLayout) {
+      get().closeTab(group.id);
+      return;
+    }
+    set((state) => ({
+      groups: state.groups.map((g) =>
+        g.id === group.id ? { ...g, rootLayout: updatedLayout } : g,
+      ),
+      ...(state.activeChatPaneKey === paneKey ? { activeChatPaneKey: null } : {}),
+    }));
   },
 
   closePane: (instanceId: string) => {
@@ -458,6 +594,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       let newGroups = state.groups;
       let newActiveGroupId = state.activeGroupId;
       let newActiveInstanceId = state.activeInstanceId;
+      let newActiveChatPaneKey = state.activeChatPaneKey;
 
       if (!updatedLayout) {
         // 该组已无任何窗格，关闭整个组
@@ -467,11 +604,13 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
           if (newGroups.length > 0) {
             const nextIdx = Math.max(0, gIdx - 1);
             newActiveGroupId = newGroups[nextIdx]?.id ?? null;
-            const remainingLeaves = collectLeafIds(newGroups[nextIdx]?.rootLayout ?? null);
-            newActiveInstanceId = remainingLeaves[0] ?? null;
+            const nextRoot = newGroups[nextIdx]?.rootLayout ?? null;
+            newActiveInstanceId = collectLeafIds(nextRoot)[0] ?? null;
+            newActiveChatPaneKey = collectChatPaneKeys(nextRoot)[0] ?? null;
           } else {
             newActiveGroupId = null;
             newActiveInstanceId = null;
+            newActiveChatPaneKey = null;
           }
         }
       } else {
@@ -480,8 +619,11 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
           g.id === group.id ? { ...g, rootLayout: updatedLayout } : g,
         );
         if (state.activeInstanceId === instanceId) {
-          const remainingLeaves = collectLeafIds(updatedLayout);
-          newActiveInstanceId = remainingLeaves[0] ?? null;
+          // 混排组里终端关掉后，焦点让给剩下的 chat 窗格（若有）
+          newActiveInstanceId = collectLeafIds(updatedLayout)[0] ?? null;
+          if (newActiveInstanceId === null) {
+            newActiveChatPaneKey = collectChatPaneKeys(updatedLayout)[0] ?? null;
+          }
         }
       }
 
@@ -490,6 +632,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         groups: newGroups,
         activeGroupId: newActiveGroupId,
         activeInstanceId: newActiveInstanceId,
+        ...(newActiveChatPaneKey !== state.activeChatPaneKey ? { activeChatPaneKey: newActiveChatPaneKey } : {}),
         maximizedInstanceId:
           state.maximizedInstanceId === instanceId ? null : state.maximizedInstanceId,
       };
@@ -502,6 +645,10 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
 
     const leafIds = collectLeafIds(group.rootLayout);
     leafIds.forEach((id) => terminalSessionRegistry.dispose(id));
+    // chat 窗格摘注册表记录（不杀会话）；焦点游标归位交给下面的激活逻辑
+    for (const paneKey of collectChatPaneKeys(group.rootLayout)) {
+      useChatPanes.getState().handlePaneClosed(paneKey);
+    }
 
     set((state) => {
       const gIdx = state.groups.findIndex((g) => g.id === groupId);
@@ -510,16 +657,19 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
 
       let newActiveGroupId = state.activeGroupId;
       let newActiveInstanceId = state.activeInstanceId;
+      let newActiveChatPaneKey = state.activeChatPaneKey;
 
       if (state.activeGroupId === groupId) {
         if (newGroups.length > 0) {
           const nextIdx = Math.max(0, gIdx - 1);
           newActiveGroupId = newGroups[nextIdx]?.id ?? null;
-          const remainingLeaves = collectLeafIds(newGroups[nextIdx]?.rootLayout ?? null);
-          newActiveInstanceId = remainingLeaves[0] ?? null;
+          const nextRoot = newGroups[nextIdx]?.rootLayout ?? null;
+          newActiveInstanceId = collectLeafIds(nextRoot)[0] ?? null;
+          newActiveChatPaneKey = collectChatPaneKeys(nextRoot)[0] ?? null;
         } else {
           newActiveGroupId = null;
           newActiveInstanceId = null;
+          newActiveChatPaneKey = null;
         }
       }
 
@@ -528,6 +678,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
         groups: newGroups,
         activeGroupId: newActiveGroupId,
         activeInstanceId: newActiveInstanceId,
+        ...(newActiveChatPaneKey !== state.activeChatPaneKey ? { activeChatPaneKey: newActiveChatPaneKey } : {}),
       };
     });
   },
@@ -535,10 +686,13 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
   setActiveGroup: (groupId: string) => {
     const group = get().groups.find((g) => g.id === groupId);
     if (!group) return;
-    const leaves = collectLeafIds(group.rootLayout);
+    // 组内首个窗格可能是 chat：两种游标互斥，谁在前聚焦谁
+    const firstTerminal = collectLeafIds(group.rootLayout)[0] ?? null;
+    const firstChat = collectChatPaneKeys(group.rootLayout)[0] ?? null;
     set({
       activeGroupId: groupId,
-      activeInstanceId: leaves[0] ?? null,
+      activeInstanceId: firstChat !== null ? null : firstTerminal,
+      activeChatPaneKey: firstChat,
       maximizedInstanceId: null,
     });
   },
@@ -551,13 +705,18 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
     for (const g of groups) {
       if (g.id === keepGroupId) continue;
       for (const id of collectLeafIds(g.rootLayout)) terminalSessionRegistry.dispose(id);
+      for (const paneKey of collectChatPaneKeys(g.rootLayout)) {
+        useChatPanes.getState().handlePaneClosed(paneKey);
+      }
     }
     const keepLeaves = collectLeafIds(keep.rootLayout);
+    const keepChats = collectChatPaneKeys(keep.rootLayout);
     set((state) => ({
       groups: state.groups.filter((g) => g.id === keepGroupId),
       instances: state.instances.filter((i) => keepLeaves.includes(i.id)),
       activeGroupId: keepGroupId,
-      activeInstanceId: keepLeaves[0] ?? null,
+      activeInstanceId: keepChats.length > 0 ? null : (keepLeaves[0] ?? null),
+      activeChatPaneKey: keepChats[0] ?? null,
       maximizedInstanceId: null,
     }));
   },
@@ -567,12 +726,16 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
     if (groups.length === 0) return;
     for (const g of groups) {
       for (const id of collectLeafIds(g.rootLayout)) terminalSessionRegistry.dispose(id);
+      for (const paneKey of collectChatPaneKeys(g.rootLayout)) {
+        useChatPanes.getState().handlePaneClosed(paneKey);
+      }
     }
     set({
       groups: [],
       instances: [],
       activeGroupId: null,
       activeInstanceId: null,
+      activeChatPaneKey: null,
       maximizedInstanceId: null,
     });
   },
@@ -583,6 +746,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
     );
     set({
       activeInstanceId: instanceId,
+      activeChatPaneKey: null,
       activeGroupId: group ? group.id : get().activeGroupId,
     });
   },
@@ -631,8 +795,8 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
   },
 
   reattachFromDaemon: async () => {
-    // 用户这次会话已经建过标签就不动 —— 重挂只在首载跑一次
-    if (get().instances.length > 0 || get().reattachDone) {
+    // 用户这次会话已经建过标签（终端或对话窗格）就不动 —— 重挂只在首载跑一次
+    if (get().groups.length > 0 || get().reattachDone) {
       set({ reattachDone: true });
       return;
     }
@@ -646,7 +810,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       set({ reattachDone: true }); // daemon 没起：放行空态自动建标签
       return;
     }
-    if (get().instances.length > 0 || get().reattachDone) {
+    if (get().groups.length > 0 || get().reattachDone) {
       set({ reattachDone: true });
       return;
     }
@@ -678,6 +842,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       groups: adopted.map((a) => a.group),
       activeGroupId: initialActiveGroup?.id ?? null,
       activeInstanceId: initialActiveInst?.id ?? null,
+      activeChatPaneKey: null,
       reattachDone: true,
     });
   },
@@ -715,6 +880,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
               groups: [...s.groups, group],
               activeGroupId: group.id,
               activeInstanceId: instance.id,
+              activeChatPaneKey: null,
               maximizedInstanceId: null,
             }));
             // 定时任务到点的意义就是「让我看到」：主视图不在工作区就切回来

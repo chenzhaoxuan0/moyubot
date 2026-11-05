@@ -13,11 +13,13 @@ import {
   Wand2,
   Feather,
   MoonStar,
+  MessageSquarePlus,
 } from "lucide-react";
 import {
   useTerminalStore,
   type TerminalInstanceItem,
 } from "../store/useTerminalStore.ts";
+import { useChatPanes } from "../store/useChatPanes.ts";
 import { terminalSessionRegistry } from "../store/TerminalSessionManager.ts";
 import { useAppearance } from "../store/useAppearance.ts";
 import { useShell } from "../store/useShell.ts";
@@ -172,7 +174,7 @@ export const TerminalPaneSlot = memo(function TerminalPaneSlot({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                splitPane({ targetInstanceId: inst.id, direction: "horizontal" });
+                splitPane({ targetPaneId: inst.id, direction: "horizontal" });
               }}
               title="向右拆分窗格 (Split Right)"
               className="rounded p-0.5 text-ash hover:bg-line-soft hover:text-teal transition"
@@ -185,12 +187,26 @@ export const TerminalPaneSlot = memo(function TerminalPaneSlot({
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                splitPane({ targetInstanceId: inst.id, direction: "vertical" });
+                splitPane({ targetPaneId: inst.id, direction: "vertical" });
               }}
               title="向下拆分窗格 (Split Down)"
               className="rounded p-0.5 text-ash hover:bg-line-soft hover:text-teal transition"
             >
               <Rows2 size={11} />
+            </button>
+
+            {/* 在旁边开对话窗格（docs/31：对话 | TUI 并排的另一半入口） */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                const draftKey = useChatPanes.getState().createDraftRecord();
+                splitPane({ targetPaneId: inst.id, chatPaneKey: draftKey, direction: "horizontal" });
+              }}
+              title="在右侧开一个对话窗格（先选 bot）"
+              className="rounded p-0.5 text-ash hover:bg-line-soft hover:text-teal transition"
+            >
+              <MessageSquarePlus size={11} />
             </button>
 
             {/* 最大化 / 还原 */}
