@@ -13,6 +13,8 @@ import {
   Maximize2,
   Minimize2,
   MessageSquarePlus,
+  ExternalLink,
+  Combine,
 } from "lucide-react";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import {
@@ -23,6 +25,8 @@ import {
   countLeaves,
 } from "../store/useTerminalStore.ts";
 import { useChatPanes } from "../store/useChatPanes.ts";
+import { useCanvasDnd } from "../store/canvasDnd.ts";
+import { useCanvasPopouts } from "../store/useCanvasPopouts.ts";
 import { terminalSessionRegistry } from "../store/TerminalSessionManager.ts";
 import { TerminalSplitTree } from "./TerminalSplitTree.tsx";
 import { TerminalPaneSlot, ShellOrAgentIcon } from "./TerminalPaneSlot.tsx";
@@ -80,6 +84,7 @@ export function TerminalPanel({
     closeTab,
     closeOtherTabs,
     closeAllTabs,
+    moveGroup,
     setActiveGroup,
     setActiveInstance,
     toggleMaximize,
@@ -93,6 +98,10 @@ export function TerminalPanel({
   const menuRef = useRef<HTMLDivElement>(null);
   // 标签右键三件套（ZCode SidePaneTabTrigger 同款）
   const [tabMenu, setTabMenu] = useState<QuickMenuState | null>(null);
+  // 标签拖动重排（二期）：插入指示的下标（0..groups.length，null = 不显示）
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+  // 弹出窗口台账（三期）：有弹窗时工具条出「归拢」
+  const popoutCount = useCanvasPopouts((s) => s.entries.length);
 
   // 点击外部关闭下拉菜单
   useEffect(() => {
@@ -245,33 +254,69 @@ export function TerminalPanel({
             isMobile ? "flex-1 min-w-0 pr-1" : "max-w-[calc(100%-280px)]",
           )}
         >
-          {groups.map((group) => {
+          {groups.map((group, i) => {
             const isGroupActive = group.id === activeGroupId;
             const { title: tabTitle, isSplit: isSplitGroup, chatPaneKey } = tabTitleOf(group.id);
 
             return (
-              <div
-                key={group.id}
-                onClick={() => setActiveGroup(group.id)}
-                onContextMenu={(e) =>
-                  setTabMenu(
-                    quickMenuFromEvent(e, [
-                      { label: "关闭", icon: X, onSelect: () => closeTab(group.id) },
-                      {
-                        label: "关闭其它",
-                        icon: X,
-                        disabled: groups.filter((g) => g.id !== group.id).length === 0,
-                        onSelect: () => closeOtherTabs(group.id),
-                      },
-                      {
-                        label: "关闭全部",
-                        icon: X,
-                        disabled: groups.length === 0,
-                        onSelect: () => closeAllTabs(),
-                      },
-                    ]),
-                  )
-                }
+              <div key={group.id} className="flex shrink-0 items-center gap-1">
+                {/* 拖动重排的插入指示（二期）：落在第 i 个标签之前 */}
+                {dropIndex === i && <div className="h-5 w-0.5 shrink-0 rounded-full bg-teal shadow-sm" />}
+                <div
+                  draggable={!isMobile}
+                  onDragStart={(e) => {
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", group.id);
+                    useCanvasDnd.getState().startDrag(group.id);
+                  }}
+                  onDragEnd={() => {
+                    useCanvasDnd.getState().endDrag();
+                    setDropIndex(null);
+                  }}
+                  onDragOver={(e) => {
+                    const drag = useCanvasDnd.getState().draggingGroupId;
+                    if (drag === null || drag === group.id) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    setDropIndex(e.clientX < rect.left + rect.width / 2 ? i : i + 1);
+                  }}
+                  onDrop={(e) => {
+                    const drag = useCanvasDnd.getState().draggingGroupId;
+                    setDropIndex(null);
+                    if (drag === null || drag === group.id || dropIndex === null) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    useCanvasDnd.getState().endDrag();
+                    const from = groups.findIndex((g) => g.id === drag);
+                    // moveGroup 的下标是「摘除后」语义：往右挪要减一
+                    moveGroup(drag, dropIndex > from ? dropIndex - 1 : dropIndex);
+                  }}
+                  onClick={() => setActiveGroup(group.id)}
+                  onContextMenu={(e) =>
+                    setTabMenu(
+                      quickMenuFromEvent(e, [
+                        { label: "关闭", icon: X, onSelect: () => closeTab(group.id) },
+                        {
+                          label: "关闭其它",
+                          icon: X,
+                          disabled: groups.filter((g) => g.id !== group.id).length === 0,
+                          onSelect: () => closeOtherTabs(group.id),
+                        },
+                        {
+                          label: "关闭全部",
+                          icon: X,
+                          disabled: groups.length === 0,
+                          onSelect: () => closeAllTabs(),
+                        },
+                        {
+                          label: "弹出为独立窗口",
+                          icon: ExternalLink,
+                          onSelect: () => useCanvasPopouts.getState().popoutTab(group.id),
+                        },
+                      ]),
+                    )
+                  }
                 className={cn(
                   "group relative flex h-7 items-center gap-1.5 rounded font-mono cursor-pointer transition select-none shrink-0",
                   isMobile
@@ -340,9 +385,14 @@ export function TerminalPanel({
                 >
                   <X size={isMobile ? 12 : 11} />
                 </button>
+                </div>
               </div>
             );
           })}
+          {/* 拖到末尾的插入指示 */}
+          {dropIndex === groups.length && (
+            <div className="h-5 w-0.5 shrink-0 rounded-full bg-teal shadow-sm" />
+          )}
         </div>
 
         {/* 新建终端按钮与下拉菜单（对话 / Agent 执行器 / 系统 Shell / 分屏操作） */}
@@ -550,6 +600,19 @@ export function TerminalPanel({
 
         {/* 右侧：全局终端操作工具条 */}
         <div className="ml-auto flex shrink-0 items-center gap-1">
+          {/* 一键归拢（三期）：有弹出窗口时出现，全部收回标签栏 */}
+          {popoutCount > 0 && (
+            <button
+              type="button"
+              onClick={() => useCanvasPopouts.getState().recallAll()}
+              title={`把 ${popoutCount} 个弹出窗口归拢回标签栏（弹窗里的终端/对话会回到画布）`}
+              className="flex items-center gap-1 rounded-btn bg-teal-tint px-2 py-0.5 text-caption text-teal transition hover:bg-teal hover:text-white"
+            >
+              <Combine size={12} />
+              <span className="hidden sm:inline">归拢 ({popoutCount})</span>
+            </button>
+          )}
+
           {/* 桌面端才展示向右拆分、向下拆分与最大化，移动端直接隐藏节省横向空间 */}
           {!isMobile && (
             <>

@@ -172,3 +172,51 @@ LayoutNode.leaf: { kind: "terminal", instanceId }       // 系统终端 / Agent 
 **已知近似（接受）**：草稿文本不跨 F5（种子只存身份不存正文）；单元级 hash
 目标（`#/u/<id>` 无段）只切全局上下文不动窗格；侧栏「历史详情 / bot 设置」
 里的 selectUnit 仍会清全局时间线（焦点窗格受影响，与改造前同口径）。
+
+## 十、二期 / 三期落地记录（2026-11-05，typecheck / build 全绿）
+
+**二期 · 拖拽与布局持久化**：
+
+- **标签拖动重排**：HTML5 DnD——拖动态进 `store/canvasDnd.ts`（dragover 里
+  getData() 恒空，指示层只能靠共享 store）；悬停标签中点前/后计算插入位，
+  行内细条指示；`moveGroup` 的下标是「摘除后」语义（右移减一）。
+- **拖标签吸附分屏**：`ui/usePaneDropZone.tsx` 挂在两类窗格上，指针落在窗格
+  30% 边缘带内显示四向吸附高亮（取离边最近的一侧）；放手 =
+  `dropTabOntoPane`：拖动组的**整棵布局子树**经 `replaceTreeNode` 嫁接到目标
+  叶子位（`first/second` 按吸附方向），原组注销、目标组激活。中央区无动作
+  （光标如实显示不可放置）。自己组 onto 自己组的窗格 = 无操作。
+- **布局持久化**（`store/canvasLayout.ts`，localStorage `canvas-layout-v1`，
+  替换一期的 sessionStorage 种子机制）：终端叶按 instanceId 匹配重挂产物
+  （daemon terminalId 跨刷新稳定），对话叶按身份（unitId + 当前段）经
+  `restoreRecord` 重建（paneKey 是会话内瞬态 id，不跨刷新）；失效叶子剪枝、
+  分支塌缩；重挂找回的文档外终端追加平铺标签不丢；激活组 + 焦点方向
+  （activeIsChat）一并恢复。WorkspaceShell 三步时序：重挂 → 整树重建 →
+  持久化订阅（400ms 去抖），顺序不可乱。
+- 「未选 bot」窗格（unitId=""）与草稿正文不持久化（身份存、文本不存——
+  草稿窗格 F5 后回来是空草稿）。
+
+**三期 · 弹出独立窗口**：
+
+- **形态**：`#/popout/t/<terminalId>` 与 `#/popout/c/<unitId>/<sessionId|->`
+  两路由 → `PopoutShell`（app.tsx 分流，不装任何工作台全局机制：路由镜像 /
+  任务栏 / 通知 / 前台拉起都不进弹窗）。Electron 侧 main.cjs 的
+  setWindowOpenHandler 放行 app origin 为无边框子窗口（带 preload）；浏览器
+  侧 window.open popup 特征串原生可用。
+- **交接语义（与 PS 浮窗的本质差异如实落地）**：终端弹出 = 主窗
+  `releaseTerminalToPopout`（**释放不杀**——TerminalSessionManager 新增
+  release：退订帧/卸 DOM/dispose xterm，不发 terminal.kill）+ 弹窗按
+  terminalId 从 daemon 台账重认领（scrollback 回放，与 F5 重挂同款）；对话
+  弹出 = 摘窗格（不杀会话）+ 弹窗内 openSession 谱系重放。**xterm 不可跨窗口
+  搬移，弹出实质是重新认领**——交互文案（title/关闭钮提示）如实标注。
+- **归拢**：弹窗关闭 = 重认领回标签（终端 `readoptTerminal` / 对话
+  `openChatPane`）。关闭侦测双保险：弹窗 beforeunload → postMessage 携带
+  自身 URL（主窗口 F5 后也能按 URL 对账）+ 每秒 win.closed 轮询。标签栏在
+  有弹窗时出现「归拢 (N)」按钮一键全收。
+- **F5 与弹窗共存**：弹窗台账进布局文档——主窗刷新时不把已弹出的终端重挂
+  成标签（两处 xterm 抢同一 PTY）；恢复出的是无 Window 引用的台账条目
+  （归拢可用、轮询失效）。右键「弹出为独立窗口」仅单窗格标签可用，分屏组
+  弹出会明确提示（多窗格弹窗要整套注册表跨窗口，超出三期口径）。
+
+**三期已知近似（接受）**：F5 后对无引用弹窗条目点「归拢」会在弹窗还开着时
+重认领终端（双活至弹窗关闭，关闭通告幂等收口）；弹窗里的对话草稿文本随窗
+口关闭丢失（会话身份可回）。

@@ -64,8 +64,12 @@ interface ChatPanesState {
   handlePaneClosed: (paneKey: string) => void;
   /** 事件泵转投：已切走的运行中会话事件 → 对应非焦点窗格的快照时间线 */
   routeEvent: (event: RuntimeEvent) => void;
-  /** F5 恢复种子（sessionStorage）：重建窗格记录与标签（不聚焦、不 openSession） */
-  restoreSeeds: (seeds: ReadonlyArray<{ unitId: string; sessionId: string | null }>) => void;
+  /**
+   * 布局恢复（docs/31 二期 canvasLayout）：按持久化的身份建一条窗格记录，
+   * 返回 paneKey 给布局树落位（不聚焦、不 openSession；聚焦时走焦点链重建）。
+   * 返回 null = unit 已不存在（bot 被删），调用方应丢弃该叶子。
+   */
+  restoreRecord: (unitId: string, sessionId: string | null) => string | null;
   /**
    * 建一个「未选 bot」的草稿窗格记录（unitId=""），返回 paneKey 交给画布落位
    * （splitPane chatPaneKey）。窗格本体渲染内嵌 bot 选择器，选完即成草稿对话。
@@ -104,18 +108,6 @@ async function resolveRuntimeId(sessionId: string, hint?: string): Promise<strin
   } catch {
     return null;
   }
-}
-
-/** 画布里是否已挂着这个 chat 窗格的标签（防 restore 场景重复开标签） */
-async function tabExistsForPane(paneKey: string): Promise<boolean> {
-  const { useTerminalStore } = await import("./useTerminalStore.ts");
-  const walk = (node: unknown): boolean => {
-    if (node === null || typeof node !== "object") return false;
-    const n = node as { type?: string; paneKey?: string; first?: unknown; second?: unknown };
-    if (n.type === "chatLeaf") return n.paneKey === paneKey;
-    return walk(n.first) || walk(n.second);
-  };
-  return useTerminalStore.getState().groups.some((g) => walk(g.rootLayout));
 }
 
 /** 按段 id / 会话线找窗格（docs/31 §四幂等口径） */
@@ -234,34 +226,27 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
     });
   },
 
-  restoreSeeds: (seeds) => {
-    const records: ChatPaneRecord[] = seeds.map((seed) => ({
-      paneKey: nextPaneKey(),
-      unitId: seed.unitId,
-      sessionId: seed.sessionId,
-      lineageId: seed.sessionId !== null ? (lineageOfSession(seed.sessionId) ?? seed.sessionId) : null,
-      knownSessionIds: seed.sessionId !== null ? new Set([seed.sessionId]) : new Set(),
-      timeline: [],
-      busy: false,
-      draft: "",
-      restoring: false,
+  restoreRecord: (unitId, sessionId) => {
+    // bot 已不存在（被删/换机）：叶子丢弃，不造指向空单元的窗格
+    if (!useWorkbench.getState().units.some((u) => u.id === unitId)) return null;
+    const paneKey = nextPaneKey();
+    set((s) => ({
+      panes: {
+        ...s.panes,
+        [paneKey]: {
+          paneKey,
+          unitId,
+          sessionId,
+          lineageId: sessionId !== null ? (lineageOfSession(sessionId) ?? sessionId) : null,
+          knownSessionIds: sessionId !== null ? new Set([sessionId]) : new Set(),
+          timeline: [],
+          busy: false,
+          draft: "",
+          restoring: false,
+        },
+      },
     }));
-    if (records.length === 0) return;
-    set((s) => {
-      const next = { ...s.panes };
-      for (const r of records) next[r.paneKey] = r;
-      return { panes: next };
-    });
-    void import("./useTerminalStore.ts").then(({ useTerminalStore }) => {
-      for (const [i, r] of records.entries()) {
-        void tabExistsForPane(r.paneKey).then((exists) => {
-          if (exists) return;
-          // 第一个种子激活（焦点恢复链自动 openSession 重建时间线）；
-          // 其余只建标签不抢焦点 —— hash 路由回放若指向别的会话，随它走
-          useTerminalStore.getState().createChatTab(r.paneKey, i === 0);
-        });
-      }
-    });
+    return paneKey;
   },
 
   createDraftRecord: () => {
@@ -385,9 +370,8 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
  * 焦点窗格同步器 —— 装在 WorkspaceShell（与 installSessionRoute 同款模式）：
  * 1. 订阅画布 store：activeChatPaneKey 游标变化 → 快照旧焦点 + 恢复新焦点；
  * 2. 订阅 useWorkbench：焦点窗格的段身份跟着全局走（草稿首发铸造新段、
- *    续聊换段都自动入账，knownSessionIds 随谱系扩容——后台事件的路由依赖它）；
- * 3. sessionStorage 种子：窗格身份变化时落盘，F5 后 restoreSeeds 重建标签
- *    （终端标签照旧走 daemon 重挂；分屏布局不持久化，与终端现状同口径）。
+ *    续聊换段都自动入账，knownSessionIds 随谱系扩容——后台事件的路由依赖它）。
+ * 布局持久化（含窗格身份）由 store/canvasLayout.ts 负责，不在这里。
  */
 export function installChatPaneSync(): () => void {
   const unsubCanvas = import("./useTerminalStore.ts").then(({ useTerminalStore }) => {
@@ -398,18 +382,6 @@ export function installChatPaneSync(): () => void {
       useChatPanes.getState().handleCanvasFocusChange(s.activeChatPaneKey);
     });
   });
-
-  const persistSeeds = (): void => {
-    try {
-      const seeds = Object.values(useChatPanes.getState().panes).map((p) => ({
-        unitId: p.unitId,
-        sessionId: p.sessionId,
-      }));
-      window.sessionStorage.setItem("agent-workbench:chat-pane-seeds", JSON.stringify(seeds));
-    } catch {
-      /* ignore */
-    }
-  };
 
   const unsubWorkbench = useWorkbench.subscribe(() => {
     const st = useChatPanes.getState();
@@ -431,35 +403,11 @@ export function installChatPaneSync(): () => void {
       useChatPanes.setState((s) => ({
         panes: { ...s.panes, [key]: { ...pane, sessionId: sid, lineageId: lineage, knownSessionIds: known } },
       }));
-      persistSeeds();
     }
   });
-
-  const unsubPanes = useChatPanes.subscribe(() => persistSeeds());
 
   return () => {
     void unsubCanvas.then((un) => un());
     unsubWorkbench();
-    unsubPanes();
   };
-}
-
-/** F5 后按种子重建 chat 标签（终端标签由 reattachFromDaemon 自行找回） */
-export function restoreChatPaneSeedsFromSession(): void {
-  if (typeof window === "undefined") return;
-  try {
-    const raw = window.sessionStorage.getItem("agent-workbench:chat-pane-seeds");
-    if (!raw) return;
-    const parsed = JSON.parse(raw) as { unitId?: string; sessionId?: string | null }[];
-    if (!Array.isArray(parsed)) return;
-    const seeds = parsed
-      .filter((s) => s && typeof s.unitId === "string" && s.unitId !== "")
-      .map((s) => ({
-        unitId: s.unitId as string,
-        sessionId: typeof s.sessionId === "string" ? s.sessionId : null,
-      }));
-    if (seeds.length > 0) useChatPanes.getState().restoreSeeds(seeds);
-  } catch {
-    /* ignore */
-  }
 }

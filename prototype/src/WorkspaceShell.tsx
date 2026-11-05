@@ -12,7 +12,9 @@ import { SettingsPage } from "./ui/SettingsPage.tsx";
 import { SourceControlPage } from "./ui/SourceControlPage.tsx";
 import { useWorkbench } from "./store/useWorkbench.ts";
 import { useTerminalStore } from "./store/useTerminalStore.ts";
-import { installChatPaneSync, restoreChatPaneSeedsFromSession } from "./store/useChatPanes.ts";
+import { installChatPaneSync } from "./store/useChatPanes.ts";
+import { restoreCanvasLayout, installCanvasLayoutPersist } from "./store/canvasLayout.ts";
+import { useCanvasPopouts } from "./store/useCanvasPopouts.ts";
 import { Sidebar } from "./ui/Sidebar.tsx";
 import { TerminalPanel } from "./ui/TerminalPanel.tsx";
 import { WorkspaceHeader } from "./ui/WorkspaceHeader.tsx";
@@ -77,22 +79,31 @@ export function WorkspaceShell() {
     useSidePane.getState().handleUnitChange(activeUnitId);
   }, [activeUnitId]);
 
-  // 首载重挂：F5 后把 daemon 里还活着的终端进程找回成标签（带最近输出回放）。
-  // 不找回的话那些 PTY 就是界面再也关不掉的孤儿进程。chat 标签的种子重建必须
-  // 等 reattach 收尾 —— 先建 chat 标签会让 reattach 的「已有标签」守卫跳过，
-  // 终端从此找不回（docs/31）。
+  // 首载三步（docs/31）：① 终端重挂（daemon 存活 PTY 找回成标签）→ ② 布局
+  // 整树重建（持久化的标签/分屏/焦点：终端叶按 instanceId 匹配重挂产物、
+  // 对话叶按身份重建窗格记录）→ ③ 布局持久化订阅装上（此后变化去抖落盘）。
+  // 顺序不能乱：重挂没跑完就重建会认不到终端；持久化订阅早装会把重建中间
+  // 态写回盘上。
   useEffect(() => {
+    let unPersist: (() => void) | undefined;
     void useTerminalStore
       .getState()
       .reattachFromDaemon()
       .finally(() => {
-        restoreChatPaneSeedsFromSession();
+        restoreCanvasLayout();
+        unPersist = installCanvasLayoutPersist();
       });
     // created 帧推送认领：定时任务的 TUI 派发一到点就自动弹标签，不等刷新
     useTerminalStore.getState().installTerminalCreatedClaim();
     // chat 窗格焦点同步器（docs/31）：画布游标 ↔ 注册表快照/恢复
     const unChatPaneSync = installChatPaneSync();
-    return unChatPaneSync;
+    // 弹出窗口台账（三期）：popout 关闭通告 + win.closed 轮询 → 自动归位
+    const unPopouts = useCanvasPopouts.getState().install();
+    return () => {
+      unChatPaneSync();
+      unPopouts();
+      unPersist?.();
+    };
   }, []);
 
   // 手机布局下右上角三钮整体隐藏：与头部的会话形态切换（对话/终端 TUI）重叠、

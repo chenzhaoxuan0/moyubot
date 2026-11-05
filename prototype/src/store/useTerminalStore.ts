@@ -153,6 +153,32 @@ export function removeTreeNode(node: LayoutNode, targetId: string): LayoutNode |
   };
 }
 
+/** 把指定窗格（任意 kind）原地替换为另一棵子树（二期 drag-to-split：标签吸附嫁接） */
+export function replaceTreeNode(
+  node: LayoutNode,
+  targetId: string,
+  replacement: LayoutNode,
+): LayoutNode {
+  if (node.type === "leaf" || node.type === "chatLeaf") {
+    return leafMatches(node, targetId) ? replacement : node;
+  }
+  return {
+    ...node,
+    first: replaceTreeNode(node.first, targetId, replacement),
+    second: replaceTreeNode(node.second, targetId, replacement),
+  };
+}
+
+/** 分屏吸附区（拖标签到窗格边缘）：四向语义 */
+export type DropZone = "left" | "right" | "top" | "bottom";
+
+/** 取指定窗格的叶子节点本体（drag-to-split 嫁接时保住原叶子的 kind 与 id） */
+export function findLeafNode(node: LayoutNode | null, targetId: string): LayoutNode | null {
+  if (!node) return null;
+  if (node.type === "leaf" || node.type === "chatLeaf") return leafMatches(node, targetId) ? node : null;
+  return findLeafNode(node.first, targetId) ?? findLeafNode(node.second, targetId);
+}
+
 /** 递归更新分屏比例 */
 export function updateTreeRatio(
   node: LayoutNode,
@@ -235,6 +261,25 @@ interface TerminalStoreState {
   /** 把焦点游标翻到某个 chat 窗格（点窗格本体 / 标签激活走这里） */
   focusChatPaneTab: (paneKey: string) => void;
 
+  /** 标签拖动重排（二期）：把组挪到标签列表的指定下标 */
+  moveGroup: (groupId: string, toIndex: number) => void;
+
+  /** 拖标签吸附分屏（二期）：把拖动组的整棵布局子树嫁接到目标窗格的指定边 */
+  dropTabOntoPane: (dragGroupId: string, targetPaneId: string, zone: DropZone) => void;
+
+  /**
+   * 弹出独立窗口的交接（三期）：把终端窗格从布局与实例表里摘除，本地会话
+   * **释放不杀**（registry.release）——PTY 留在 daemon，等 popout / 归拢重认领。
+   * 返回是否摘干净（false = 布局里本就没有它）。
+   */
+  releaseTerminalToPopout: (terminalId: string) => boolean;
+
+  /**
+   * 重认领（三期归拢 / popout 关闭 / F5）：按 daemon 台账行把终端找回来
+   * （带 scrollback 回放）建标签并激活；已在标签里则只激活。
+   */
+  readoptTerminal: (terminalId: string) => Promise<void>;
+
   /** 关闭整个标签页组 */
   closeTab: (groupId: string) => void;
 
@@ -307,8 +352,8 @@ function persistTerminalPrefs(prefs: { agyDefaultYolo: boolean }): void {
 
 const initialTerminalPrefs = readTerminalPrefs();
 
-/** daemon terminal.list 的行形态（重挂与推送认领共用） */
-interface DaemonTermRow {
+/** daemon terminal.list 的行形态（重挂、推送认领、popout 重认领共用） */
+export interface DaemonTermRow {
   terminalId: string;
   shell: string;
   cwd: string;
@@ -327,8 +372,8 @@ function shellToProfileId(shell: string): string {
   return "pwsh";
 }
 
-/** daemon 终端行 → 标签实例 + 独立标签组（重挂、created 推送认领共用一套还原逻辑） */
-function adoptTermRow(
+/** daemon 终端行 → 标签实例 + 独立标签组（重挂、created 推送认领、popout 共用一套还原逻辑） */
+export function adoptTermRow(
   t: DaemonTermRow,
   units: ReadonlyArray<{ id: string; name: string; rootPath?: string }>,
 ): { instance: TerminalInstanceItem; group: TerminalTabGroup } {
@@ -476,6 +521,104 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => ({
       activeInstanceId: null,
       activeChatPaneKey: paneKey,
       maximizedInstanceId: null,
+    });
+  },
+
+  moveGroup: (groupId, toIndex) => {
+    set((state) => {
+      const from = state.groups.findIndex((g) => g.id === groupId);
+      if (from < 0) return {};
+      const next = state.groups.slice();
+      const [moved] = next.splice(from, 1);
+      const clamped = Math.max(0, Math.min(next.length, toIndex));
+      next.splice(clamped, 0, moved!);
+      return { groups: next };
+    });
+  },
+
+  dropTabOntoPane: (dragGroupId, targetPaneId, zone) => {
+    const { groups } = get();
+    const dragGroup = groups.find((g) => g.id === dragGroupId);
+    const targetGroup = findGroupOfPane(groups, targetPaneId);
+    // 拖自己组 onto 自己组的窗格 = 无操作；目标不存在同样静默
+    if (!dragGroup || !targetGroup || dragGroup.id === targetGroup.id) return;
+    const targetLeaf = findLeafNode(targetGroup.rootLayout, targetPaneId);
+    if (!targetLeaf) return;
+    const direction: SplitDirection = zone === "left" || zone === "right" ? "horizontal" : "vertical";
+    const dragFirst = zone === "left" || zone === "top";
+    const branch: LayoutNode = {
+      type: "branch",
+      id: `br_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`,
+      direction,
+      first: dragFirst ? dragGroup.rootLayout : targetLeaf,
+      second: dragFirst ? targetLeaf : dragGroup.rootLayout,
+      ratio: 0.5,
+    };
+    const grafted = replaceTreeNode(targetGroup.rootLayout, targetPaneId, branch);
+    set((state) => ({
+      groups: state.groups
+        .filter((g) => g.id !== dragGroup.id)
+        .map((g) => (g.id === targetGroup.id ? { ...g, rootLayout: grafted } : g)),
+      activeGroupId: targetGroup.id,
+      maximizedInstanceId: null,
+    }));
+  },
+
+  releaseTerminalToPopout: (terminalId) => {
+    const group = findGroupOfPane(get().groups, terminalId);
+    if (!group) return false;
+    // 释放本地会话（不杀 PTY）——popout 窗口重新 subscribe 接管
+    terminalSessionRegistry.release(terminalId);
+    set((state) => {
+      const updatedLayout = removeTreeNode(group.rootLayout, terminalId);
+      const groups =
+        updatedLayout === null
+          ? state.groups.filter((g) => g.id !== group.id)
+          : state.groups.map((g) => (g.id === group.id ? { ...g, rootLayout: updatedLayout } : g));
+      return {
+        groups,
+        instances: state.instances.filter((i) => i.id !== terminalId),
+        ...(state.activeInstanceId === terminalId
+          ? {
+              activeInstanceId: collectLeafIds(updatedLayout)[0] ?? null,
+              activeChatPaneKey: updatedLayout === null ? state.activeChatPaneKey : collectChatPaneKeys(updatedLayout)[0] ?? state.activeChatPaneKey,
+            }
+          : {}),
+      };
+    });
+    return true;
+  },
+
+  readoptTerminal: async (terminalId) => {
+    // 已在标签里：只激活（双开同一 PTY 会两处 xterm 抢同一画布）
+    const existingGroup = findGroupOfPane(get().groups, terminalId);
+    if (existingGroup) {
+      get().setActiveGroup(existingGroup.id);
+      get().setActiveInstance(terminalId);
+      return;
+    }
+    let row: DaemonTermRow | undefined;
+    try {
+      const { DaemonClient, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
+      const client = DaemonClient.get(defaultDaemonEndpoint());
+      const list = await client.rpc<DaemonTermRow[]>("terminal.list", null, 10000);
+      row = list.find((t) => t.terminalId === terminalId);
+    } catch {
+      return; // daemon 抖动：静默放弃，F5 重挂是兜底
+    }
+    if (row === undefined) return; // PTY 已死：没有可认领的东西
+    const { useWorkbench } = await import("./useWorkbench.ts");
+    const { instance, group } = adoptTermRow(row, useWorkbench.getState().units);
+    set((s) => {
+      if (s.instances.some((i) => i.id === terminalId)) return {}; // 竞态兜底
+      return {
+        instances: [...s.instances, instance],
+        groups: [...s.groups, group],
+        activeGroupId: group.id,
+        activeInstanceId: instance.id,
+        activeChatPaneKey: null,
+        maximizedInstanceId: null,
+      };
     });
   },
 

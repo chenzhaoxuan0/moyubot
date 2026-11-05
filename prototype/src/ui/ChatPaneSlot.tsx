@@ -19,6 +19,7 @@ import { Composer } from "./Composer.tsx";
 import { PermissionDialog } from "./PermissionDialog.tsx";
 import { ChatTerminalDock } from "./ChatTerminalDock.tsx";
 import { useChatAccentStyle } from "./useChatAccentStyle.ts";
+import { usePaneDropZone } from "./usePaneDropZone.tsx";
 import { botAvatarStyle } from "./Sidebar.tsx";
 import { cn } from "./cn.ts";
 
@@ -52,6 +53,8 @@ export const ChatPaneSlot = memo(function ChatPaneSlot({
   const runtimes = useWorkbench((s) => s.runtimes);
   const chatColumnWidth = useShell((s) => s.chatColumnWidth);
   const accentStyle = useChatAccentStyle();
+  // 拖标签吸附分屏（二期）：本窗格的四向吸附区
+  const { dropHandlers, zoneOverlay } = usePaneDropZone(paneKey);
 
   if (pane === undefined) return null;
   const isFocused = focusedChatKey === paneKey;
@@ -78,13 +81,15 @@ export const ChatPaneSlot = memo(function ChatPaneSlot({
       onMouseDown={() => {
         if (!isFocused) useTerminalStore.getState().focusChatPaneTab(paneKey);
       }}
+      {...dropHandlers}
       className={cn(
-        "group/pane flex h-full w-full flex-col overflow-hidden bg-canvas select-none",
+        "group/pane relative flex h-full w-full flex-col overflow-hidden bg-canvas select-none",
         isFocused
           ? "ring-1 ring-teal/50 shadow-sm"
           : "ring-1 ring-line/20 hover:ring-line/60",
       )}
     >
+      {zoneOverlay}
       {/* 窗格顶部 mini-bar（分屏时显示，与 TerminalPaneSlot 同款） */}
       {totalPanesInGroup > 1 && (
         <div

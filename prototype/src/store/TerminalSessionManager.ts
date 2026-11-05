@@ -624,6 +624,23 @@ export class TerminalSession {
 
   dispose(): void {
     if (this.disposed) return;
+    // dispose = 释放本地资源 + 杀 daemon 侧 PTY；释放部分与 release 共用
+    this.releaseLocal();
+    const client = DaemonClient.get(defaultDaemonEndpoint());
+    void client.rpc("terminal.kill", { terminalId: this.terminalId }, 3000).catch(() => {});
+  }
+
+  /**
+   * 释放本地会话但**不杀** daemon 侧 PTY（docs/31 三期：弹出独立窗口的交接）。
+   * 弹出窗接管这条 PTY（重新 subscribe + scrollback 回放），主窗口只撤本地的
+   * xterm / 帧订阅 / DOM；归拢或 popout 关闭时再经 readoptTerminal 重认领。
+   */
+  release(): void {
+    if (this.disposed) return;
+    this.releaseLocal();
+  }
+
+  private releaseLocal(): void {
     this.disposed = true;
     if (this.resizeTimer) clearTimeout(this.resizeTimer);
     this.resizeObserver?.disconnect();
@@ -635,8 +652,6 @@ export class TerminalSession {
     try {
       this.term.dispose();
     } catch {}
-    const client = DaemonClient.get(defaultDaemonEndpoint());
-    void client.rpc("terminal.kill", { terminalId: this.terminalId }, 3000).catch(() => {});
   }
 }
 
@@ -661,6 +676,15 @@ class TerminalSessionRegistry {
     const session = this.sessions.get(terminalId);
     if (session) {
       session.dispose();
+      this.sessions.delete(terminalId);
+    }
+  }
+
+  /** 释放本地条目不杀 PTY（docs/31 三期弹出窗口交接；见 TerminalSession.release） */
+  release(terminalId: string): void {
+    const session = this.sessions.get(terminalId);
+    if (session) {
+      session.release();
       this.sessions.delete(terminalId);
     }
   }

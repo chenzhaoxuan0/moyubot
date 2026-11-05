@@ -23,6 +23,7 @@ import { useChatPanes } from "../store/useChatPanes.ts";
 import { terminalSessionRegistry } from "../store/TerminalSessionManager.ts";
 import { useAppearance } from "../store/useAppearance.ts";
 import { useShell } from "../store/useShell.ts";
+import { usePaneDropZone } from "./usePaneDropZone.tsx";
 import { cn } from "./cn.ts";
 import { executorIconSrc } from "./executorIcon.ts";
 import { QuickContextMenu } from "./QuickContextMenu.tsx";
@@ -95,6 +96,8 @@ export const TerminalPaneSlot = memo(function TerminalPaneSlot({
   // 终端右键：复制（xterm canvas 选区）/ 粘贴 —— 原生文本菜单对终端无效
   const { menu: ctxMenu, onContextMenu: onTerminalContextMenu, closeMenu } =
     useTerminalContextMenu(inst.id);
+  // 拖标签吸附分屏（二期）：本窗格的四向吸附区
+  const { dropHandlers, zoneOverlay } = usePaneDropZone(inst.id);
 
   const isActive = inst.id === activeInstanceId;
   const isMaximized = inst.id === maximizedInstanceId;
@@ -141,13 +144,15 @@ export const TerminalPaneSlot = memo(function TerminalPaneSlot({
   return (
     <div
       onClick={() => setActiveInstance(inst.id)}
+      {...dropHandlers}
       className={cn(
-        "group/pane flex h-full w-full flex-col overflow-hidden select-none",
+        "group/pane relative flex h-full w-full flex-col overflow-hidden select-none",
         isActive
           ? "ring-1 ring-teal/50 shadow-sm"
           : "ring-1 ring-line/20 hover:ring-line/60",
       )}
     >
+      {zoneOverlay}
       {/* 窗格顶部 mini-bar（分屏时显示，单窗格时简化） */}
       {totalPanesInGroup > 1 && (
         <div

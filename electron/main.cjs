@@ -567,6 +567,30 @@ function createWindow() {
   });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    // 会话画布弹出窗（docs/31 三期）：本应用自身 origin 的 URL 放行为子窗口，
+    // 沿用无边框 + preload（弹出窗自带拖拽头与关闭钮，window.close() 可用）。
+    // handler 是注册后才被调用的闭包，这里自算 devUrl 不依赖下方 const 的求值顺序
+    const openDevUrl = process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5280";
+    if (url.startsWith(`${APP_ORIGIN}/`) || url.startsWith(openDevUrl)) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: {
+          width: 1000,
+          height: 700,
+          minWidth: 480,
+          minHeight: 320,
+          autoHideMenuBar: true,
+          ...(process.platform === "darwin" ? {} : { titleBarStyle: "hidden" }),
+          webPreferences: {
+            preload: path.join(__dirname, "preload.cjs"),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+            spellcheck: false,
+          },
+        },
+      };
+    }
     if (url.startsWith("http://") || url.startsWith("https://")) {
       shell.openExternal(url);
       return { action: "deny" };
