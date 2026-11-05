@@ -82,8 +82,17 @@ function Splitter({
 
 export function TerminalSplitTree({ node }: { node: GroupLayoutNode | null }) {
   const setSplitRatio = useTerminalStore((s) => s.setSplitRatio);
+  // 单组全幅约定（docs/32 §二）：组数 ≤1 时 layout 为 null——树为空但要渲染
+  // 唯一的组，否则第一个标签创建后画布空白（表现为「新建无反应」的 bug）
+  const soleGroup = useTerminalStore((s) =>
+    node === null ? Object.values(s.groups)[0] : undefined,
+  );
 
-  if (node === null) return null;
+  if (node === null) {
+    return soleGroup !== undefined ? (
+      <GroupPanel key={soleGroup.id} groupId={soleGroup.id} />
+    ) : null;
+  }
   if (node.type === "group") {
     // 组叶：key=groupId —— 组在树里挪位置（拖拽分屏/合并）也不重挂，组内
     // 常驻挂载的 xterm/对话状态零迁移（A1 的另一半）
