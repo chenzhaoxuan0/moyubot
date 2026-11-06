@@ -154,7 +154,17 @@ export function restoreCanvasLayout(): boolean {
       revivedPanes[paneKey] = { id: paneKey, kind: "chat", title: "对话" };
     }
 
-    // ② 组与标签：稳定 id → 运行时 pane id（终端须在重挂产物里；对话用①的新 key）
+    // ② 组与标签：稳定 id → 运行时 pane id（终端须在重挂产物里；对话用①的新 key）。
+    //    净化：同一标签只保留首个归属组——a61c404 修复前的拖拽 bug 会把同一
+    //    标签写进多个组，存量脏文档不清洗的话同一对话格渲染两份，看起来像
+    //    「一条消息发了两条」（组内重复 id 同样只留首个）
+    const seenPaneIds = new Set<string>();
+    const dedupePush = (paneId: string, target: string[], paneMap: Record<string, CanvasPane>, pane: CanvasPane): void => {
+      if (seenPaneIds.has(paneId)) return;
+      seenPaneIds.add(paneId);
+      target.push(paneId);
+      paneMap[paneId] = pane;
+    };
     const groups: Record<string, PaneGroup> = {};
     const panes: Record<string, CanvasPane> = {};
     for (const gs of doc.groups) {
@@ -163,13 +173,11 @@ export function restoreCanvasLayout(): boolean {
         if (sid.startsWith("chat:")) {
           const paneKey = paneIdByStable.get(sid);
           if (paneKey === undefined) continue;
-          tabOrder.push(paneKey);
-          panes[paneKey] = revivedPanes[paneKey]!;
+          dedupePush(paneKey, tabOrder, panes, revivedPanes[paneKey]!);
           continue;
         }
         if (!liveTerminals.has(sid)) continue;
-        tabOrder.push(sid);
-        panes[sid] = term.panes[sid]!;
+        dedupePush(sid, tabOrder, panes, term.panes[sid]!);
       }
       if (tabOrder.length === 0) continue;
       let active =

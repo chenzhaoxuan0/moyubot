@@ -417,6 +417,23 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => {
   }): Partial<TerminalStoreState> => {
     const groups = { ...s.groups };
     let layout = s.layout;
+    // 跨组/组内去重自愈：同一 pane 只留在最先出现的组。正常路径不会产生重复
+    // （check:canvas 唯一性断言把守），这是给脏状态（旧 bug 写下的持久化布局
+    // 或任何未预见路径）的兜底——同一对话格挂两组会渲染两份会话，看起来像
+    // 「一条消息发了两条」
+    {
+      const seen = new Set<string>();
+      for (const g of Object.values(groups)) {
+        if (g.tabOrder.length === 0) continue;
+        const order = g.tabOrder.filter((id) => (seen.has(id) ? false : (seen.add(id), true)));
+        if (order.length === g.tabOrder.length) continue;
+        const activePaneId =
+          g.activePaneId !== null && order.includes(g.activePaneId)
+            ? g.activePaneId
+            : (order[order.length - 1] ?? null);
+        groups[g.id] = { ...g, tabOrder: order, activePaneId };
+      }
+    }
     // 空组摘叶
     for (const g of Object.values(groups)) {
       if (g.tabOrder.length === 0 && (layout === null || collectGroupIds(layout).includes(g.id))) {

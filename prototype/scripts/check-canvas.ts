@@ -115,6 +115,15 @@ export const useChatPanes = { getState: () => ({ handlePaneClosed(){} }) };
   ok("标签唯一性（无多组挂载）", dup.length === 0);
   ok("无脱组窗格", orphan.length === 0);
 
+  /* ---- 脏布局自愈：注入跨组重复，任意 normalize 路径应清掉 ---- */
+  const gA = Object.keys(useTerminalStore.getState().groups)[0]!;
+  useTerminalStore.setState((s) => ({
+    groups: { ...s.groups, [gA]: { ...s.groups[gA]!, tabOrder: [...s.groups[gA]!.tabOrder, byTitle("B")] } },
+  }));
+  useTerminalStore.getState().closePane(byTitle("C")); // 任意触发 normalize
+  const seen2 = groups().flatMap((g) => [...g.tabOrder]);
+  ok("脏布局跨组重复自愈（同 pane 只留首个组）", seen2.filter((x, i) => seen2.indexOf(x) !== seen2.lastIndexOf(x)).length === 0);
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exitCode = fail > 0 ? 1 : 0;
 } finally {
