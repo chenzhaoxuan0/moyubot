@@ -13,7 +13,8 @@
     "check:sidepane": "node --experimental-strip-types scripts/check-sidepane.ts",
     "check:avatar-accent": "node --experimental-strip-types scripts/check-avatar-accent.ts",
     "check:firstpaint": "node --experimental-strip-types scripts/check-firstpaint.ts",
-    "check": "pnpm check:models && pnpm check:sidepane && pnpm check:avatar-accent && pnpm check:firstpaint && pnpm check:git-names",
+    "check:canvas": "node --experimental-strip-types --no-warnings scripts/check-canvas.ts",
+    "check": "pnpm check:models && pnpm check:sidepane && pnpm check:avatar-accent && pnpm check:firstpaint && pnpm check:git-names && pnpm check:canvas",
     "check:bridge": "node --experimental-strip-types scripts/check-daemon-bridge.ts",
     "check:git-names": "node --experimental-strip-types scripts/check-git-names.ts"
   },

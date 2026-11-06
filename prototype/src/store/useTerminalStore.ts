@@ -446,7 +446,11 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => {
       }
     }
     const maximizedPaneId = s.maximizedPaneId !== null && s.panes[s.maximizedPaneId] === undefined ? null : s.maximizedPaneId;
-    return { groups, layout, activeGroupId, activePaneId, ...(maximizedPaneId !== s.maximizedPaneId ? { maximizedPaneId } : {}) };
+    // panes 必须一并返回：调用方（closePane/closeGroup/closeOtherPanes/
+    // releaseTerminalToPopout）把删除结果作为入参传进来，漏返回 = 删除被丢弃，
+    // 关掉的标签会残留成孤儿（侧栏「TUI 恢复」与弹窗归拢因此静默失效——
+    // check:canvas「无脱组窗格」抓到）
+    return { panes: s.panes, groups, layout, activeGroupId, activePaneId, ...(maximizedPaneId !== s.maximizedPaneId ? { maximizedPaneId } : {}) };
   };
 
   /* ---- 内部：从组里摘标签（不删 pane 记录；返回受影响的组快照） ---- */

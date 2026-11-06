@@ -167,3 +167,18 @@ sessionForeground、useTaskbar 口径、PopoutShell、Electron 放行、移动�
   损失一档，只影响恢复后第一次关标签的回落选择）；悬停焦点预览采用组激活
   而非 orca 的目标标签内容预览（标签即窗格的模型下语义等价、实现稳）；
   v1→v2 布局一次性重排。
+
+## 九、落地后修订（2026-11-05 ~ 06，用户实测驱动）
+
+| 提交 | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| `ab3ff7a` | 新建对话/终端「无反应」 | 「单组全幅 layout=null」约定下 TerminalSplitTree 对 null 直接 return null，首标签画布空白 | null 时渲染唯一组 |
+| `a61c404` | 拖标签四边分屏后**同一标签同时挂两边**、标签混杂分不清归属 | dropPaneOnGroup 残留旧模型嫁接写法 `order=[...target.tabOrder, paneId]`，目标组被整组复制进新组 | 新组只装拖动标签 |
+| 本修订 | 关掉的标签残留成孤儿：侧栏「TUI 恢复」点了没反应、终端弹窗归拢静默失效 | normalize 返回值漏了 panes，closePane/closeGroup/closeOtherPanes/releaseTerminalToPopout 的删除被丢弃 | normalize 一并返回 panes |
+
+**回归防线**：`pnpm check:canvas`（`prototype/scripts/check-canvas.ts`，并入
+`pnpm check`）——store 源码复制进项目内工作目录、两条重依赖 import 改指
+桩模块后 node 直跑，13 条断言覆盖建栈/同组重排/四边分屏/no-op 守卫/对话
+拆分/最大化往返/关格塌缩/末标签收平/center 入栈/readopt 幂等，外加两条
+全局不变式：**标签唯一性**（无 pane 挂多组）与**无脱组窗格**（无孤儿）——
+上表后两个缺陷正是被这两条不变式定性/抓出的。
