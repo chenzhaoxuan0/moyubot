@@ -2,3 +2,8 @@
 # esbuild 需要 postinstall 校验原生二进制，否则 vite 无法启动
 allowBuilds:
   esbuild: true
+overrides:
+  # esbuild 0.28.x 在 Windows 上大产物（>1MB）转码后删临时文件报 Access is denied，
+  # vite build 直接失败（vite:esbuild-transpile；2026-11-07 起本机稳定复现，0.27.0
+  # 无此问题，且在 vite 7.3 的 ^0.27.0 || ^0.28.0 允许范围内）
+  esbuild: 0.27.0
