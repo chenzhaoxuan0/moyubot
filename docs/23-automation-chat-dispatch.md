@@ -100,7 +100,7 @@ chat（到点打开该对话并续发）/ headless（只发不打开）二选一
    数据复用 `automation.list` 客户端过滤，30s 与历史同节奏轮询。
 2. **自动化会话行的常显时钟**（对齐 ZCode `data-cron-task-icon`）：`HistoryListRow`
    里 `kind==="automation" || source==="automation"` 的行标题前常显小时钟，
-   不必 hover 才认得出。完成未读绿灯沿用既有 markViewed 机制（等价 ZCode
+   不必 hover 才认得出。完成未读灯沿用既有 markViewed 机制（等价 ZCode
    `setTaskUnread`，零改动）。
 3. **定时消息气泡徽标**：`message.delta` 加可选 `origin` 字段（daemon 的
    `sendMessage` 第 5 参透传，steer 队列快照不带）；existing_session 派发传

@@ -35,6 +35,8 @@ import { useShell } from "../store/useShell.ts";
 import { useBacklog } from "../store/useBacklog.ts";
 import { useGit } from "../store/useGit.ts";
 import { useAppearance } from "../store/useAppearance.ts";
+import { deriveSessionLight, lightFlagsFromStatus, type SessionLightKind } from "../core/sessionLight.ts";
+import { SessionLightDot } from "./SessionLightDot.tsx";
 import { BrandLogo } from "./BrandLogo.tsx";
 import { detectQuestionnaireFromTimeline } from "./chat/items/QuestionnaireCard.tsx";
 import type { AvatarFrame } from "../core/appearance.ts";
@@ -587,7 +589,7 @@ function guardsOf(u: WorkUnit): BotWriteGuards {
 function openEntryInChat(e: UnitHistoryEntry, ownerUnitId: string): void {
   if (e.sessionId === null) return;
   const sid = e.sessionId;
-  // 只要用户点开该会话，立即标为已读消除绿灯
+  // 只要用户点开该会话，立即标为已读消除完成未读灯
   useHistoryPrefs.getState().markViewed([e.key, `session-${sid}`]);
   useChatPanes.getState().openChatPane({ unitId: ownerUnitId, sessionId: sid, runtimeId: e.runtimeId });
 }
@@ -648,16 +650,14 @@ function openNewChatForUnit(unit: WorkUnit): void {
   useChatPanes.getState().openChatPane({ unitId: unit.id, sessionId: null });
 }
 
-/** 状态灯的五种形态（对齐 ZCode deriveTaskLeadingIndicator 的「空闲不显示」原则） */
-type HistoryLight = "failed" | "executing" | "unread" | "alive" | "none";
+/** 状态灯的五种形态 —— 态集与判定优先级在 core/sessionLight.ts 单源（2026-11-06 注意力提纯重构） */
+type HistoryLight = SessionLightKind;
 
 /**
- * 状态灯判定：
- * - 失败 → 红灯；
- * - agent 正在执行任务（思考/输出，ZCode 里对应 loading 动画）→ 蓝色呼吸灯；
- * - 完成但未查看 → 绿灯；
- * - 仅是进程/会话开着（TUI 挂在后台、会话空闲）→ 蓝色静态灯，**不呼吸**；
- * - 其余（已读的完成/退出）→ 不显示 —— 日常状态不占这有限的宽度。
+ * 历史行灯判定：把行级事实（台账 status、store 实时状态、未读、决策卡在挂）
+ * 折算成 core 的纯输入。五态语义见 core/sessionLight 头注释：
+ * 失败=红 / 等你交互=黄 / 运行中=转圈 / 完成未读=灯色 / 存活空闲与已读已结束=无灯
+ * （旧模型的存活浅蓝灯、蓝色呼吸灯已退役）。
  */
 function deriveHistoryLight(
   entry: UnitHistoryEntry,
@@ -665,50 +665,28 @@ function deriveHistoryLight(
   unread: boolean,
   lightOverride?: HistoryLight | null,
   isCurrentAwaitingDecision?: boolean,
+  /** 当前行即活跃会话且有轮次在飞（busy 镜像，store 登记滞后时的 running 兜底） */
+  isCurrentRunning?: boolean,
 ): HistoryLight {
-  // 1. 用户手动覆盖（消灯、标绿灯、设为完成等）具有最高优先级
-  if (lightOverride !== undefined && lightOverride !== null) {
-    return lightOverride;
-  }
-  // 2. 失败显红灯
-  if (entry.status === "failed") return "failed";
-
-  // 3. 正在执行/等待决策（蓝色呼吸灯）—— 最高实时优先级！
-  // 无论是当前窗口在展示决策卡，还是 store 中会话状态为 running / awaiting_permission / awaiting_input，
-  // 均视为任务处于活动进行中，必须亮蓝色呼吸灯
   const storeStatus = entry.sessionId !== null ? sessionStatusById.get(entry.sessionId) : undefined;
-  if (
-    isCurrentAwaitingDecision ||
-    storeStatus === "running" ||
-    storeStatus === "awaiting_permission" ||
-    storeStatus === "awaiting_input" ||
-    (entry.status === "running" && entry.endedAt === null)
-  ) {
-    return "executing";
-  }
-
-  // 4. 新结果未读常亮绿灯
-  if (unread) return "unread";
-
-  // 5. 存活中的进程（静态浅蓝灯，不呼吸）
-  if (storeStatus === "idle") return "alive";
-
-  // 6. 其它已明确结束的历史会话不亮灯
-  if (entry.endedAt !== null) return "none";
-
-  return "none";
+  const flags = lightFlagsFromStatus(storeStatus);
+  return deriveSessionLight({
+    failed: entry.status === "failed" || flags.failed,
+    awaiting: isCurrentAwaitingDecision === true || flags.awaiting,
+    // 台账的 running 兜底只在 store 还不认识这个会话时启用（重载后/外部端起的
+    // 会话）：store 已有状态（如轮结束翻 idle）时以它为准 —— 否则侧栏 30s 才
+    // 重拉一次历史，转圈会赖到下一轮轮询才灭
+    running:
+      flags.running ||
+      isCurrentRunning === true ||
+      (storeStatus === undefined && entry.status === "running" && entry.endedAt === null),
+    unread,
+    override: lightOverride,
+  });
 }
 
 /** macOS 判定：Ctrl+点击在 mac 上产生 contextmenu 而不是 click（多选分流要转译） */
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iP(hone|ad|od)/.test(navigator.userAgent);
-
-const HISTORY_DOT_CLS: Record<HistoryLight, string | null> = {
-  failed: "bg-loss",
-  executing: "bg-blue-500 animate-pulse",
-  unread: "bg-gain",
-  alive: "bg-blue-500/70",
-  none: null,
-};
 
 /* ------------------------------------------------------------- 单元行 */
 
@@ -749,7 +727,7 @@ function UnitRow({
 }) {
   const isSynthetic = isSyntheticUnit(unit);
   const hideFailedInSidebar = useHistoryPrefs((s) => s.prefs.hideFailedInSidebar);
-  /** 已读/绿灯起算/打开方式覆盖（灯与默认打开方式都从这里读，订阅 prefs 即随写随刷） */
+  /** 已读/未读灯起算/打开方式覆盖（灯与默认打开方式都从这里读，订阅 prefs 即随写随刷） */
   const historyPrefs = useHistoryPrefs((s) => s.prefs);
   const isEntryUnread = useHistoryPrefs((s) => s.isUnread);
   const setEntryOpenMode = useHistoryPrefs((s) => s.setEntryOpenMode);
@@ -761,7 +739,7 @@ function UnitRow({
    * （父级传入，先切 bot 再开面板——右栏 tab 按 owner 过滤可见，不切的话点别人的
    * 面板「开了却看不见」，SidePaneHome 跨单元历史的同一处理）。
    */
-  /** 会话实时状态（turn 进行中 = 呼吸灯的事实来源） */
+  /** 会话实时状态（turn 进行中 = 转圈灯的事实来源） */
   const sessions = useWorkbench((s) => s.sessions);
   const activeSessionId = useWorkbench((s) => s.activeSessionId);
   const timeline = useWorkbench((s) => s.timeline);
@@ -1019,13 +997,15 @@ function UnitRow({
         <span className="flex min-w-0 flex-1 flex-col gap-0.5 pt-0.5">
           <span className="flex items-baseline gap-1.5">
             <span className="truncate text-body-sm font-medium text-ink">{unit.name}</span>
-            {/* 闲时托管任务执行中：子列表收起也看得见（点击行展开历史可盯实时状态） */}
+            {/* 闲时托管任务执行中：子列表收起也看得见（点击行展开历史可盯实时状态）。
+                同款 running 转圈（灯色跟随用户的运行中偏好，见 core/sessionLight） */}
             {hasExecutingTask && (
               <span
-                aria-hidden
-                className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-blue-500"
+                className="flex shrink-0 items-center"
                 title="有闲时托管任务正在执行 —— 点击行展开历史可盯实时状态"
-              />
+              >
+                <SessionLightDot kind="running" />
+              </span>
             )}
             {/* 上下文注入标签已移至 bot 设置页面查看，侧栏不再显示 */}
             {/* 渠道徽标 */}
@@ -1145,10 +1125,16 @@ function UnitRow({
               (e.sessionId !== null ? historyPrefs.lightOverrides[`session-${e.sessionId}`] : undefined);
             const rowActive =
               mainView === "chat" && e.sessionId !== null && String(activeSessionId) === e.sessionId;
+            // 等你交互：只认挂在时间线上**未答**的问卷/决策卡（检测只认 pending，
+            // 已答即出清）。注意 busy 不进这里——它是「活跃会话在跑」的本地镜像
+            // （见 useWorkbench 的 busy 注释），在灯模型拆分后属于 running。
             const isRowAwaitingDecision =
-              Boolean(rowActive && (busy || detectQuestionnaireFromTimeline(
+              Boolean(rowActive && detectQuestionnaireFromTimeline(
                 timeline.filter((t) => "sessionId" in t.event && t.event.sessionId === activeSessionId)
-              ) !== null));
+              ) !== null);
+            // running 的本地兜底：store 的会话状态登记可能滞后一拍，busy 是
+            // 「当前活跃会话有轮次在飞」的前端镜像，行激活时以它为准
+            const isRowActiveRunning = Boolean(rowActive && busy);
             const light = deriveHistoryLight(
               e,
               sessionStatusById,
@@ -1159,9 +1145,10 @@ function UnitRow({
               ),
               lightOverride,
               isRowAwaitingDecision,
+              isRowActiveRunning,
             );
             const openDefault = (): void => {
-              // 1. 符合直觉：只要点击该会话，立即消除未读绿灯（标为已查看）
+              // 1. 符合直觉：只要点击该会话，立即消除完成未读灯（标为已查看）
               useHistoryPrefs
                 .getState()
                 .markViewed(e.sessionId !== null ? [e.key, `session-${e.sessionId}`] : [e.key]);
@@ -1405,10 +1392,10 @@ function UnitRow({
                             },
                           ]
                         : []),
-                      ...(light === "unread"
+                      ...(light === "unreadDone"
                         ? [
                             {
-                              label: "标为已读（消除绿灯）",
+                              label: "标为已读（熄灭未读灯）",
                               icon: CheckCircle2,
                               onSelect: () => {
                                 const hp = useHistoryPrefs.getState();
@@ -1420,19 +1407,19 @@ function UnitRow({
                           ]
                         : [
                             {
-                              label: "标为未读（显示绿灯）",
+                              label: "标为未读（点亮未读灯）",
                               icon: CircleDot,
                               onSelect: () => {
                                 const hp = useHistoryPrefs.getState();
-                                hp.setLightOverride(e.key, "unread");
-                                if (e.sessionId !== null) hp.setLightOverride(`session-${e.sessionId}`, "unread");
+                                hp.setLightOverride(e.key, "unreadDone");
+                                if (e.sessionId !== null) hp.setLightOverride(`session-${e.sessionId}`, "unreadDone");
                               },
                             },
                           ]),
-                      ...(light === "executing" || light === "alive" || light === "failed"
+                      ...(light === "running" || light === "attention" || light === "error"
                         ? [
                             {
-                              label: "标为已完成（消除蓝/红灯）",
+                              label: "标为已完成（熄灭运行 / 待交互 / 异常灯）",
                               icon: Check,
                               onSelect: () => {
                                 const hp = useHistoryPrefs.getState();
@@ -1667,8 +1654,8 @@ function HistoryListRow({
   entry: UnitHistoryEntry;
   /** revision 家族成员数（ADR 0013 版本折叠摘要；undefined = 非家族行） */
   versionCount?: number;
-  /** 状态灯形态（failed/executing/unread/alive 之外不渲染灯） */
-  light: "failed" | "executing" | "unread" | "alive" | "none";
+  /** 状态灯形态（态集见 core/sessionLight；none 不渲染灯） */
+  light: SessionLightKind;
   /** 这条会话正显示在聊天页里（垂直标签页的「当前标签」高亮） */
   active: boolean;
   /** 默认打开方式与可行性（chat 需要 sessionId，tui 需要 resumeRef） */
@@ -1694,7 +1681,6 @@ function HistoryListRow({
   const kindLabel = entry.kind === "automation" ? "定时" : entry.kind === "backlog" ? "待办" : entry.kind === "manual" ? "手动" : "会话";
   const iconSrc = executorIconSrc(entry.runtimeId);
   const bareExec = entry.runtimeId.replace(/^daemon:/, "").replace(/:yolo$/, "");
-  const dotCls = HISTORY_DOT_CLS[light];
   const canToggle = mode.effective === "chat" ? mode.canTui : mode.canChat;
   const neither = !mode.canChat && !mode.canTui;
   const openDesc = neither
@@ -1756,9 +1742,10 @@ function HistoryListRow({
       )}
     >
       {/* 1. 状态灯槽：位于每个会话的最前面（最左边），先于执行器图标。
-          正常情况下空出形成子列表退格效果，仅亮灯时（未读绿灯/执行中呼吸/出错红灯）才显示。 */}
+          正常情况下空出形成子列表退格效果，仅亮灯时（未读/待交互/异常/运行中转圈）才显示。
+          灯形与灯色的唯一渲染入口是 SessionLightDot（灯色可自定义，见 store/useSessionLights） */}
       <span className="flex h-3.5 w-2.5 shrink-0 items-center justify-center" aria-hidden>
-        {dotCls !== null ? <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotCls)} /> : null}
+        <SessionLightDot kind={light} />
       </span>
 
       {/* 2. 执行器图标 ↔ 置顶钮同位交叉淡入：平时显示执行器（品牌图片或 2 字母徽标），
@@ -1935,9 +1922,9 @@ function ScheduledTaskRow({ task, onOpen }: { task: Automation; onOpen: () => vo
         .join("\n")}
       className="group/srow flex min-h-[30px] w-full cursor-pointer items-center gap-1 rounded-btn px-2 py-1.5 text-left transition hover:bg-line-soft"
     >
-      {/* 灯槽：仅最近失败亮红点（对齐历史行灯位，正常待触发不亮灯） */}
+      {/* 灯槽：仅最近失败亮异常灯（对齐历史行灯位与用户配置的异常灯色，正常待触发不亮灯） */}
       <span className="flex h-3.5 w-2.5 shrink-0 items-center justify-center" aria-hidden>
-        {task.lastFailure ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-loss" /> : null}
+        {task.lastFailure ? <SessionLightDot kind="error" /> : null}
       </span>
       <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center" title="定时任务（待触发）">
         <CalendarClock size={13} className="text-teal" />

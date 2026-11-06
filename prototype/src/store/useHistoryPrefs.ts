@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { UnitHistoryEntry } from "../adapters/daemon/client.ts";
+import type { SessionLightKind } from "../core/sessionLight.ts";
 
 /**
  * 历史会话展示偏好。
@@ -19,12 +20,12 @@ export interface HistoryPrefs {
   hideFailedInDialog: boolean;
   /**
    * 已查看的会话标记（entry key 与 `session-<id>` 混存，cap 500 淘汰最旧）。
-   * 「完成任务但未查看 → 绿灯」的已读依据：被打开过（聊天页 / TUI）即视为已读。
+   * 「完成任务但未查看 → 完成未读灯」的已读依据：被打开过（聊天页 / TUI）即视为已读。
    */
   viewedKeys: string[];
   /**
-   * 绿灯的起算时刻（首次使用本功能的时间）：之前的存量历史一律视为已读，
-   * 否则上线瞬间每条历史都挂绿灯，灯就失去「有新完成」的信号意义了。
+   * 完成未读灯的起算时刻（首次使用本功能的时间）：之前的存量历史一律视为已读，
+   * 否则上线瞬间每条历史都挂未读灯，灯就失去「有新完成」的信号意义了。
    */
   lightsSinceTs: number;
   /**
@@ -43,10 +44,11 @@ export interface HistoryPrefs {
   /** 自动归档保留时长天数（默认 7，选项 3/7/14/30，对齐 ZCode taskAutoArchiveOlderThanDays） */
   autoArchiveOlderThanDays: number;
   /**
-   * 用户手动覆盖的会话状态灯（entry key -> 状态值）。
-   * 允许用户强制消灯（"none"）或手动标为绿灯（"unread"）/蓝灯/红灯，赋予用户对灯的完全控制权。
+   * 用户手动覆盖的会话状态灯（entry key -> 状态值，态集见 core/sessionLight.ts）。
+   * 允许用户强制消灯（"none"）或手动点亮某态，赋予用户对灯的完全控制权。
+   * 2026-11-06 灯模型重构：旧值（alive/executing/unread/failed）在 load() 迁移。
    */
-  lightOverrides: Record<string, "none" | "unread" | "alive" | "executing" | "failed">;
+  lightOverrides: Record<string, SessionLightKind>;
 }
 
 export const AUTO_ARCHIVE_DAY_OPTIONS = [3, 7, 14, 30] as const;
@@ -74,12 +76,31 @@ const ARCHIVED_CAP = 1000;
 
 const STORAGE_KEY = "agent-workbench:history-prefs";
 
+/**
+ * 灯覆盖值的新旧态对齐表（2026-11-06 灯模型重构，load() 一次性迁移）：
+ * alive（存活浅蓝灯）已整体退役 → 就近落 none（覆盖意图是「让它别亮」）；
+ * executing（蓝呼吸，曾混含「等你决策」）→ running；
+ * unread→unreadDone、failed→error 只是改名。不在表内的值丢弃（回落自动灯）。
+ * 用 Map 而非 Record：`in` 沿原型链查找会把 "toString" 这类键误判为有效值。
+ */
+const LIGHT_OVERRIDE_MIGRATION = new Map<string, SessionLightKind>([
+  ["none", "none"],
+  ["alive", "none"],
+  ["unread", "unreadDone"],
+  ["executing", "running"],
+  ["failed", "error"],
+  ["running", "running"],
+  ["attention", "attention"],
+  ["unreadDone", "unreadDone"],
+  ["error", "error"],
+]);
+
 function load(): HistoryPrefs {
   if (typeof window === "undefined") return DEFAULTS;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (raw === null) {
-      // 首次使用：绿灯从现在起算（存量历史视为已读，见 lightsSinceTs 注释）
+      // 首次使用：未读灯从现在起算（存量历史视为已读，见 lightsSinceTs 注释）
       return { ...DEFAULTS, lightsSinceTs: Date.now() };
     }
     const p = JSON.parse(raw) as Partial<HistoryPrefs>;
@@ -110,7 +131,11 @@ function load(): HistoryPrefs {
           : DEFAULTS.autoArchiveOlderThanDays,
       lightOverrides:
         p.lightOverrides !== null && typeof p.lightOverrides === "object"
-          ? (p.lightOverrides as Record<string, "none" | "unread" | "alive" | "executing" | "failed">)
+          ? Object.fromEntries(
+              Object.entries(p.lightOverrides as Record<string, unknown>)
+                .filter(([k, v]) => k !== "" && typeof v === "string" && LIGHT_OVERRIDE_MIGRATION.has(v))
+                .map(([k, v]): [string, SessionLightKind] => [k, LIGHT_OVERRIDE_MIGRATION.get(v as string)!]),
+            )
           : {},
     };
   } catch {
@@ -142,7 +167,7 @@ export interface HistoryPrefsStore {
   resetDefaults: () => void;
   /** 标记已查看（entry key 或 `session-<id>`；重复幂等，超容量淘汰最旧） */
   markViewed: (keys: string | readonly string[]) => void;
-  /** 会话是否未读：绿灯 = 完成于起算时刻之后 && 从未打开过 */
+  /** 会话是否未读：完成未读灯 = 完成于起算时刻之后 && 从未打开过 */
   isUnread: (keys: string | readonly string[], finishedAt: number | null) => boolean;
   /** 覆盖某条会话的默认打开方式；传 null 清除覆盖（回落按来源判定） */
   setEntryOpenMode: (key: string, mode: "chat" | "tui" | null) => void;
@@ -153,7 +178,7 @@ export interface HistoryPrefsStore {
   /** 批量取消置顶（左栏多选管理） */
   unpinKeys: (keys: readonly string[]) => void;
   /** 用户手动覆盖会话灯状态：传 "none" 彻底消灯，传 null 恢复系统自动判定 */
-  setLightOverride: (key: string, light: "none" | "unread" | "alive" | "executing" | "failed" | null) => void;
+  setLightOverride: (key: string, light: SessionLightKind | null) => void;
   /** 彻底清除某条会话的灯（消灯且标记已读） */
   clearLight: (key: string) => void;
   /** 归档一条任务/会话：移入抽屉，不再显示在左侧栏占用空间 */

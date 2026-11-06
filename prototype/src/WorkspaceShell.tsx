@@ -91,6 +91,12 @@ export function WorkspaceShell() {
         restoreCanvasLayout();
         unPersist = installCanvasLayoutPersist();
       });
+    // 会话状态对账（灯的事实源）：sessions store 重载后为空，画布按持久化身份
+    // 恢复的 chat 标签灯要等逐个聚焦才有状态 —— 挂载时用 session.list 快照补齐
+    void import("./adapters/daemon/client.ts")
+      .then(({ fetchSessions, defaultDaemonEndpoint }) => fetchSessions(defaultDaemonEndpoint()))
+      .then((rows) => useWorkbench.getState().hydrateSessions(rows))
+      .catch(() => undefined);
     // created 帧推送认领：定时任务的 TUI 派发一到点就自动弹标签，不等刷新
     useTerminalStore.getState().installTerminalCreatedClaim();
     // chat 窗格焦点同步器（docs/31）：画布游标 ↔ 注册表快照/恢复

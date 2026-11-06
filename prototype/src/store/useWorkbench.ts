@@ -322,6 +322,23 @@ interface WorkbenchState {
    * 仅历史时打开只读视图 —— 新消息将在同一谱系开新段。
    */
   openSession: (input: { sessionId: SessionId; unitId: UnitId; runtimeId: string }) => Promise<void>;
+  /**
+   * session.list 对账水合（挂载时一次）：sessions store 只在 openSession /
+   * run / resume 写入，F5 后为空 —— 画布按持久化身份恢复的 chat 标签灯
+   * （GroupPanel.ChatTabLight，只读 store）会整排失效。只补**缺席**的行，
+   * 已存在的一律不覆盖（store 的事件流永远比一次性快照新）。
+   */
+  hydrateSessions: (
+    rows: readonly {
+      id: string;
+      unitId: string;
+      runtimeId: string;
+      status: string;
+      startedAt: number;
+      title?: string;
+      live?: boolean;
+    }[],
+  ) => void;
   /** 换模型。非法组合（该执行器不接这个模型）静默拒绝，不改状态 */
   selectModel: (model: ModelId) => void;
   /** 改某个 CLI 的模型偏好。动作原子，不合法的输入原样返回由调用方处理 */
@@ -500,7 +517,7 @@ let seq = 0;
  */
 let sessionViewToken = 0;
 
-/** 会话被用户打开/发送即视为「已读」—— 侧栏「完成未读」绿灯据此熄灭 */
+/** 会话被用户打开/发送即视为「已读」—— 侧栏「完成未读」灯据此熄灭 */
 function markSessionViewed(id: SessionId | string): void {
   useHistoryPrefs.getState().markViewed(`session-${String(id)}`);
 }
@@ -1291,6 +1308,39 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     }
     return true;
   },
+
+  /** 对账水合的状态归一：契约六值直通；failed 前缀（failed_executor 等）
+   *  归 failed；未知值保守落 idle（无灯）—— 水合是快照不是事件流，
+   *  宁可少亮不可误亮转圈 */
+  hydrateSessions: (rows) =>
+    set((s) => {
+      const known = new Set(s.sessions.map((x) => String(x.id)));
+      const KNOWN = new Set(["running", "idle", "done", "awaiting_permission", "awaiting_input"]);
+      const add: Session[] = [];
+      for (const r of rows) {
+        if (known.has(String(r.id))) continue;
+        const status: SessionStatus = KNOWN.has(r.status)
+          ? (r.status as SessionStatus)
+          : r.status.startsWith("failed")
+            ? "failed"
+            : "idle";
+        add.push({
+          id: asSessionId(r.id),
+          unitId: asUnitId(r.unitId),
+          runtimeId: asRuntimeId(r.runtimeId),
+          title: r.title ?? "",
+          status,
+          startedAt: r.startedAt,
+          live: r.live === true,
+          // 快照行没有的运行态字段给保守缺省：ephemeral 不影响灯与谱系展示，
+          // stats 归零（用量统计以 daemon 台账为准，这里只补状态可见性）
+          ephemeral: false,
+          stats: { messages: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: 0 },
+        });
+      }
+      if (add.length === 0) return {};
+      return { sessions: [...s.sessions, ...add] };
+    }),
 
   openSession: async (input) => {
     const token = ++sessionViewToken;
@@ -2215,9 +2265,10 @@ function mapTurnStatus(raw: string): SessionStatus {
 /**
  * 执行器/会话切换门禁（ADR 0012 原 idle-only；底栏任务栏上线后放宽）：
  * 只拦「对话在等你回答」（awaiting_permission / awaiting_input）—— 那是当前
- * 视图里挂着的问题，切走会把待决问题藏起来（底栏琥珀灯会提醒，但对话内的
- * 裁决弹层/输入请求只有回到现场才能处理）。运行中不再拦：会话在 daemon 侧
- * 继续跑，底栏条目跟踪它的状态，openSession 谱系回放随时可切回。
+ * 视图里挂着的问题，切走会把待决问题藏起来（侧栏历史行与画布 chat 标签会亮
+ * 待交互灯提醒，但对话内的裁决弹层/输入请求只有回到现场才能处理）。运行中
+ * 不再拦：会话在 daemon 侧继续跑，侧栏灯与画布标签转圈跟得住它的状态，
+ * openSession 谱系回放随时可切回。
  * RuntimePicker 与 ⌘K 两处入口共用这一份判定。
  */
 export function runtimeSwitchBlocked(s: { activeSessionId: SessionId | null; sessions: readonly { id: SessionId; status: SessionStatus }[] }): boolean {
@@ -2272,10 +2323,42 @@ function consumeEvents(adapter: RuntimeAdapter): void {
       if (event.type === "session.ended") {
         useWorkbench.setState((s) => ({
           sessions: s.sessions.map((x) =>
-            x.id === event.sessionId ? { ...x, status: event.reason === "error" ? ("failed" as const) : ("done" as const), endedAt: Date.now() } : x,
+            x.id === event.sessionId
+              ? {
+                  ...x,
+                  // 失败口径与 backend host 对齐（error / *_error / executor_exited 都算
+                  // 失败）——前端此前只认 "error"，zcode 的 executor_exited 会被记成
+                  // done，画布 chat 标签灯（只读 store）就漏亮红灯
+                  status: (event.reason === "error" || event.reason.endsWith("_error") || event.reason === "executor_exited"
+                    ? "failed"
+                    : "done") as SessionStatus,
+                  endedAt: Date.now(),
+                }
+              : x,
           ),
           // 同上：后台会话终结不该把活跃对话的 busy 误清
           ...(s.activeSessionId === event.sessionId ? { busy: false } : {}),
+        }));
+      }
+      // 权限请求 = 会话在等人：灯模型「待交互」的事实源。backend 的 track 只改
+      // 内存 status、不广播 session.status=awaiting_permission（host.ts 的
+      // permission.requested 分支），这里从事件面补齐 —— 请求一挂置
+      // awaiting_permission，裁决回声先复位 running，权威的 session.status /
+      // session.ended 随后到达会自然纠正。busy 不动：权限在飞时轮次并未结束。
+      if (event.type === "permission.requested") {
+        useWorkbench.setState((s) => ({
+          sessions: s.sessions.map((x) =>
+            x.id === event.sessionId && x.status !== "awaiting_permission"
+              ? { ...x, status: "awaiting_permission" }
+              : x,
+          ),
+        }));
+      }
+      if (event.type === "permission.resolved") {
+        useWorkbench.setState((s) => ({
+          sessions: s.sessions.map((x) =>
+            x.id === event.sessionId && x.status === "awaiting_permission" ? { ...x, status: "running" } : x,
+          ),
         }));
       }
       // bypass 下的 ask 自动放行已移到 daemon 侧裁决：前端不再代答 —— 各权限档

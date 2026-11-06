@@ -5,14 +5,20 @@ import { useWorkState, WORK_PHASE_DESCRIPTIONS } from "../store/useWorkState.ts"
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { fetchAutomations, fetchChannelStatus } from "../adapters/daemon/client.ts";
 import { getGuardianConfigRpc } from "../store/useMemoryPanel.ts";
+import { SESSION_LIGHT_PALETTE, type SessionLightColorState } from "../core/sessionLight.ts";
+import { useSessionLights } from "../store/useSessionLights.ts";
+import { SessionLightDot } from "./SessionLightDot.tsx";
 import { cn } from "./cn.ts";
 
 /**
  * 状态徽标与说明 —— 落点：全局底栏（GlobalStatusBar）。
  *
  * 遵循用户界面清晰原则：
- * 1. 所有的状态灯光只保留在「左侧栏历史会话列表」的最前方，用于反映单个会话的运行/通知状态；
- * 2. 底栏最左侧第 1 位提供「会话指示灯说明」弹层，详述每种灯光含义与右键控制方式；
+ * 1. 会话状态灯的渲染点：左侧栏历史会话行的最前方、画布 chat 标签、
+ *    侧栏 bot 行（闲时任务转圈）与待触发行（最近失败）——全部走
+ *    SessionLightDot 单源（2026-11-06 注意力提纯重构，态集见 core/sessionLight.ts）；
+ * 2. 底栏最左侧第 1 位是灯的图例与**灯色设置**弹层（SessionLightLegendBadge），
+ *    每种状态的颜色由用户自选，图例用当前配置色实时渲染；
  * 3. 底栏的「工作状态」保持纯文字；「后台守护」2026-10-26 起只留图标（颜色 +
  *    悬停说明表达三态），不再占底栏一行文字。
  *
@@ -27,8 +33,36 @@ function popoverAnchorCls(up: boolean, align: "left" | "right"): string {
 }
 
 /**
- * 底栏最左侧第 1 位：会话列表指示灯说明徽标与图例弹层
+ * 底栏最左侧第 1 位：会话状态灯的图例与**灯色设置**弹层（2026-11-06 起）。
+ *
+ * 灯模型（注意力提纯，core/sessionLight）：灯只指示「需要你知道的事」——
+ * 运行中转圈 / 等你交互 / 完成未读 / 异常四态可各配一色（有人适应蓝、有人
+ * 适应橙，灯色是偏好不是语义），已读已结束与空闲存活无灯。图例用**当前
+ * 配置色**实时渲染：改完色关掉弹层，侧栏与画布标签立即是所见的样子。
  */
+const LIGHT_ROWS: readonly { state: SessionLightColorState; name: string; desc: string }[] = [
+  {
+    state: "running",
+    name: "运行中",
+    desc: "agent 正在执行（思考 / 输出），或后台自动化 / 待办任务在跑。转圈动画，画布 chat 标签同款。",
+  },
+  {
+    state: "attention",
+    name: "等你交互",
+    desc: "问卷 / 决策卡 / 确认请求 —— 等你输入或裁决，需要回来看。侧栏行与画布 chat 标签同亮。",
+  },
+  {
+    state: "unreadDone",
+    name: "完成未读",
+    desc: "已完成且有新产出；点开该会话即熄灭。仅侧栏历史行。",
+  },
+  {
+    state: "error",
+    name: "异常",
+    desc: "执行出错 / 非正常退出，需要你辅助定位。侧栏行与画布 chat 标签同亮。",
+  },
+];
+
 export function SessionLightLegendBadge({
   popoverUp = false,
   align = "left",
@@ -37,13 +71,16 @@ export function SessionLightLegendBadge({
   align?: "left" | "right";
 }) {
   const [open, setOpen] = useState(false);
+  const colors = useSessionLights((s) => s.colors);
+  const setColor = useSessionLights((s) => s.setColor);
+  const resetColors = useSessionLights((s) => s.resetColors);
 
   return (
     <div className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        aria-label="会话列表指示灯说明"
-        title="会话列表指示灯说明：点击了解蓝灯呼吸、绿灯、浅蓝灯、红灯的含义与控制方式"
+        aria-label="会话状态灯：含义与灯色设置"
+        title="会话状态灯：点击查看各状态含义，并自定义每种状态的颜色"
         className="flex h-6 w-6 cursor-pointer items-center justify-center rounded-btn text-graphite transition hover:bg-line-soft hover:text-ink"
       >
         <HelpCircle size={13} className="text-ash transition-colors hover:text-ink" />
@@ -61,92 +98,65 @@ export function SessionLightLegendBadge({
             <div className="flex items-center justify-between border-b border-line-soft pb-2 text-body-sm font-medium text-ink">
               <span className="flex items-center gap-1.5">
                 <HelpCircle size={14} className="text-teal" />
-                会话列表状态灯说明
+                会话状态灯
               </span>
               <span className="rounded bg-line-soft px-1.5 py-0.5 text-[10px] font-normal text-ash">
-                左侧栏独占
+                侧栏 · 画布标签
               </span>
             </div>
 
             <p className="mt-2 text-[11px] text-graphite">
-              为避免全局灯光混淆，工作台指示灯<b>仅在左侧栏会话标题最左侧</b>出现，用于提示任务状态与结果：
+              灯只指示<b>需要你知道的事</b>（一个人同时只能跟进三五个会话）：颜色可按你的习惯自定义，点色点即换。
             </p>
 
             <div className="mt-3 space-y-2.5">
-              {/* 蓝灯呼吸 */}
-              <div className="flex items-start gap-2.5">
-                <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-blue-500 animate-pulse" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-medium text-ink">任务执行中</span>
-                    <span className="rounded bg-blue-500/10 px-1 py-0.2 text-[10px] text-blue-500">
-                      蓝灯呼吸
+              {LIGHT_ROWS.map((row) => (
+                <div key={row.state}>
+                  <div className="flex items-start gap-2.5">
+                    {/* 图例即实况：用当前配置色渲染，换色立即见效 */}
+                    <span className="mt-0.5 flex h-3 w-3 shrink-0 items-center justify-center">
+                      <SessionLightDot kind={row.state} />
                     </span>
+                    <div className="min-w-0 flex-1">
+                      <span className="font-medium text-ink">{row.name}</span>
+                      <p className="mt-0.5 text-[11px] leading-snug text-ash">{row.desc}</p>
+                    </div>
                   </div>
-                  <p className="mt-0.5 text-[11px] leading-snug text-ash">
-                    终端 CLI 正在运行/思考输出中，或后台自动化/待办任务正在执行。
-                  </p>
+                  {/* 色板（每态独立；同一行内选中即当前色） */}
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1 pl-[22px]">
+                    {SESSION_LIGHT_PALETTE.map((c) => {
+                      const active = colors[row.state] === c.hex;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => setColor(row.state, c.hex)}
+                          aria-label={`把「${row.name}」设为${c.label}色`}
+                          aria-pressed={active}
+                          title={`${c.label} ${c.hex}`}
+                          className={cn(
+                            "h-3 w-3 cursor-pointer rounded-full transition",
+                            active
+                              ? "ring-2 ring-ink/70 ring-offset-2 ring-offset-canvas"
+                              : "opacity-60 hover:opacity-100",
+                          )}
+                          style={{ backgroundColor: c.hex }}
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
+              ))}
 
-              {/* 绿灯常亮 */}
+              {/* 无灯（不可配置——没有灯就没有颜色） */}
               <div className="flex items-start gap-2.5">
-                <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-gain" />
+                <span className="mt-1 h-3 w-3 shrink-0 rounded-full border border-dashed border-line-strong bg-transparent" />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">
-                    <span className="font-medium text-ink">新结果未读</span>
-                    <span className="rounded bg-emerald-500/10 px-1 py-0.2 text-[10px] text-emerald-500">
-                      绿灯常亮
-                    </span>
+                    <span className="font-medium text-ink">无灯</span>
                   </div>
                   <p className="mt-0.5 text-[11px] leading-snug text-ash">
-                    任务已完成且有新产出，点击进入该会话查看后将自动消灯。
-                  </p>
-                </div>
-              </div>
-
-              {/* 浅蓝常亮 */}
-              <div className="flex items-start gap-2.5">
-                <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-blue-500/70" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-medium text-ink">空闲在线</span>
-                    <span className="rounded bg-sky-500/10 px-1 py-0.2 text-[10px] text-sky-500">
-                      浅蓝静态
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-[11px] leading-snug text-ash">
-                    交互式会话仍挂在后台就绪，可随时切换并继续交互。
-                  </p>
-                </div>
-              </div>
-
-              {/* 红灯常亮 */}
-              <div className="flex items-start gap-2.5">
-                <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-loss" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-medium text-ink">执行失败 / 异常</span>
-                    <span className="rounded bg-rose-500/10 px-1 py-0.2 text-[10px] text-rose-500">
-                      红灯常亮
-                    </span>
-                  </div>
-                  <p className="mt-0.5 text-[11px] leading-snug text-ash">
-                    任务执行出错或非正常退出，可进入会话或右键详情查看报错。
-                  </p>
-                </div>
-              </div>
-
-              {/* 无灯退格 */}
-              <div className="flex items-start gap-2.5">
-                <span className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full border border-dashed border-line-strong bg-transparent" />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-medium text-ink">已查看历史</span>
-                    <span className="text-[10px] text-ash">不显灯（退格占位）</span>
-                  </div>
-                  <p className="mt-0.5 text-[11px] leading-snug text-ash">
-                    已读且已结束的正常会话，空出灯位保持列表整齐且不打扰视觉。
+                    已读且已结束的正常会话、空闲存活 —— 不占注意力，灯位空出保持列表整齐。
                   </p>
                 </div>
               </div>
@@ -159,8 +169,16 @@ export function SessionLightLegendBadge({
                 用户自主控制权：
               </p>
               <p className="mt-0.5 text-ash">
-                若任何会话灯未自动关闭或你想自定义状态，只需<b>右键点击该会话</b>，即可选择「取消此会话状态灯」、「标为已读/未读」或「恢复系统自动灯」。
+                若任何会话灯未自动关闭或你想自定义状态，只需<b>右键点击该会话</b>，即可选择「取消此会话状态灯」、「标为已读/未读」或「恢复系统自动灯」。右键消灯只作用于侧栏历史行；画布 chat 标签上的灯是纯状态读数，随会话状态自动变化。
               </p>
+              <button
+                type="button"
+                onClick={resetColors}
+                className="mt-1.5 flex cursor-pointer items-center gap-1 rounded-btn px-1.5 py-0.5 text-[11px] text-graphite transition hover:bg-line hover:text-ink"
+              >
+                <RotateCcw size={10} />
+                恢复默认灯色（绿 / 琥珀 / 红 / 青）
+              </button>
             </div>
           </div>
         </>

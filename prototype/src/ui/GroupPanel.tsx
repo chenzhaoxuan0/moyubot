@@ -5,8 +5,10 @@ import { useChatPanes } from "../store/useChatPanes.ts";
 import { useCanvasDnd } from "../store/canvasDnd.ts";
 import { useCanvasPopouts } from "../store/useCanvasPopouts.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
+import { deriveSessionLight, lightFlagsFromStatus, type SessionLightKind } from "../core/sessionLight.ts";
 import { TerminalPaneSlot, ShellOrAgentIcon } from "./TerminalPaneSlot.tsx";
 import { ChatPaneSlot } from "./ChatPaneSlot.tsx";
+import { SessionLightDot } from "./SessionLightDot.tsx";
 import { QuickContextMenu, quickMenuFromEvent, type QuickMenuState } from "./QuickContextMenu.tsx";
 import { cn } from "./cn.ts";
 
@@ -230,6 +232,10 @@ export function GroupPanel({ groupId }: { groupId: string }) {
                 ) : (
                   <ShellOrAgentIcon icon={pane.icon ?? "pwsh"} />
                 )}
+                {/* chat 标签的状态灯（chat 的「最小化」形态）：会话在别的标签/
+                    格子后台跑着，状态从标签上直接读 —— 转圈=运行中 / 黄=等你
+                    交互 / 红=异常；完成未读的绿灯只在侧栏（那里才有严格已读口径） */}
+                {pane.kind === "chat" && <ChatTabLight paneId={pane.id} />}
                 <span className="truncate">{title}</span>
                 {paneId.startsWith("autoterm_") && (
                   <span
@@ -333,6 +339,26 @@ export function GroupPanel({ groupId }: { groupId: string }) {
       <QuickContextMenu menu={tabMenu} onClose={() => setTabMenu(null)} />
     </div>
   );
+}
+
+/* ------------------------------------------------------------- chat 标签灯 */
+
+/**
+ * chat 标签的状态灯：窄订阅（只订本标签的会话记录 + 那一个 session 的状态），
+ * 任何一个会话翻转状态都不重渲染整条标签条。草稿（sessionId=null）无灯；
+ * 完成未读的绿灯不进标签（已确认口径：侧栏历史行才有严格的已读语义）；
+ * 也不受理右键消灯覆盖 —— 标签灯是纯状态读数（图例的控制权卡片已注明）。
+ */
+function ChatTabLight({ paneId }: { paneId: string }) {
+  const sessionId = useChatPanes((s) => s.panes[paneId]?.sessionId ?? null);
+  const status = useWorkbench((s) =>
+    sessionId === null ? undefined : s.sessions.find((x) => String(x.id) === sessionId)?.status,
+  );
+  if (sessionId === null || status === undefined) return null;
+  const flags = lightFlagsFromStatus(status);
+  const kind: SessionLightKind = deriveSessionLight({ ...flags, unread: false });
+  if (kind === "none" || kind === "unreadDone") return null;
+  return <SessionLightDot kind={kind} size="md" />;
 }
 
 /* ------------------------------------------------------------- 组内新建 */

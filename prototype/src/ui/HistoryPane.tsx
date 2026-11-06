@@ -226,7 +226,7 @@ export function HistoryPane({
         if (String(wb.activeUnitId) !== String(unitId)) wb.selectUnit(asUnitId(unitId));
         // TUI 恢复的落点是终端窗格标签（docs/31 画布常驻，created 帧认领会激活）
         useShell.getState().setMainView("chat");
-        // 打开即已读：熄掉侧栏的「完成未读」绿灯
+        // 打开即已读：熄掉侧栏的「完成未读」灯
         useHistoryPrefs
           .getState()
           .markViewed([e.key, ...(e.sessionId !== null ? [`session-${e.sessionId}`] : [])]);
@@ -247,7 +247,7 @@ export function HistoryPane({
     if (e.sessionId === null) return;
     // 幂等开窗格：已有就聚焦（窗格内切到那段），没有就开标签
     useChatPanes.getState().openChatPane({ unitId: String(unitId), sessionId: e.sessionId, runtimeId: e.runtimeId });
-    // 打开即已读：熄掉侧栏的「完成未读」绿灯
+    // 打开即已读：熄掉侧栏的「完成未读」灯
     useHistoryPrefs.getState().markViewed([e.key, `session-${e.sessionId}`]);
     onFinished();
   };

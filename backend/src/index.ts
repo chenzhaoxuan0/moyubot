@@ -2568,7 +2568,7 @@ registerMethod("unit.history", async (params) => {
           endedAt = endedAt ?? s.startedAt;
           store.setSessionStatus(s.id, "failed", endedAt, s.stats);
         } else {
-          // 有 cliRef 但当前未在运行，置为可接回等待态 idle，不向前端冒充 running 呼吸灯
+          // 有 cliRef 但当前未在运行，置为可接回等待态 idle，不向前端冒充 running 转圈灯
           sessionStatus = "idle";
           store.setSessionStatus(s.id, "idle", endedAt ?? null, s.stats);
         }

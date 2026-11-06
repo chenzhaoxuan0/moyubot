@@ -173,7 +173,8 @@ LayoutNode.leaf: { kind: "terminal", instanceId }       // 系统终端 / Agent 
 目标（`#/u/<id>` 无段）只切全局上下文不动窗格；侧栏「历史详情 / bot 设置」
 里的 selectUnit 仍会清全局时间线（焦点窗格受影响，与改造前同口径）；**后台
 窗格的审批**有三个可见面**：后台对话格的快照时间线照常渲染 ask 卡（事件
-泵转投）、侧栏历史状态灯（awaiting 亮蓝呼吸灯）、通知中心（daemon 广播
+泵转投）、侧栏历史状态灯（awaiting 亮待交互黄灯；2026-11-06 灯模型重构后
+画布 chat 标签同款，见 core/sessionLight.ts）、通知中心（daemon 广播
 approval 通知）——点击窗格聚焦后审批卡在 live 态可交互。（原「底栏任务栏
 chip」口径随任务栏机制退役作废，见 docs/32 §九）
 
