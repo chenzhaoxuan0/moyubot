@@ -189,3 +189,12 @@ sessionForeground、useTaskbar 口径、PopoutShell、Electron 放行、移动�
 |---|---|---|
 | 分屏并排时失焦侧对话格塌成空白（输入框/头像消失） | 「单活+快照」把**任何**焦点离开都当对话失焦：焦点移到终端窗格时对话格被降级成只读快照，快照态没有输入区/草稿空态 | **live 归属与画布焦点解耦**（installChatPaneSync 只在焦点落到**另一个对话格**时交接——终端从不争用全局对话链路）；快照态补齐外观：本窗格 bot 的空态头像（EmptyState 可传 unit）+ 休眠输入框占位（点击接管）+ 快照态不再套全局 bot 的强调色 |
 | 切换标签时画面闪烁 | 任务栏「切走运行中对话→自动压缩进底栏」的离开侦测与 ghost 动画在每次焦点切换时触发 | **任务栏机制整体退役**（用户拍板：会话全量由画布标签管理）——删 useTaskbar/Taskbar/TaskChip/CompressGhost/compressAnim、头部「折叠到底栏」钮、底栏拉高手柄与高度锁定设置（useShell 的 statusBar 状态一并移除）；GlobalStatusBar 固定 28px 纯状态条（会话灯说明/工作状态/后台守护/toast/通知铃）。后台会话可见性由：对话格快照实时滚动 + 侧栏历史状态灯 + 通知中心承担（docs/31 §九 审批口径同步更新） |
+| **点回对话标签被重置成头像+问候+空输入框的初始态**（并排对照全毁） | focus() 的 `sessionOverride !== undefined` 判定把画布游标切换（handleCanvasFocusChange）传来的 `null` 当成「强制草稿」——每次点回对话标签都走草稿分支 selectUnit 清空时间线，而不是恢复窗格自身会话 | `targetSid = sessionOverride ?? pane.sessionId`（null 与 undefined 都回落窗格自身）；仿真复现+验证见下 |
+
+**回归防线（二）**：`pnpm check:canvas-focus`（`prototype/scripts/check-canvas-focus.ts`，
+并入 `pnpm check`）——useChatPanes/useTerminalStore 源码复制+import 改桩
+（useWorkbench/useShell 换可控桩，openSession 按 sessionId 回放假时间线），
+仿真「对话 A 有内容 → 焦点到终端 → 点回 → 切对话 B → 点回 A」全序列，
+6 条断言：首开即回放 / 终端焦点不清内容（live 归属解耦）/ 点回不重置 /
+切走快照封存 / 往返后 openSession 权威重建内容完整。最后一条正是本表
+第三行的验收点。

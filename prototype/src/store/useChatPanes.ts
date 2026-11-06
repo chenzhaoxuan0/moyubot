@@ -268,7 +268,12 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
 
     // ② 草稿窗格：selectUnit 落位（执行器绑定 / turnContext 跟随），草稿归还输入框。
     //    unitId 为空 = 拆分出的「未选 bot」窗格：只聚焦不切单元，窗格内渲染选择器
-    const targetSid = sessionOverride !== undefined ? sessionOverride : pane.sessionId;
+    // bug 修复（docs/32 §十）：targetSid 用 ?? 回落窗格自身会话——此前
+    // `sessionOverride !== undefined` 把画布游标切换传来的 null 当成「强制草稿」，
+    // 每次点回对话标签都走草稿分支 selectUnit 清空时间线，页面被重置成
+    // 头像+问候+空输入框的初始态（并排对照全毁）。null 与 undefined 现在都
+    // 意为「用窗格自己的 session」。
+    const targetSid = sessionOverride ?? pane.sessionId;
     if (targetSid === null || targetSid === "") {
       if (pane.unitId !== "") useWorkbench.getState().selectUnit(asUnitId(pane.unitId));
       if (pane.unitId !== "" && pane.draft !== "") useWorkbench.setState({ draft: pane.draft });

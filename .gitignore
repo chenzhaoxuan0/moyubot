@@ -48,3 +48,6 @@ dist-electron/
 
 # 画布检查脚本的工作副本（scripts/check-canvas.ts 跑完即删，崩溃残留兜底）
 prototype/scripts/.canvas-check-tmp/
+
+# 焦点链检查的工作副本（scripts/check-canvas-focus.ts 跑完即删）
+prototype/scripts/.canvas-focus-tmp/
