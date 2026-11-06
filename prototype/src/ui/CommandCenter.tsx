@@ -402,10 +402,10 @@ function useCommands(): readonly Command[] {
       {
         id: "view-source-control",
         label: "打开源代码管理",
-        hint: "激活单元仓库的分支与工作树",
+        hint: "激活单元仓库的分支与工作树（右侧面板标签页）",
         group: "视图",
         icon: FolderGit2,
-        run: () => shell().setMainView("sourceControl"),
+        run: () => useSidePane.getState().openSourceControl(),
       },
     );
 
@@ -419,7 +419,7 @@ function useCommands(): readonly Command[] {
         icon: FolderGit2,
         run: () => {
           useGit.getState().setPendingDialog("createBranch");
-          shell().setMainView("sourceControl");
+          useSidePane.getState().openSourceControl();
         },
       },
       {
@@ -430,7 +430,7 @@ function useCommands(): readonly Command[] {
         icon: FolderGit2,
         run: () => {
           useGit.getState().setPendingDialog("createWorktree");
-          shell().setMainView("sourceControl");
+          useSidePane.getState().openSourceControl();
         },
       },
     );

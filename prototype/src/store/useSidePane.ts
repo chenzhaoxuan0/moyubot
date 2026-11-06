@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import * as sidePane from "../core/sidePaneTabs.ts";
 import type { UnitId } from "../core/units.ts";
-import { useShell } from "./useShell.ts";
+import { useShell, SIDEBAR_DEFAULT, SIDEBAR_MIN } from "./useShell.ts";
 
 /**
  * 右侧标签面板的 shell 状态 —— tabs/activeTabId 的领域规则全部在
@@ -43,13 +43,14 @@ function withoutUnread(unread: Readonly<Record<string, true>>, tabId: string): R
 }
 
 /**
- * v6（2026-10-27）：300 实测后用户上调到 350。键位随之升一位做一次性重置，
- * 清掉期间的拖拽存量值。读档时顺带清掉 v1-v5 残键。
- * v2 起盘上的宽度只来自用户拖拽落定（程序性 resize 不落盘，见 SidePanePanel 的
- * onResize 与 commitPaneWidth）—— 读到什么信什么。
+ * v7（2026-11-06）：默认宽从 350 收到与左侧栏同宽（用户定稿「350 默认打开
+ * 过大」）。键位随之升一位做一次性重置，清掉 350 时代的拖拽存量值；读档时
+ * 顺带清掉 v1-v6 残键。v2 起盘上的宽度只来自用户拖拽落定（程序性 resize
+ * 不落盘，见 SidePanePanel 的 onResize 与 commitPaneWidth）—— 读到什么信什么。
  */
-const WIDTH_KEY = "agent-workbench:sidepane-width-px.v6";
+const WIDTH_KEY = "agent-workbench:sidepane-width-px.v7";
 const WIDTH_KEY_STALE = [
+  "agent-workbench:sidepane-width-px.v6",
   "agent-workbench:sidepane-width-px.v5",
   "agent-workbench:sidepane-width-px.v4",
   "agent-workbench:sidepane-width-px.v3",
@@ -57,11 +58,13 @@ const WIDTH_KEY_STALE = [
   "agent-workbench:sidepane-width-px",
 ] as const;
 /**
- * 默认宽 = 350（2026-10-27 用户定稿：300 偏窄、350 合适）。最窄即默认宽：
- * tab 条是 overflow-x-auto 的横向滚动条，窄了只是标签条内滚动。
+ * 默认宽与左侧栏同宽（SIDEBAR_DEFAULT）：用户没拖过面板时，读档直接跟
+ * useShell 当时的 sidebarWidth（含它的持久值）——「和左栏一样宽」对拖过
+ * 左栏的用户同样成立。下限同步降到左栏同款 SIDEBAR_MIN：tab 条是
+ * overflow-x-auto 的横向滚动条，窄了只是标签条内滚动。
  */
-const SIDE_PANE_DEFAULT = 350;
-const SIDE_PANE_MIN = 350;
+const SIDE_PANE_DEFAULT = SIDEBAR_DEFAULT;
+const SIDE_PANE_MIN = SIDEBAR_MIN;
 /** 「最近关闭」上限（ZCode recentClosedSidePaneTabs 同款）：够后悔，不无限堆 */
 const RECENTLY_CLOSED_MAX = 8;
 
@@ -123,12 +126,15 @@ function settleClose(s: SidePaneStore, next: sidePane.SidePaneState): Partial<Si
 function readWidth(): number {
   if (typeof window === "undefined") return SIDE_PANE_DEFAULT;
   try {
-    // v3 起干净起步：v1/v2 残键一律清掉（它们的值都早于这次默认宽减半的决定）
+    // v3 起干净起步：旧版键位残值一律清掉（它们的值都早于当前默认宽的决定）
     for (const k of WIDTH_KEY_STALE) window.localStorage.removeItem(k);
     const raw = window.localStorage.getItem(WIDTH_KEY);
-    if (raw === null) return SIDE_PANE_DEFAULT;
-    const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? Math.max(SIDE_PANE_MIN, Math.round(n)) : SIDE_PANE_DEFAULT;
+    if (raw !== null) {
+      const n = Number(raw);
+      if (Number.isFinite(n) && n > 0) return Math.max(SIDE_PANE_MIN, Math.round(n));
+    }
+    // 面板还没有自己的拖拽存量 → 跟左侧栏当前宽（含其持久值）：默认打开即同宽
+    return Math.max(SIDE_PANE_MIN, useShell.getState().sidebarWidth);
   } catch {
     return SIDE_PANE_DEFAULT;
   }
@@ -166,6 +172,8 @@ interface SidePaneStore extends sidePane.SidePaneState {
   openContext: (request: sidePane.OpenUnitTabRequest) => void;
   /** 打开（或复用）通知中心 tab（workspace 级单例），并展开面板 */
   openNotifications: () => void;
+  /** 打开（或复用）源代码管理 tab（workspace 级单例，2026-11-06 归拢自主视图），并展开面板 */
+  openSourceControl: () => void;
   /** 打开（或复用）新建 bot tab（workspace 级单例，2026-10-23 归拢自弹窗），并展开面板 */
   openNewBot: () => void;
   /** 打开（或复用）git 提交图 tab（按 bot，2026-10-23 归拢自 GitGraphDialog 弹窗） */
@@ -268,6 +276,16 @@ export const useSidePane = create<SidePaneStore>((set, get) => ({
         ...sidePane.openNotificationsTab(s),
         collapsed: false,
         recentlyClosed: dropClosed(s.recentlyClosed, sidePane.notifyTabId),
+      };
+    }),
+
+  openSourceControl: () =>
+    set((s) => {
+      useShell.getState().setMainView("chat");
+      return {
+        ...sidePane.openSourceControlTab(s),
+        collapsed: false,
+        recentlyClosed: dropClosed(s.recentlyClosed, sidePane.scmTabId),
       };
     }),
 

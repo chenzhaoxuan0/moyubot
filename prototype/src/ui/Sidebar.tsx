@@ -330,12 +330,6 @@ export function Sidebar() {
               onClick={() => useShell.getState().setMainView("backlog")}
             />
             <IconNavBtn
-              icon={GitBranch}
-              label="源代码管理"
-              hint="分支与工作树"
-              onClick={() => useShell.getState().setMainView("sourceControl")}
-            />
-            <IconNavBtn
               icon={ImagePlus}
               label="出图"
               onClick={() => useShell.getState().setMainView("image")}

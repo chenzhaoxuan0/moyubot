@@ -9,7 +9,6 @@ import { ImageStudioPage } from "./ui/ImageStudioPage.tsx";
 import { CommandCenter } from "./ui/CommandCenter.tsx";
 import { DesktopTopOverlay } from "./ui/DesktopTopOverlay.tsx";
 import { SettingsPage } from "./ui/SettingsPage.tsx";
-import { SourceControlPage } from "./ui/SourceControlPage.tsx";
 import { useWorkbench } from "./store/useWorkbench.ts";
 import { useTerminalStore } from "./store/useTerminalStore.ts";
 import { installChatPaneSync } from "./store/useChatPanes.ts";
@@ -266,8 +265,9 @@ function SidebarSlot() {
  * 右上浮层 —— 右侧面板收起时的常驻重开入口，与左侧栏的 DesktopTopOverlay
  * 互为镜像（左栏折叠 → 左上出展开钮；面板收起 → 右上出展开钮）。面板自己的
  * 收起钮在 tab 条最右（SidePanePanel），开合入口各自跟人走。
- * 只在 chat 主视图出现：面板是 bot 作用域的，全局页（自动化 / 出图 / 待办 /
- * 源代码管理）不挂它；头部相应让出右侧 pr-12 的对齐带。
+ * 只在 chat 主视图出现：面板是 bot 作用域的，全局页（自动化 / 出图 / 待办）
+ * 不挂它；头部相应让出右侧 pr-12 的对齐带。（源代码管理已归拢进面板 tab，
+ * 2026-11-06。）
  */
 function SidePaneTopOverlay() {
   const mainView = useShell((s) => s.mainView);
@@ -317,11 +317,6 @@ function ConversationSlot() {
         /* 清单（单页两栏）：顶部输入 + 左清单右待办 —— 个人 context 唯一入口 */
         <main className="h-full min-h-0" aria-label="清单">
           <WorklistPage />
-        </main>
-      ) : mainView === "sourceControl" ? (
-        /* 源代码管理（独立主视图）：分支 / 工作树 */
-        <main className="h-full min-h-0" aria-label="源代码管理">
-          <SourceControlPage />
         </main>
       ) : (
         /* 会话画布（docs/31）：对话与终端窗格统一标签容器，常驻挂载 ——

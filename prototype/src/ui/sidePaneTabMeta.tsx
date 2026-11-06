@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { Bell, FileDiff, GitGraph, History, Layers, ListChecks, Plus, Radio, type LucideIcon } from "lucide-react";
+import { Bell, FileDiff, FolderGit2, GitGraph, History, Layers, ListChecks, Plus, Radio, type LucideIcon } from "lucide-react";
 import type { SidePaneTab } from "../core/sidePaneTabs.ts";
 import type { UnitId } from "../core/units.ts";
 import { useSidePane } from "../store/useSidePane.ts";
@@ -11,6 +11,7 @@ import { DiffPane } from "./DiffPane.tsx";
 import { NotificationsPane } from "./NotificationsPane.tsx";
 import { BotSettingsPane } from "./BotSettingsPane.tsx";
 import { NewBotPane, GitGraphPane } from "./SidePaneExtraPanes.tsx";
+import { SourceControlPage } from "./SourceControlPage.tsx";
 
 /**
  * 侧栏 tab 的 UI 注册表 —— 图标 / 标题 / 内容渲染 / 功能主页入口的唯一登记处。
@@ -102,6 +103,13 @@ const entries: readonly SidePaneTabMetaEntry[] = [
     icon: Bell,
     title: () => "通知",
     render: (_tab, ctx) => <NotificationsPane shown={ctx.shown} />,
+  },
+  {
+    // 源代码管理（2026-11-06 归拢自主视图）：workspace 级单例，内容跟随激活单元
+    type: "scm",
+    icon: FolderGit2,
+    title: () => "源代码管理",
+    render: (_tab, ctx) => <SourceControlPage shown={ctx.shown} />,
   },
 ];
 
@@ -220,6 +228,14 @@ export const SIDE_PANE_HOME_ENTRIES: readonly SidePaneHomeEntryDef[] = [
     icon: Plus,
     group: "workspace",
     open: () => useSidePane.getState().openNewBot(),
+  },
+  {
+    key: "scm",
+    label: "源代码管理",
+    desc: "激活单元仓库的分支 / 工作树 / 改动总管（归拢自左侧栏主视图入口）",
+    icon: FolderGit2,
+    group: "workspace",
+    open: () => useSidePane.getState().openSourceControl(),
   },
   {
     key: "notify",

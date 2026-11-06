@@ -27,10 +27,10 @@ import type { AutomationDialogRequest } from "../ui/AutomationDialog.tsx";
  * - backlog（清单，单页两栏）同上：个人 context 唯一入口 + 任务状态机合并视图 ——
  *   顶部文本框写任何东西，routing bot 分类沉淀；左栏清单条目、右栏待办任务，
  *   两张面（inbox entries / backlog items）一页管完。
- * - sourceControl（源代码管理）同上：激活单元仓库的分支 / 工作树管理，
- *   交互范式对齐 VSCode SCM（ADR 0008）。
+ * - 源代码管理不再是主视图（2026-11-06 归拢进右侧标签面板的 workspace 级
+ *   tab，入口在面板功能主页 / ＋ 菜单 / 命令中心，见 core/sidePaneTabs.ts）。
  */
-export type MainView = "chat" | "automations" | "image" | "backlog" | "sourceControl";
+export type MainView = "chat" | "automations" | "image" | "backlog";
 
 /**
  * 会话内视图（docs/13 引入；docs/31 会话画布后**语义降级为移动端布局内部态**）：
@@ -128,9 +128,10 @@ const WIDTH_KEY = "agent-workbench:sidebar-width-px";
 /** 与设置页左侧导航（w-[264px]）对齐，两栏切换时视觉宽度一致 */
 const SIDEBAR_DEFAULT = 264;
 /**
- * 最小宽度下限 = 顶部动作行不溢出的宽度：px-2.5 内边距 + 收起钮 + 6 个
- * 导航图标钮（搜索/自动化/待办/源代码管理/出图/设置）≈ 226px 固定内容。
- * 旧下限 200px 时这行被压溢出，栏底出现横向滚动条 —— 下限必须盖住头部。
+ * 最小宽度下限 = 顶部动作行不溢出的宽度：px-2.5 内边距 + 收起钮 + 5 个
+ * 导航图标钮（搜索/自动化/待办/出图/设置）≈ 194px 固定内容（源代码管理
+ * 入口已于 2026-11-06 迁往右侧面板）。旧下限 200px 时代这行曾被压溢出、
+ * 栏底出现横向滚动条 —— 下限必须盖住头部，240 留有余量。
  */
 const SIDEBAR_MIN = 240;
 const SIDEBAR_MAX_RATIO = 0.5;

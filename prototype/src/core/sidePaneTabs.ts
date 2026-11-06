@@ -3,9 +3,11 @@
  *
  * 形态照搬 ZCode 的 `packages/ui/src/lib/workspaceSidePane.ts`，按本产品的体量裁剪。
  * 上一版右栏（IDE 式 19-tab）死于「只切状态、没人渲染」，本版只服务真实入口。
- * 现有五类 tab：历史会话（弹窗迁移）、会话实时监控（后台会话事件流跟随）、
+ * unit 级 tab：历史会话（弹窗迁移）、会话实时监控（后台会话事件流跟随）、
  * 计划 / 任务进度（活跃会话的 plan 事件）、变更审查（工作目录改动面）、
- * 通知中心（workspace 级：daemon 事件聚合面，切 bot 不消失）。
+ * bot 设置（原上下文清单）、git 提交图（原弹窗）。
+ * workspace 级 tab（切 bot 不消失）：通知中心（daemon 事件聚合面）、新建 bot、
+ * 源代码管理（分支 / 工作树 / 改动，内容跟随激活单元，2026-11-06 归拢自主视图）。
  *
  * 抄下来的三条关键设计，都不是样式问题而是行为问题：
  *
@@ -123,6 +125,19 @@ export interface NewBotSidePaneTab {
 }
 
 /**
+ * 源代码管理页（2026-11-06 归拢自主视图）：激活单元仓库的「仓库总管」——
+ * 分支 / 工作树 / 改动（ADR 0008 / 0010）。workspace 级单例：内容跟随当前
+ * 激活单元换仓（渲染层 selectActiveUnit，与主视图时代同一语义），tab 本身
+ * 不归属任何 bot —— 切 bot 不换 tab，只换仓库。
+ */
+export interface SourceControlSidePaneTab {
+  /** 固定 `scm:workspace` —— 全工作台至多一个 */
+  id: string;
+  type: "scm";
+  openedAt: number;
+}
+
+/**
  * git 提交图页（2026-10-23 归拢自 GitGraphDialog 弹窗）：按 bot 一个，
  * rootPath/branchName 打开时冻结（重开刷新）。
  */
@@ -145,7 +160,8 @@ export type SidePaneTab =
   | NotificationsSidePaneTab
   | ContextSidePaneTab
   | NewBotSidePaneTab
-  | GitGraphSidePaneTab;
+  | GitGraphSidePaneTab
+  | SourceControlSidePaneTab;
 
 /**
  * tab 的作用域。unit 级归属某个 bot（切 bot 隐藏不销毁）；workspace 级属于整个
@@ -154,14 +170,17 @@ export type SidePaneTab =
 export type SidePaneTabScope = "unit" | "workspace";
 
 export function tabScope(tab: SidePaneTab): SidePaneTabScope {
-  return tab.type === "notify" || tab.type === "newbot" ? "workspace" : "unit";
+  return tab.type === "notify" || tab.type === "newbot" || tab.type === "scm" ? "workspace" : "unit";
 }
 
 /** unit 级 tab 的窄类型（带 ownerUnitId）—— 类型守卫给 TS 收窄用，语义同 tabScope */
-export type UnitScopedSidePaneTab = Exclude<SidePaneTab, NotificationsSidePaneTab | NewBotSidePaneTab>;
+export type UnitScopedSidePaneTab = Exclude<
+  SidePaneTab,
+  NotificationsSidePaneTab | NewBotSidePaneTab | SourceControlSidePaneTab
+>;
 
 export function isUnitTab(tab: SidePaneTab): tab is UnitScopedSidePaneTab {
-  return tab.type !== "notify" && tab.type !== "newbot";
+  return tab.type !== "notify" && tab.type !== "newbot" && tab.type !== "scm";
 }
 
 export interface SidePaneState {
@@ -321,6 +340,19 @@ export function openNotificationsTab(state: SidePaneState): SidePaneState {
     return { tabs: [...state.tabs, tab], activeTabId: notifyTabId };
   }
   return activateTab(state, notifyTabId);
+}
+
+/** 源代码管理 tab 的固定 id：workspace 级单例，id 不含任何业务键 */
+export const scmTabId = "scm:workspace";
+
+/** 打开（或复用）源代码管理 tab：workspace 级单例，幂等聚焦（内容跟随激活单元） */
+export function openSourceControlTab(state: SidePaneState): SidePaneState {
+  const existing = state.tabs.find((tab) => tab.id === scmTabId);
+  if (existing === undefined) {
+    const tab: SourceControlSidePaneTab = { id: scmTabId, type: "scm", openedAt: Date.now() };
+    return { tabs: [...state.tabs, tab], activeTabId: scmTabId };
+  }
+  return activateTab(state, scmTabId);
 }
 
 /**

@@ -18,12 +18,14 @@ import { ChangeFileList } from "./sourceControl/ChangeFileList.tsx";
 import { WorktreeRow, worktreeTitle } from "./sourceControl/WorktreeRow.tsx";
 import { CreateBranchDialog } from "./sourceControl/CreateBranchDialog.tsx";
 import { CreateWorktreeDialog } from "./sourceControl/CreateWorktreeDialog.tsx";
-import { TitleBarClearance } from "./WindowControls.tsx";
 import { ConfirmDialog } from "./sourceControl/ConfirmDialog.tsx";
 import { StartSessionDialog } from "./sourceControl/StartSessionDialog.tsx";
 
 /**
- * 源代码管理主视图 —— 激活单元仓库的「仓库总管」（ADR 0010）。
+ * 源代码管理页 —— 激活单元仓库的「仓库总管」（ADR 0010）。
+ *
+ * 2026-11-06 起住右侧标签面板（workspace 级单例 tab，内容跟随激活单元换仓，
+ * 与主视图时代同一语义）；左侧栏入口与 sourceControl 主视图已退役。
  *
  * 它不是三个入口之外的第四个入口，而是全景视图：分支 + 工作树 + 改动。
  * 三个入口回答三个各自的问题（在哪工作 / 要不要落库 / 改了什么），这里回答
@@ -64,9 +66,8 @@ function asRpcError(err: unknown): RpcErrorShape {
   return { message: String(err) };
 }
 
-/** 开终端并把用户带到看得见它的地方：sourceControl 视图下画布不在前台，
- *  只 createTab 的话标签建在后台、用户原地不动（Codex 评审 P2；
- *  docs/31 后 createTab 自带激活，无需视图切换） */
+/** 开终端并把用户带到看得见它的地方：终端标签建在会话画布上（docs/31 后
+ *  createTab 自带激活）；面板本身已在 chat 主视图，setMainView 只是防御 */
 function openTerminalAt(cwd: string, title: string): void {
   useTerminalStore.getState().createTab({ cwd, title });
   useShell.getState().setMainView("chat");
@@ -86,7 +87,7 @@ type Dialog =
   | { kind: "startSession"; wt: GitWorktree }
   | null;
 
-export function SourceControlPage() {
+export function SourceControlPage({ shown = true }: { shown?: boolean }) {
   const unit = useWorkbench(selectActiveUnit);
   const runtimes = useWorkbench((s) => s.runtimes);
   const activeRuntimeId = useWorkbench((s) => s.activeRuntimeId);
@@ -137,15 +138,17 @@ export function SourceControlPage() {
     setPendingDialog(null);
   }, [pendingDialog, setPendingDialog, unit]);
 
-  // 面板聚焦时刷新一次（从别处切回来看到的就不是旧数据）
+  // 面板聚焦时刷新一次（从别处切回来看到的就不是旧数据）。右栏保活挂载下
+  // tab 可能只是挂着不可见 —— 不可见不刷（一轮 refresh 是 4+ 个 git 进程）
   useEffect(() => {
+    if (!shown) return;
     const onFocus = (): void => {
       void refresh();
       void reloadChanges();
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [refresh, reloadChanges]);
+  }, [refresh, reloadChanges, shown]);
 
   /** 所有操作的统一外壳：busy 门闩 + 失败横幅 + 成功刷新 */
   const op = async (name: string, action: () => Promise<unknown>): Promise<boolean> => {
@@ -179,10 +182,9 @@ export function SourceControlPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-y-auto">
-      {/* 头部：仓库 + 当前分支状态。桌面端无边框窗口：整行是拖拽热区，
-          右侧行内 no-drag 占位让出窗口控制按钮带（兄弟悬浮的 no-drag 不参与
-          拖拽区减法，必须是本行子元素，见 TitleBarClearance） */}
-      <header className="titlebar-drag flex h-12 shrink-0 items-center gap-2.5 border-b border-line pl-4">
+      {/* 头部：仓库 + 当前分支状态。右栏宿主下窗口拖拽热区 / 窗口钮让位都在
+          面板自己的 tab 条上（SidePanePanel），这里只是普通内容行 */}
+      <header className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line pl-4 pr-2">
         <FolderGit2 size={15} className="shrink-0 text-teal" />
         <span className="truncate text-body font-medium text-ink" title={root}>
           {repoName}
@@ -202,8 +204,6 @@ export function SourceControlPage() {
             <RefreshCw size={14} className={loading || loadingChanges ? "animate-spin" : undefined} />
           </button>
         </div>
-        {/* 让出右上角窗口控制钮带（--wco-w；浏览器为 0 不占位） */}
-        <TitleBarClearance width="calc(var(--wco-w, 0px) + 1rem)" />
       </header>
 
       {/* 错误横幅（分支被别的工作树占用时给「打开那个工作树」出口） */}
