@@ -103,6 +103,13 @@ export interface BacklogRow {
 
 export class Store {
   private readonly db: DatabaseSync;
+  /**
+   * 认领集缓存（见 getClaimedSessionIds）：运行表里 session_id 的归属只在少数写入点
+   * 改动（运行记录的插入 / 补写会话 / 随任务删除），写入点递增版本号，版本未变就
+   * 复用上次的集合 —— 此前 unit.history 每次调用都全扫两张运行表重建。
+   */
+  private claimedRunsVersion = 0;
+  private claimedCache: { readonly version: number; readonly ids: ReadonlySet<string> } | null = null;
 
   constructor(homeDir: string) {
     mkdirSync(homeDir, { recursive: true });
@@ -164,6 +171,9 @@ export class Store {
         finished_at INTEGER,
         detail TEXT
       );
+      -- listAutomationRuns 按自动化取最近 N 条（unit.history / automation.list 都按
+      -- 自动化逐条调）：没有这个索引每次都是 automation_runs 全表扫，运行记录越攒越慢
+      CREATE INDEX IF NOT EXISTS idx_automation_runs_automation ON automation_runs(automation_id, id);
       -- 待办 / GTD（ADR-0001：独立建表，不复用 automations —— 待办的状态机
       -- 多出确认门 / 验收 / 休眠计数，塞同一张表两边都拧巴）。
       -- 状态机全落 DB：awaiting_confirm / executing 等中间态必须跨重启。
@@ -501,17 +511,25 @@ export class Store {
     return rows.map((r) => this.toRow(r));
   }
 
-  /** 影子行判定集专用：非导入会话的原生引用轻量列（不搬整行做 Set）。
-   *  source 可为 NULL（早期/常规会话，实测占大头）—— SQL 三值逻辑下
-   *  `source <> 'imported'` 会把 NULL 行整批排除，必须显式 IS NULL 兜住 */
-  listSessionNativeRefs(): Array<{ runtimeId: string; cliRef: string }> {
-    const rows = this.db
+  /** 影子行判定专用（unit.history 只对导入行逐条问）：同一原生会话（执行器 + cli_ref）
+   *  是否已被**非导入**的台账行认领。此前每次请求全扫 sessions 建整张集合，而真正
+   *  要判定的只有导入行。
+   *  - runtime_id 落库有裸 id / `daemon:` 前缀两种写法，两种都认（与原集合的归一同口径）；
+   *  - source 可为 NULL（早期/常规会话，实测占大头）—— SQL 三值逻辑下
+   *    `source <> 'imported'` 会把 NULL 行整批排除，必须显式 IS NULL 兜住；
+   *  - WHERE 逐字带上 idx_sessions_native_ref 的部分索引条件：SQLite 只在查询条件
+   *    字面蕴含索引条件时才用部分索引，否则退化成全表扫 */
+  hasNonImportedNativeRef(bareRuntimeId: string, cliRef: string): boolean {
+    const row = this.db
       .prepare(
-        `SELECT runtime_id, cli_ref FROM sessions
-         WHERE (source IS NULL OR source <> 'imported') AND cli_ref IS NOT NULL AND cli_ref <> ''`,
+        `SELECT 1 AS hit FROM sessions
+         WHERE cli_ref = ? AND cli_ref IS NOT NULL AND cli_ref <> ''
+           AND (runtime_id = ? OR runtime_id = ?)
+           AND (source IS NULL OR source <> 'imported')
+         LIMIT 1`,
       )
-      .all() as Array<{ runtime_id: string; cli_ref: string }>;
-    return rows.map((r) => ({ runtimeId: String(r.runtime_id), cliRef: String(r.cli_ref) }));
+      .get(cliRef, bareRuntimeId, `daemon:${bareRuntimeId}`);
+    return row !== undefined;
   }
 
   /** 最后一条消息的时间戳（0 = 一条都没有）。curator 的 idle 闸要用真实的对话活动 */
@@ -824,6 +842,7 @@ export class Store {
     // 先清运行记录再删主行：表上没有 FK 级联，不主动清就是孤儿行永久漏库
     // （批量删除 / 续跑自动清理都会高频走这里，泄漏会被放大）
     this.db.prepare(`DELETE FROM automation_runs WHERE automation_id = ?`).run(id);
+    this.claimedRunsVersion++;
     const result = this.db.prepare(`DELETE FROM automations WHERE id = ?`).run(id);
     return Number(result.changes) > 0;
   }
@@ -832,6 +851,7 @@ export class Store {
     const result = this.db
       .prepare(`INSERT INTO automation_runs (automation_id, session_id, status, trigger, started_at) VALUES (?, ?, 'running', ?, ?)`)
       .run(automationId, sessionId, trigger, Date.now());
+    this.claimedRunsVersion++;
     return Number(result.lastInsertRowid);
   }
 
@@ -841,11 +861,13 @@ export class Store {
       .prepare(`INSERT INTO automation_runs (automation_id, session_id, status, trigger, started_at, finished_at, detail)
                 VALUES (?, NULL, 'skipped', 'schedule', ?, ?, ?)`)
       .run(automationId, scheduledAt, Date.now(), reason);
+    this.claimedRunsVersion++;
     return Number(result.lastInsertRowid);
   }
 
   setAutomationRunSession(runId: number, sessionId: string): void {
     this.db.prepare(`UPDATE automation_runs SET session_id = ? WHERE id = ?`).run(sessionId, runId);
+    this.claimedRunsVersion++;
   }
 
   finishAutomationRun(runId: number, status: "done" | "failed", detail: string | null): void {
@@ -1053,6 +1075,7 @@ export class Store {
     // sweep 只认 pending 不会重链 —— 用事务收口（与 classifier 建任务同款防孤儿）
     return this.transaction(() => {
       this.db.prepare(`DELETE FROM backlog_runs WHERE item_id = ?`).run(id);
+      this.claimedRunsVersion++;
       // 清单条目还链着这个任务的话，链接一并断掉 —— 不然 LEFT JOIN 出 NULL 快照，
       // inboxRow 会把它捏造成「任务 #N · 就绪」的幽灵链接
       this.db.prepare(`UPDATE inbox_entries SET task_id = NULL, updated_at = ? WHERE task_id = ?`).run(Date.now(), id);
@@ -1065,11 +1088,13 @@ export class Store {
     const result = this.db
       .prepare(`INSERT INTO backlog_runs (item_id, session_id, runtime_id, status, trigger, started_at) VALUES (?, ?, ?, 'running', ?, ?)`)
       .run(itemId, sessionId, runtimeId, trigger, Date.now());
+    this.claimedRunsVersion++;
     return Number(result.lastInsertRowid);
   }
 
   setBacklogRunSession(runId: number, sessionId: string): void {
     this.db.prepare(`UPDATE backlog_runs SET session_id = ? WHERE id = ?`).run(sessionId, runId);
+    this.claimedRunsVersion++;
   }
 
   finishBacklogRun(runId: number, status: "done" | "failed", detail: string | null): void {
@@ -1404,18 +1429,23 @@ export class Store {
   /**
    * 被自动化或待办认领的全部会话 id（全量，不受单次列表 limit 截断限制）：
    * unit.history 合并时间轴时将会话条目去重，防止历史上的 headless 会话溢出成无标题杂项。
+   * 按运行表版本缓存（见 claimedRunsVersion）；返回**副本** —— 调用方会往里补登记，
+   * 不能污染缓存。
    */
   getClaimedSessionIds(): Set<string> {
-    const set = new Set<string>();
-    const aRows = this.db
-      .prepare(`SELECT session_id FROM automation_runs WHERE session_id IS NOT NULL AND session_id NOT LIKE 'autoterm_%'`)
-      .all() as Array<{ session_id: string }>;
-    for (const r of aRows) set.add(r.session_id);
-    const bRows = this.db
-      .prepare(`SELECT session_id FROM backlog_runs WHERE session_id IS NOT NULL AND session_id NOT LIKE 'autoterm_%'`)
-      .all() as Array<{ session_id: string }>;
-    for (const r of bRows) set.add(r.session_id);
-    return set;
+    if (this.claimedCache === null || this.claimedCache.version !== this.claimedRunsVersion) {
+      const set = new Set<string>();
+      const aRows = this.db
+        .prepare(`SELECT session_id FROM automation_runs WHERE session_id IS NOT NULL AND session_id NOT LIKE 'autoterm_%'`)
+        .all() as Array<{ session_id: string }>;
+      for (const r of aRows) set.add(r.session_id);
+      const bRows = this.db
+        .prepare(`SELECT session_id FROM backlog_runs WHERE session_id IS NOT NULL AND session_id NOT LIKE 'autoterm_%'`)
+        .all() as Array<{ session_id: string }>;
+      for (const r of bRows) set.add(r.session_id);
+      this.claimedCache = { version: this.claimedRunsVersion, ids: set };
+    }
+    return new Set(this.claimedCache.ids);
   }
 
   // ---- 记忆三柱（Phase 7，sqlite 后端）---------------------------------------

@@ -150,8 +150,16 @@ LayoutNode.leaf: { kind: "terminal", instanceId }       // 系统终端 / Agent 
   全链路零改动；焦点窗格（`ChatPaneSlot` live 态）直接渲染全局原班人马。
 - 非焦点窗格渲染 `useChatPanes` 注册表快照：失焦拍照（snapshotFromGlobal）
   + 事件泵转投（consumeEvents 原本丢弃的「已切走运行中会话」事件现在进
-  `routeEvent`）——分屏并排时后台窗格照常滚动；重新聚焦 = openSession
-  谱系回放权威重建，restoring 期间先渲染快照防闪。
+  `routeEvent`）——分屏并排时后台窗格照常滚动。重新聚焦 = **快照直通**
+  （2026-11-06 修订，对齐 orca「缓存直用」）：快照本就新鲜，
+  `adoptPaneSnapshot` 一次原子 set 提升为全局视图，零 RPC、当帧即 live，
+  谱系元数据后台去抖补齐（只补缺）；无可直通快照（F5 后未聚焦过 / 执行器
+  下线 / 窗格内切到别的段）才回落 openSession 谱系回放权威重建，restoring
+  期间先渲染快照防闪。每次聚焦先作废在途回放（视图令牌），回放在途的窗格
+  失焦不拍全局（全局此刻不属于它）。
+- 主视图切换（自动化/清单/出图）画布不卸载（2026-11-06）：mount-once latch +
+  hidden/inert；画布内挂全局键盘监听的组件（权限卡/问卷卡/对话内查找/斜杠
+  菜单）读 `CanvasVisibleContext`，隐藏期间不挂监听。
 - 画布 store：`LayoutNode` 泛化 `{leaf|chatLeaf|branch}`；焦点游标双轨互斥
   （`activeInstanceId` ↔ `activeChatPaneKey`），chat 窗格聚焦/关闭/最大化与
   终端平权；`useChatPanes.installChatPaneSync()` 订阅画布游标驱动快照/恢复。

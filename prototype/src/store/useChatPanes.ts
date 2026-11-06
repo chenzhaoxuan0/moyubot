@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { RuntimeEvent } from "../core/events.ts";
 import { asSessionId, asUnitId } from "../core/units.ts";
-import { useWorkbench, type TimelineItem } from "./useWorkbench.ts";
+import { invalidateSessionViews, useWorkbench, type TimelineItem } from "./useWorkbench.ts";
 import { useShell } from "./useShell.ts";
 
 /**
@@ -14,9 +14,12 @@ import { useShell } from "./useShell.ts";
  * - 非焦点 chat 窗格渲染本注册表里的快照时间线：失焦那一刻从全局拍照，
  *   之后由事件泵把「已切走的运行中会话」事件实时追加进来（consumeEvents
  *   原本丢弃这些事件，现在转投到这里）——分屏并排时后台窗格照常滚动；
- * - 重新聚焦 = snapshot 旧窗格 → selectUnit/openSession 权威重建（谱系回放）
- *   → restoring 期间先渲染快照防闪 → 回落全局。关窗格不杀会话（对话没有
- *   进程可杀，历史永远可回）。
+ * - 重新聚焦 = snapshot 旧窗格 → **快照直通**：快照本就是新鲜的（失焦拍照 +
+ *   泵实时追加），同步提升为全局视图即可，零 RPC、切换当帧即 live（orca
+ *   「缓存直用」同款，docs/31 §九 修订）；谱系元数据后台去抖补齐。没有可
+ *   直通的快照（F5 后未聚焦过 / 执行器下线）才回落 selectUnit/openSession
+ *   权威重建（谱系回放），restoring 期间先渲染快照防闪 → 回落全局。
+ *   关窗格不杀会话（对话没有进程可杀，历史永远可回）。
  *
  * 窗格身份（docs/31 §四）：paneKey 永不变（map 主键）；用户感知的「一个会话」
  * = 一条会话线（conversationId），knownSessionIds 收录该线到过的所有段 id，
@@ -32,10 +35,17 @@ export interface ChatPaneRecord {
   lineageId: string | null;
   /** 本线已知段 id 集（找窗格与事件路由的匹配面） */
   knownSessionIds: ReadonlySet<string>;
+  /**
+   * 执行器 id（侧栏历史行打开时带入 / 失焦快照时从 sessions[] 补）：快照直通的
+   * 门禁与冷启动回放的 runtimeIdOfSession 提示都靠它，缺了就得多一次台账往返
+   */
+  runtimeId?: string;
   /** 非焦点窗格的渲染数据：失焦快照 + 泵实时追加 */
   timeline: readonly TimelineItem[];
   busy: boolean;
   draft: string;
+  /** 失焦时的输入历史（快照直通时原样归还；后台期间没有本窗格的输入，不会过期） */
+  inputHistory: readonly string[];
   /** 聚焦恢复中（openSession 在途）：先渲染快照，防全局清空闪一下 */
   restoring: boolean;
 }
@@ -86,22 +96,34 @@ function nextPaneKey(): string {
 }
 
 /** 窗格记录工厂（openChatPane / restoreRecord / createDraftRecord 三入口共用） */
-function makeRecord(unitId: string, sessionId: string | null): ChatPaneRecord {
+function makeRecord(unitId: string, sessionId: string | null, runtimeId?: string): ChatPaneRecord {
   return {
     paneKey: nextPaneKey(),
     unitId,
     sessionId,
     lineageId: sessionId !== null ? (lineageOfSession(sessionId) ?? sessionId) : null,
     knownSessionIds: sessionId !== null ? new Set([sessionId]) : new Set(),
+    ...(runtimeId !== undefined && runtimeId !== "" ? { runtimeId } : {}),
     timeline: [],
     busy: false,
     draft: "",
+    inputHistory: [],
     restoring: false,
   };
 }
 
 /** 快照时间线的本地序号（负数段，与全局 seq 空间天然隔离不撞 key） */
 let routeSeq = 0;
+
+/** 输入历史上限 —— 与 useWorkbench 的 INPUT_HISTORY_CAP 同口径（终端 HISTSIZE 同位） */
+const INPUT_HISTORY_CAP = 200;
+
+/**
+ * 每窗格的冷启动回放代次：同一窗格回放在途时又被聚焦（不耐烦再点一次），旧回放
+ * 已被视图令牌作废、不会落位，但它的收尾仍会跑 —— 不比代次就会清掉新回放的
+ * restoring，窗格提前转 live 渲染全局里别人的会话。
+ */
+const restoreGen = new Map<string, number>();
 
 /** 由段 id 查会话线：sessions[] 里 openSession 回放时已聚了整线（含 conversationId） */
 function lineageOfSession(sessionId: string): string | null {
@@ -157,7 +179,7 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
       get().focus(existing.paneKey, sid);
       return;
     }
-    const record = makeRecord(input.unitId, sid);
+    const record = makeRecord(input.unitId, sid, input.runtimeId);
     set((s) => ({ panes: { ...s.panes, [record.paneKey]: record } }));
     // 画布开标签：createChatTab 会把游标翻到新窗格 → 订阅链（installChatPaneSync）
     // 触发 focus 恢复。标签标题在挂载侧按 unit 名校正。
@@ -194,6 +216,7 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
   },
 
   handlePaneClosed: (paneKey) => {
+    restoreGen.delete(paneKey);
     set((s) => {
       if (s.panes[paneKey] === undefined) return {};
       const next = { ...s.panes };
@@ -217,6 +240,18 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
       if (event.type === "session.status") busy = event.status === "running";
       if (event.type === "session.ended") busy = false;
       if (event.type === "message.completed") busy = false;
+      // 输入历史同步补一笔（review P2）：后台期间的队列自动投递 / 渠道发起的用户轮
+      // 只进时间线不进 inputHistory 的话，快照直通归还的 ↑ 召回会缺这几句
+      //（openSession 路径从账本重建不缺）。口径对齐 useWorkbench 的 pushInputHistory：
+      // 空串不入史、连续重复去重、上限 200
+      let inputHistory = p.inputHistory;
+      if (event.type === "message.delta" && event.role === "user") {
+        const t = event.text.trim();
+        if (t !== "" && inputHistory[inputHistory.length - 1] !== t) {
+          inputHistory = [...inputHistory, t];
+          if (inputHistory.length > INPUT_HISTORY_CAP) inputHistory = inputHistory.slice(-INPUT_HISTORY_CAP);
+        }
+      }
       return {
         panes: {
           ...s.panes,
@@ -224,6 +259,7 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
             ...p,
             timeline,
             busy,
+            inputHistory,
             knownSessionIds: p.knownSessionIds.has(sid)
               ? p.knownSessionIds
               : new Set([...p.knownSessionIds, sid]),
@@ -249,7 +285,10 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
 
   focus: (paneKey, sessionOverride) => {
     const prevKey = get().focusedChatKey;
-    // ① 旧焦点窗格拍照入注册表（全局态此刻还属于它）
+    // ⓪ 新的视图意图：先作废所有在途的冷启动回放（早退/未选 bot 草稿分支不经
+    // openSession 等令牌入口，不作废的话旧回放落位会盖掉刚点回的窗格）
+    invalidateSessionViews();
+    // ① 旧焦点窗格拍照入注册表（全局态此刻还属于它；它自己回放在途时除外，见 snapshotFromGlobal）
     if (prevKey !== null && prevKey !== paneKey) get().snapshotFromGlobal(prevKey);
     set({ focusedChatKey: paneKey });
     useShell.getState().setMainView("chat");
@@ -284,7 +323,13 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
       );
       return;
     }
-    // ③ 有段：全局已指向它（路由回放/重复点击）就不重放，否则 openSession 权威重建
+    // ②' 有段窗格的草稿同样随窗格归还（review P2）：此前切窗格不清不还，A 的未发送
+    // 文字会留在 B 的输入框里（此时发出去就进错会话）。旧窗格的草稿刚在 ① 拍走，
+    // 这里覆盖安全；直通与冷启动回放两条落位路径都不写 draft，这处写入即终值。
+    // 例外：同窗格重复点击（③ 早退）且不在回放中 —— 窗格正持有全局链路，输入框里
+    // 就是它此刻的草稿，还旧快照等于把正在打的字冲掉
+    if (prevKey !== paneKey || pane.restoring) useWorkbench.setState({ draft: pane.draft });
+    // ③ 有段：全局已指向它（路由回放/重复点击）就不重放
     const wb = useWorkbench.getState();
     if (String(wb.activeSessionId ?? "") === targetSid) {
       set((s) =>
@@ -294,19 +339,49 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
       );
       return;
     }
+    // ③' 快照直通（orca「缓存直用」）：快照对应的正是目标段且非空 —— 失焦拍照
+    // + 泵实时追加，本就是新鲜的 —— 同步提升为全局视图，零 RPC、当帧即 live。
+    // 窗格内切到**别的段**（sessionOverride ≠ 窗格段）时快照不是它的，不能直通。
+    // 门禁不过（单元已删 / 执行器下线）回落 ④；谱系元数据后台去抖补齐
+    if (targetSid === pane.sessionId && pane.timeline.length > 0) {
+      const adopted = wb.adoptPaneSnapshot({
+        unitId: pane.unitId,
+        sessionId: targetSid,
+        runtimeId: pane.runtimeId,
+        timeline: pane.timeline,
+        busy: pane.busy,
+        inputHistory: pane.inputHistory,
+      });
+      if (adopted) {
+        if (pane.restoring) {
+          set((s) =>
+            s.panes[paneKey]
+              ? { panes: { ...s.panes, [paneKey]: { ...s.panes[paneKey]!, restoring: false } } }
+              : {},
+          );
+        }
+        wb.refreshSessionMetadata(targetSid, pane.unitId);
+        return;
+      }
+    }
+    // ④ 冷启动回放（F5 后未聚焦过 / 直通门禁不过）：openSession 权威重建
     set((s) =>
       s.panes[paneKey]
         ? { panes: { ...s.panes, [paneKey]: { ...s.panes[paneKey]!, restoring: true } } }
         : {},
     );
+    // runtimeId 提示只在目标段就是窗格自己的段时可信（窗格内切段时提示属于别段）；
+    // 有提示就省掉 runtimeIdOfSession 兜底的那次全量台账往返
+    const runtimeHint = targetSid === pane.sessionId ? pane.runtimeId : undefined;
+    const gen = (restoreGen.get(paneKey) ?? 0) + 1;
+    restoreGen.set(paneKey, gen);
     void (async () => {
-      const runtimeId = await runtimeIdOfSession(targetSid);
+      const runtimeId = await runtimeIdOfSession(targetSid, runtimeHint);
+      // 被同窗格更新的回放顶替：收尾归新回放（见 restoreGen）
+      if (restoreGen.get(paneKey) !== gen) return;
       if (runtimeId === null) {
-        set((s) =>
-          s.panes[paneKey]
-            ? { panes: { ...s.panes, [paneKey]: { ...s.panes[paneKey]!, restoring: false } } }
-            : {},
-        );
+        // 不清 restoring（review P1，存量）：全局还属于别的窗格，清了这里会转 live
+        // 渲染别人的会话、输入框能打字发进去。保持快照态，警示条说明原因
         useWorkbench
           .getState()
           .pushNotice("打不开这个对话窗格", `台账里查不到会话 ${targetSid} 的执行器。`, { level: "warn" });
@@ -318,10 +393,15 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
         unitId: owner !== undefined ? asUnitId(pane.unitId) : wb.activeUnitId,
         runtimeId,
       });
-      // 回放期间焦点又走了：快照已由新 focus 链拍照，这里只清自己的在途标记
+      // 回放期间焦点又走了：快照已由新 focus 链拍照，这里只清自己的在途标记。
+      // 被同窗格更新的回放顶替时不清 —— 新回放还在途，清了窗格会提前转 live、
+      // 渲染全局里别人的会话（此时打字会发进别人的会话）。
+      // 回放失败（执行器下线/台账缺行，openSession 内部有各自的早退+警示）同样
+      // 不清：全局从未落到目标段，清了同样转 live 渲染别人的会话（review P1，存量）
       set((s) => {
         const p = s.panes[paneKey];
-        if (p === undefined || get().focusedChatKey !== paneKey) return {};
+        if (p === undefined || get().focusedChatKey !== paneKey || restoreGen.get(paneKey) !== gen) return {};
+        if (String(useWorkbench.getState().activeSessionId ?? "") !== targetSid) return {};
         return { panes: { ...s.panes, [paneKey]: { ...p, restoring: false } } };
       });
     })();
@@ -332,7 +412,19 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
     set((s) => {
       const pane = s.panes[paneKey];
       if (pane === undefined) return {};
+      // 冷启动回放在途（restoring）：全局此刻还属于上一个窗格，拍下来会把别人的
+      // 会话身份与时间线盖进本窗格。只清在途标记、保留本窗格原有快照 —— 在途的
+      // 回放已被新焦点链作废（focus ⓪），不会再落位。
+      // 「未选 bot」窗格同口径（review P3，存量）：它聚焦时不切单元，全局还属于
+      // 上一个窗格，认领会把别人的会话写进它的 sessionId（之后聚焦被当成那个
+      // 会话的窗格）。保持草稿身份，选完 bot 自然成草稿对话
+      if (pane.restoring || pane.unitId === "") {
+        return { panes: { ...s.panes, [paneKey]: { ...pane, restoring: false } } };
+      }
       const sid = wb.activeSessionId !== null ? String(wb.activeSessionId) : pane.sessionId;
+      // 执行器以该段台账行为准：窗格内换执行器续聊会开新段，打开时带入的 id 已过期
+      const row = sid !== null ? wb.sessions.find((x) => String(x.id) === sid) : undefined;
+      const runtimeId = row !== undefined ? String(row.runtimeId) : pane.runtimeId;
       return {
         panes: {
           ...s.panes,
@@ -345,9 +437,11 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
               sid !== null && !pane.knownSessionIds.has(sid)
                 ? new Set([...pane.knownSessionIds, sid])
                 : pane.knownSessionIds,
+            ...(runtimeId !== undefined ? { runtimeId } : {}),
             timeline: wb.timeline,
             busy: wb.busy,
             draft: wb.draft,
+            inputHistory: wb.inputHistory,
           },
         },
       };
@@ -402,8 +496,15 @@ export function installChatPaneSync(): () => void {
         const rowLineage = row.conversationId != null ? String(row.conversationId) : String(row.id);
         if (rowLineage === lineage) known.add(String(row.id));
       }
+      // 执行器跟着新段走（换执行器续聊开的段）：台账行未到就取当前执行器——新段
+      // 正是用它开的。快照直通/冷启动回放的执行器提示都读这一位
+      const segRow = wb.sessions.find((x) => String(x.id) === sid);
+      const runtimeId = segRow !== undefined ? String(segRow.runtimeId) : wb.activeRuntimeId;
       useChatPanes.setState((s) => ({
-        panes: { ...s.panes, [key]: { ...pane, sessionId: sid, lineageId: lineage, knownSessionIds: known } },
+        panes: {
+          ...s.panes,
+          [key]: { ...pane, sessionId: sid, lineageId: lineage, knownSessionIds: known, runtimeId },
+        },
       }));
     }
   });

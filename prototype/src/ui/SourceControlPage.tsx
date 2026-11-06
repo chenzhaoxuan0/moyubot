@@ -122,14 +122,19 @@ export function SourceControlPage({ shown = true }: { shown?: boolean }) {
   const sessionWorktreeSupported = activeRuntime?.capabilities.worktrees === true;
 
   // 跟随激活单元换仓库（key 用 rootPath：unit 对象身份每次 units 重建都变，
-  // 拿它当依赖会让无关的列表刷新都触发一轮 4+ git 进程的 refresh）
+  // 拿它当依赖会让无关的列表刷新都触发一轮 4+ git 进程的 refresh）。
+  // shown 门控（DiffPane 同款）：右栏保活挂载下 tab 可能只是挂着不可见 / 右栏
+  // 收起 —— 此前每次切 bot 都在后台起 4+ 个 git 进程，和会话回放抢同一条 daemon
+  // 连接。不可见时不绑；重新可见时 shown 翻真，按当下的仓库补绑（同仓库即一轮
+  // refresh，正好「切回来看到的不是旧数据」）。提交/推送对话框与 DiffPane 各自
+  // 绑定仓库，不依赖这里的跟随
   const unitRootPath = unit?.rootPath;
   useEffect(() => {
-    if (unitRootPath !== undefined) openRepo(unitRootPath);
-  }, [unitRootPath, openRepo]);
+    if (shown && unitRootPath !== undefined) openRepo(unitRootPath);
+  }, [shown, unitRootPath, openRepo]);
   useEffect(() => {
-    if (unitRootPath !== undefined) openChangesRepo(unitRootPath);
-  }, [unitRootPath, openChangesRepo]);
+    if (shown && unitRootPath !== undefined) openChangesRepo(unitRootPath);
+  }, [shown, unitRootPath, openChangesRepo]);
 
   // 没有激活单元时不消费：留着等单元就绪后面板挂载时再弹，而不是静默吞掉
   useEffect(() => {

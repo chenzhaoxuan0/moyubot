@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { useContext, useEffect, useRef, useState, type ReactElement } from "react";
 import { ChevronDown, ChevronUp, PenLine, X } from "lucide-react";
 import { useWorkbench } from "../../../store/useWorkbench.ts";
 import { useShell } from "../../../store/useShell.ts";
 import { useIsMobile } from "../../mobile/useIsMobile.ts";
+import { CanvasVisibleContext } from "../../canvasVisibility.ts";
 import { cn } from "../../cn.ts";
 import type { RuntimeEvent } from "../../../core/events.ts";
 
@@ -35,6 +36,7 @@ export function QuestionnaireComposer({
 }): ReactElement {
   const { isMobile } = useIsMobile();
   const chatColumnWidth = useShell((s) => s.chatColumnWidth);
+  const canvasVisible = useContext(CanvasVisibleContext);
   const run = useWorkbench((s) => s.run);
   const activeSessionId = useWorkbench((s) => s.activeSessionId);
   const setDraft = useWorkbench((s) => s.setDraft);
@@ -187,8 +189,10 @@ export function QuestionnaireComposer({
     (ans) => ans.selectedKeys.size > 0 || ans.customInput.trim() !== "",
   );
 
-  // 键盘快捷键监听：A/B/C/D、方向键选择与 Enter 提交
+  // 键盘快捷键监听：A/B/C/D、方向键选择与 Enter 提交。画布隐藏期间（其他主视图）
+  // 不挂 —— 否则在别的页打字会选中/提交/关掉看不见的问卷（见 CanvasVisibleContext）
   useEffect(() => {
+    if (!canvasVisible) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const activeTag = (document.activeElement?.tagName ?? "").toLowerCase();
       const inInput = activeTag === "input" || activeTag === "textarea";
@@ -235,7 +239,7 @@ export function QuestionnaireComposer({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentStep, currentAnswer, canGoNext, hasCurrentAnswer, hasAnyAnswer, isInputActive]);
+  }, [currentStep, currentAnswer, canGoNext, hasCurrentAnswer, hasAnyAnswer, isInputActive, canvasVisible]);
 
   const handleSubmit = () => {
     const payloads: string[] = [];

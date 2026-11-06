@@ -112,7 +112,11 @@ export const TerminalPaneSlot = memo(function TerminalPaneSlot({ pane }: { pane:
     }
   }, [isActive, pane.id]);
 
-  // 当外观主题切换、或从设置页面退出返回工作台时，立即同步窗格主题与画布重绘
+  // 当外观主题切换、或从设置页面退出返回工作台时，立即同步窗格主题与画布重绘。
+  // 不依赖 isActive：此前每次切标签，新旧两个活跃终端各跑一遍 applyTheme（12 个
+  // CSS 变量读取 + 3 次全量 refresh + 强制 fit），切换路径白白多出两轮重绘。
+  // 切标签的聚焦由上面那条 isActive effect 负责；这里的 focus 只服务「设置页关闭」，
+  // 运行时读的是当次渲染的 isActive，不是陈旧闭包
   useEffect(() => {
     const session = terminalSessionRegistry.get(pane.id);
     if (!session) return;
@@ -120,7 +124,8 @@ export const TerminalPaneSlot = memo(function TerminalPaneSlot({ pane }: { pane:
     if (isActive && !settingsOpen) {
       session.focus();
     }
-  }, [resolvedTheme, terminalTransparency, settingsOpen, pane.id, isActive]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- isActive 刻意不进依赖：切标签不该触发主题重绘（见上）
+  }, [resolvedTheme, terminalTransparency, settingsOpen, pane.id]);
 
   return (
     <div

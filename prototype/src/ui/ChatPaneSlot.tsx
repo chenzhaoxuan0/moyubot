@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { MessageSquarePlus } from "lucide-react";
+import { Loader2, MessageSquarePlus } from "lucide-react";
 import { useChatPanes } from "../store/useChatPanes.ts";
 import { useTerminalStore } from "../store/useTerminalStore.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
@@ -73,12 +73,26 @@ export const ChatPaneSlot = memo(function ChatPaneSlot({ paneKey }: { paneKey: s
           />
           {/* 休眠输入框：占住输入区的位置与外观，点击即接管 live（焦点链
               openSession 回放后换成真 Composer）——并排时两侧版式一致 */}
-          <DormantComposer chatColumnWidth={chatColumnWidth} unitName={unit?.name} onActivate={activate} />
+          <DormantComposer
+            chatColumnWidth={chatColumnWidth}
+            unitName={unit?.name}
+            restoring={pane.restoring}
+            onActivate={activate}
+          />
           {pane.timeline.length === 0 &&
             (pane.sessionId === null ? (
               /* 草稿：本窗格 bot 的空态头像与问候（全局此刻属于别的对话格） */
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center pb-32">
                 <EmptyState unit={unit} />
+              </div>
+            ) : pane.restoring ? (
+              /* 冷启动回放在途（无快照可直通）：明确是「正在同步」——此前这里
+                 显示「点击窗格加载会话」，用户点完就看到这句，以为没点上 */
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center pb-32">
+                <span className="flex items-center gap-2 rounded-btn border border-line/60 bg-card px-3 py-1.5 text-caption text-ash shadow-sm">
+                  <Loader2 size={11} className="shrink-0 animate-spin text-teal" />
+                  正在同步会话…
+                </span>
               </div>
             ) : (
               /* F5 后还没聚焦过的窗格没有快照：明确的「点这里加载」，免得
@@ -99,15 +113,18 @@ export const ChatPaneSlot = memo(function ChatPaneSlot({ paneKey }: { paneKey: s
 
 /**
  * 休眠输入框 —— 快照态对话格的输入区占位：与 Composer 同列宽同圆角，文案提示
- * 点击接管。不承载输入（全局 Composer 属于 live 的那个对话格）。
+ * 点击接管。不承载输入（全局 Composer 属于 live 的那个对话格）。冷启动回放
+ * 在途（restoring）时换成「正在同步」并禁用——接管动作已经在路上了。
  */
 function DormantComposer({
   chatColumnWidth,
   unitName,
+  restoring,
   onActivate,
 }: {
   chatColumnWidth: number;
   unitName: string | undefined;
+  restoring: boolean;
   onActivate: () => void;
 }) {
   return (
@@ -115,10 +132,24 @@ function DormantComposer({
       <button
         type="button"
         onClick={onActivate}
-        className="mx-auto flex w-full items-center rounded-panel border border-line/70 bg-card px-4 py-3 text-left text-body-sm text-ash shadow-subtle transition hover:border-teal/40 hover:text-graphite"
+        disabled={restoring}
+        aria-busy={restoring || undefined}
+        className={cn(
+          "mx-auto flex w-full items-center gap-2 rounded-panel border border-line/70 bg-card px-4 py-3 text-left text-body-sm text-ash shadow-subtle transition",
+          restoring ? "cursor-progress" : "hover:border-teal/40 hover:text-graphite",
+        )}
         style={{ maxWidth: chatColumnWidth }}
       >
-        {unitName ? `点击继续与「${unitName}」对话…` : "点击继续对话…"}
+        {restoring ? (
+          <>
+            <Loader2 size={12} className="shrink-0 animate-spin text-teal" />
+            正在同步会话…
+          </>
+        ) : unitName ? (
+          `点击继续与「${unitName}」对话…`
+        ) : (
+          "点击继续对话…"
+        )}
       </button>
     </div>
   );

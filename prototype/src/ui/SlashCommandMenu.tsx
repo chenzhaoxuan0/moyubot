@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Loader2, Sparkles, SquareSlash } from "lucide-react";
 import type { NativeCommandInfo } from "../core/adapter.ts";
+import { CanvasVisibleContext } from "./canvasVisibility.ts";
 import { cn } from "./cn.ts";
 
 /**
@@ -116,12 +117,16 @@ export function SlashCommandMenu({ filter, onSelect, onClose, native }: SlashCom
 
   const [activeIndex, setActiveIndex] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  // 菜单开着时切到别的主视图：画布只是隐藏（mount-once latch），不挂监听 ——
+  // 别吞那些页的 Enter/Tab/方向键（见 CanvasVisibleContext）
+  const canvasVisible = useContext(CanvasVisibleContext);
 
   useEffect(() => {
     setActiveIndex(0);
   }, [filter, flat.length]);
 
   useEffect(() => {
+    if (!canvasVisible) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       // 这个 effect 挂在早退 return 之前（hooks 顺序不能变），「菜单没内容」
       // 必须在处理函数里自己挡掉：否则输入框里的 ↑↓ 会被 preventDefault 吞掉。
@@ -147,7 +152,7 @@ export function SlashCommandMenu({ filter, onSelect, onClose, native }: SlashCom
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [flat, activeIndex, onSelect, onClose]);
+  }, [flat, activeIndex, onSelect, onClose, canvasVisible]);
 
   // 点击外部收起菜单
   useEffect(() => {

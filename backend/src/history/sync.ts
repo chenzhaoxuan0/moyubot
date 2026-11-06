@@ -50,9 +50,95 @@ const sessionNativeSyncedCounts = new Map<string, number>();
 // 会话只允许一个在途同步，后来的调用共享同一个 Promise。
 const nativeSyncInFlight = new Map<string, Promise<SyncOutcome>>();
 
+/**
+ * 同步落定时的原生源文件签名（mtime+size）。下次同步前 stat 一下，签名没变 =
+ * 账本相对源文件已是最新，可以跳过 readNativeSession 的全量同步解析（大会话
+ * 10MB+ 转录秒级——此前冷打开每次都付，watcher 首探再付一遍）。
+ * sig = null：读期间源文件可能在变（见 QUIET_MS），签名不可信，下次照常全量。
+ * ref：记签名时的原生引用——会话重新接回到另一条原生会话时，旧文件不再是它的源。
+ */
+const syncedSource = new Map<string, { ref: string; file: string; sig: string | null }>();
+
+/**
+ * 签名可信的安静窗口：源文件最后修改早于「开始读」2s 以上，读后 stat 的签名才
+ * 认作与所读内容一致。读+解析大文件要秒级，期间外部追加的内容不在这份 detail
+ * 里——取读后签名会把这段追加永久判成「已同步」。2s 覆盖秒级 mtime 粒度的文件
+ * 系统；正在被写的会话一律不认，照常全量同步（watcher 的签名变化会接住它）。
+ */
+const QUIET_MS = 2000;
+
+function refKey(ref: NativeSessionRef): string {
+  return `${ref.executorId}\u0000${ref.cliRef}`;
+}
+
+/** 定位一条原生会话：store 行的 cliRef 优先，imp_ 隐式 id 兜底；都没有返回 null */
+function nativeRefOf(sessionId: string, row: ReturnType<Store["getSession"]>): NativeSessionRef | null {
+  if (row !== undefined && row.cliRef !== null && row.cliRef !== "") {
+    return { executorId: row.runtimeId.replace(/^daemon:/, ""), cliRef: row.cliRef };
+  }
+  return parseImplicitSessionId(sessionId);
+}
+
+/**
+ * 源文件定位口径与 watcher 一致：目录形态的源取其下 messages.jsonl。目录里没有
+ * messages.jsonl 的（grok 等把转录放在 chat_history.jsonl / updates.jsonl）返回
+ * null —— 目录自身的 mtime+size 不随文件追加变化，拿它当签名会让 nativeLedgerFresh
+ * 永真、外部追加永久漏同步，宁可不留签名（回落每次全量同步的旧行为）
+ */
+function sourceFileOf(detail: NativeSessionDetail): string | null {
+  if (!detail.source) return null;
+  const nested = path.join(detail.source, "messages.jsonl");
+  if (existsSync(nested)) return nested;
+  if (!existsSync(detail.source)) return null;
+  try {
+    if (statSync(detail.source).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  return detail.source;
+}
+
+/** 同步落定后记下源文件签名；readStartedAt 缺省（来源不明的快照）= 签名不可信 */
+function noteSyncedSource(sessionId: string, ref: NativeSessionRef, detail: NativeSessionDetail, readStartedAt: number | undefined): void {
+  const file = sourceFileOf(detail);
+  if (file === null) {
+    syncedSource.delete(sessionId);
+    return;
+  }
+  let sig: string | null = null;
+  if (readStartedAt !== undefined) {
+    try {
+      const st = statSync(file);
+      if (st.mtimeMs < readStartedAt - QUIET_MS) sig = `${st.mtimeMs}_${st.size}`;
+    } catch {
+      // stat 失败：签名不认
+    }
+  }
+  syncedSource.set(sessionId, { ref: refKey(ref), file, sig });
+}
+
+/**
+ * 该会话的账本相对原生源文件是否已是最新（session.events.since 的同步快路径）：
+ * 上次同步落定时记下的可信签名与此刻 stat 一致、原生引用没换过即是。没同步过 /
+ * 签名不可信 / 源文件没了或变过，一律 false（调用方走全量同步）。
+ */
+export function nativeLedgerFresh(sessionId: string, store: Store): boolean {
+  const rec = syncedSource.get(sessionId);
+  if (rec === undefined || rec.sig === null) return false;
+  const ref = nativeRefOf(sessionId, store.getSession(sessionId));
+  if (ref === null || refKey(ref) !== rec.ref) return false;
+  try {
+    const st = statSync(rec.file);
+    return `${st.mtimeMs}_${st.size}` === rec.sig;
+  } catch {
+    return false;
+  }
+}
+
 /** 收回某会话的同步游标（session.forget 回收路径调用，防 Map 只增不减） */
 export function forgetNativeSyncState(sessionId: string): void {
   sessionNativeSyncedCounts.delete(sessionId);
+  syncedSource.delete(sessionId);
 }
 
 export function syncNativeSession(
@@ -61,10 +147,12 @@ export function syncNativeSession(
   traceSink: TraceSink,
   wss?: WebSocketServer,
   snapshot?: NativeSessionDetail | null,
+  /** 快照是何时开始读的（watcher 传）：签名可信度判据，见 QUIET_MS */
+  snapshotReadAt?: number,
 ): Promise<SyncOutcome> {
   const inFlight = nativeSyncInFlight.get(sessionId);
   if (inFlight !== undefined) return inFlight;
-  const p = performNativeSync(sessionId, store, traceSink, wss, snapshot).finally(() => {
+  const p = performNativeSync(sessionId, store, traceSink, wss, snapshot, snapshotReadAt).finally(() => {
     if (nativeSyncInFlight.get(sessionId) === p) nativeSyncInFlight.delete(sessionId);
   });
   nativeSyncInFlight.set(sessionId, p);
@@ -77,29 +165,20 @@ async function performNativeSync(
   traceSink: TraceSink,
   wss: WebSocketServer | undefined,
   snapshot: NativeSessionDetail | null | undefined,
+  snapshotReadAt: number | undefined,
 ): Promise<SyncOutcome> {
   const s = store.getSession(sessionId);
-  let executorId = "";
-  let cliRef = "";
-
-  if (s !== undefined && s.cliRef !== null && s.cliRef !== "") {
-    executorId = s.runtimeId.replace(/^daemon:/, "");
-    cliRef = s.cliRef;
-  } else {
-    const implicit = parseImplicitSessionId(sessionId);
-    if (implicit !== null) {
-      executorId = implicit.executorId;
-      cliRef = implicit.cliRef;
-    }
-  }
-
-  if (!executorId || !cliRef) {
+  const ref = nativeRefOf(sessionId, s);
+  if (ref === null || !ref.executorId || !ref.cliRef) {
     return { changed: false, newMessages: 0 };
   }
+  const { executorId, cliRef } = ref;
 
   // watcher 已在探测时读过一份就直传，避免同一变更周期里重复 readNativeSession
   let detail: NativeSessionDetail | null | undefined = snapshot;
+  let readStartedAt = snapshotReadAt;
   if (detail === undefined) {
+    readStartedAt = Date.now();
     try {
       detail = await readNativeSession(executorId, cliRef);
     } catch (err: unknown) {
@@ -109,6 +188,7 @@ async function performNativeSync(
   }
 
   if (!detail || !Array.isArray(detail.transcript) || detail.transcript.length === 0) {
+    if (detail) noteSyncedSource(sessionId, ref, detail, readStartedAt);
     return { changed: false, newMessages: 0 };
   }
 
@@ -133,8 +213,9 @@ async function performNativeSync(
     sessionNativeSyncedCounts.set(sessionId, currentCount);
   }
 
-  // 如果原生消息条数没有增加，更新状态后返回
+  // 如果原生消息条数没有增加，更新状态后返回（账本相对这份源已是最新：记签名）
   if (nativeCount <= currentCount) {
+    noteSyncedSource(sessionId, ref, detail, readStartedAt);
     if (s && detail.updatedAt > (s.endedAt ?? 0)) {
       store.setSessionStatus(s.id, s.status, detail.updatedAt, {
         ...s.stats,
@@ -238,8 +319,9 @@ async function performNativeSync(
     for (const f of frames) broadcastEvent(wss, f.ev, f.seq);
   }
 
-  // 更新已同步游标
+  // 更新已同步游标（投影已落账：账本相对这份源已是最新，记签名）
   sessionNativeSyncedCounts.set(sessionId, nativeCount);
+  noteSyncedSource(sessionId, ref, detail, readStartedAt);
 
   if (s) {
     store.setSessionStatus(s.id, s.status, detail.updatedAt, {
@@ -355,6 +437,24 @@ export class NativeSessionWatcher {
       if (sid.startsWith("imp_") && this.watchedSessionIds.has(sid)) continue;
       sessionNativeSyncedCounts.delete(sid);
     }
+    for (const sid of [...syncedSource.keys()]) {
+      if (alive.has(sid)) continue;
+      if (sid.startsWith("imp_") && this.watchedSessionIds.has(sid)) continue;
+      syncedSource.delete(sid);
+    }
+  }
+
+  /**
+   * 同步器已记下可信签名的源文件（RPC 路径刚同步过）：直接认作本 watcher 的已知
+   * 文件，首探走 stat 快路径——此前冷打开一个会话要付两次全量解析（RPC 同步
+   * 一次、watchSession 触发的首探再一次）。签名不可信 / 原生引用换过不接管。
+   */
+  private adoptSyncedSource(sid: string, ref: string): string | undefined {
+    const rec = syncedSource.get(sid);
+    if (rec === undefined || rec.sig === null || rec.ref !== ref) return undefined;
+    this.sessionFiles.set(sid, rec.file);
+    this.fileSignatures.set(rec.file, rec.sig);
+    return rec.file;
   }
 
   private async poll(): Promise<void> {
@@ -383,7 +483,8 @@ export class NativeSessionWatcher {
         // 对每个被关注会话做一次全量 readNativeSession（只为算签名）——大会话
         // （10MB+ 转录）同步解析要秒级，等于把 daemon 主循环卡成常数级停顿，
         // 前端所有 RPC 跟着遭殃。变了（或缓存失位）才走慢路径全量读。
-        const knownFile = this.sessionFiles.get(sid);
+        // 首探也先问同步器：RPC 路径刚同步过的会话直接接管其可信签名
+        const knownFile = this.sessionFiles.get(sid) ?? this.adoptSyncedSource(sid, refKey({ executorId: bareExec, cliRef }));
         if (knownFile !== undefined) {
           try {
             const kst = statSync(knownFile);
@@ -394,6 +495,8 @@ export class NativeSessionWatcher {
           }
         }
 
+        // 读开始时刻随快照交给同步器：签名可信度的判据（见 QUIET_MS）
+        const readAt = Date.now();
         const detail = await readNativeSession(bareExec, cliRef).catch(() => null);
         if (!detail || !detail.source) continue;
 
@@ -418,13 +521,13 @@ export class NativeSessionWatcher {
           this.fileSignatures.set(targetFile, sig);
           // 首次探测，执行一次对账确保不漏掉刚进来的新消息；
           // 刚读的 detail 直传，避免同一周期里再读一遍源数据
-          await syncNativeSession(sid, this.store, this.traceSink, wss ?? undefined, detail);
+          await syncNativeSession(sid, this.store, this.traceSink, wss ?? undefined, detail, readAt);
           continue;
         }
 
         if (sig !== prevSig) {
           this.fileSignatures.set(targetFile, sig);
-          await syncNativeSession(sid, this.store, this.traceSink, wss ?? undefined, detail);
+          await syncNativeSession(sid, this.store, this.traceSink, wss ?? undefined, detail, readAt);
         }
       }
     } finally {

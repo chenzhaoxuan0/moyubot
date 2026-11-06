@@ -323,6 +323,28 @@ interface WorkbenchState {
    */
   openSession: (input: { sessionId: SessionId; unitId: UnitId; runtimeId: string }) => Promise<void>;
   /**
+   * 快照直通（docs/31 §九 修订，orca「缓存直用」同款）：重新聚焦一个有新鲜快照
+   * 的对话窗格时，把快照**同步**提升为全局对话视图 —— 零 RPC、切换当帧即 live。
+   * 一次原子 set 写齐 selectUnit + selectRuntime + openSession 落位的并集。
+   * 返回 false = 门禁不过（单元已删 / 执行器不在注册表），调用方回落 openSession。
+   */
+  adoptPaneSnapshot: (input: {
+    unitId: string;
+    sessionId: string;
+    /** 执行器 id 提示（sessions[] 有该段的行时以行为准；裸 id 或 daemon: 前缀皆可） */
+    runtimeId: string | undefined;
+    timeline: readonly TimelineItem[];
+    busy: boolean;
+    inputHistory: readonly string[];
+  }) => boolean;
+  /**
+   * 后台补谱系元数据（快照直通的配套，不上切换路径）：拉一次台账，把目标会话
+   * 谱系里 sessions[] 还缺的段补进来（divider 执行器名 / 侧栏灯 / 谱系用）。
+   * 只补缺不覆盖——运行态由事件泵实时维护，一次性快照永远比它旧。500ms 去抖，
+   * 连点只拉最后一次。unitId 是窗格所属 bot（谱系段归属口径同 openSession 落位）。
+   */
+  refreshSessionMetadata: (sessionId: string, unitId: string) => void;
+  /**
    * session.list 对账水合（挂载时一次）：sessions store 只在 openSession /
    * run / resume 写入，F5 后为空 —— 画布按持久化身份恢复的 chat 标签灯
    * （GroupPanel.ChatTabLight，只读 store）会整排失效。只补**缺席**的行，
@@ -517,9 +539,107 @@ let seq = 0;
  */
 let sessionViewToken = 0;
 
+/**
+ * 作废所有在途的 openSession（视图令牌 +1）。焦点链每次聚焦都是新的视图意图：
+ * 「点回全局已指向的窗格」走早退分支、不经 selectUnit/openSession/快照直通，
+ * 不显式作废的话，此前点别的窗格发起的冷启动回放稍后落位，会把那段会话盖进
+ * 刚点回的窗格（快速来回切时的竞态）。
+ */
+export function invalidateSessionViews(): void {
+  sessionViewToken++;
+}
+
 /** 会话被用户打开/发送即视为「已读」—— 侧栏「完成未读」灯据此熄灭 */
 function markSessionViewed(id: SessionId | string): void {
   useHistoryPrefs.getState().markViewed(`session-${String(id)}`);
+}
+
+/**
+ * 谱系聚合（review P1 + ADR 0013 树化）：目标段沿 fork_of_session 上溯得到
+ * fork 祖先链（链上每段按其子段记录的 fork_at_seq 截断），兄弟分支排除；
+ * 主线普通段（执行器切换，无 fork 血缘）全保留 —— 对话的线性脊柱不变，
+ * 分叉是挂在脊柱上的树枝。已知近似（P1 记录在 docs/18）：普通段没有
+ * parent 链接，若兄弟分支后续又做了执行器切换，那段会两边都出现；
+ * 精确树要等段级 parent 落库（P3+）。
+ * openSession 回放与后台元数据刷新（refreshSessionMetadata）共用。
+ */
+function aggregateLineage(
+  all: readonly DaemonSessionRow[],
+  targetId: string,
+  lineageRoot: string,
+): { rows: DaemonSessionRow[]; forkBounds: Map<string, number> } {
+  const findSeg = (id: string): DaemonSessionRow | undefined => all.find((s) => s.id === id);
+  const inLineage = all.filter((s) => (s.conversationId ?? s.id) === lineageRoot);
+  // fork 祖先链：target → fork 父 → …（环与断链都安全止步）
+  const chain: DaemonSessionRow[] = [];
+  const seen = new Set<string>();
+  let cursor = findSeg(targetId);
+  while (cursor !== undefined && !seen.has(cursor.id)) {
+    seen.add(cursor.id);
+    chain.unshift(cursor);
+    cursor = cursor.forkOf != null ? findSeg(cursor.forkOf) : undefined;
+  }
+  const forkBounds = new Map<string, number>();
+  for (let i = 0; i < chain.length; i++) {
+    const bound = chain[i + 1]?.forkAtSeq;
+    if (typeof bound === "number") forkBounds.set(chain[i]!.id, bound);
+  }
+  const rows = inLineage
+    // fork 段只保留本链上的（兄弟分支排除）；普通段全保留
+    .filter((s) => s.forkOf == null || seen.has(s.id))
+    .sort((a, b) => a.startedAt - b.startedAt);
+  return { rows, forkBounds };
+}
+
+/** 台账行 → 谱系段 Session（divider 的执行器名/readiness 从这里查；统计归零，以 daemon 台账为准） */
+function sessionFromRow(row: DaemonSessionRow, unitId: UnitId): Session {
+  return {
+    id: asSessionId(row.id),
+    unitId,
+    runtimeId: asRuntimeId(`daemon:${row.runtimeId}`) as never,
+    title: row.title ?? "",
+    status: mapTurnStatus(row.status),
+    startedAt: row.startedAt,
+    ephemeral: false,
+    live: row.live,
+    resumable: row.resumable,
+    conversationId: row.conversationId ?? undefined,
+    // fork 血缘（ADR 0013）：Timeline 的 fork 标记行据此区分「分叉拼接」
+    // 与「执行器切换」两种段边界
+    forkOf: row.forkOf ?? undefined,
+    forkAtSeq: row.forkAtSeq ?? undefined,
+    forkKind: row.forkKind ?? undefined,
+    stats: { messages: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: 0 },
+  };
+}
+
+/** 执行器 id → 注册表条目 id（裸 id / daemon: 前缀两种写法都认）；不在注册表返回 null */
+function resolveRuntimeEntryId(runtimeId: string, runtimes: readonly RuntimeEntry[]): string | null {
+  const bare = runtimeId.replace(/^daemon:/, "");
+  return runtimes.find((r) => r.id === `daemon:${bare}`)?.id ?? runtimes.find((r) => r.id === bare)?.id ?? null;
+}
+
+/** refreshSessionMetadata 的去抖定时器（连点切换只拉最后一次） */
+let sessionMetaTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 后台补谱系元数据的实际执行体：拉台账 → 谱系聚合 → sessions[] 只补缺 */
+async function refreshSessionMetadataNow(sessionId: string, unitId: string): Promise<void> {
+  let all: readonly DaemonSessionRow[];
+  try {
+    const { fetchSessions, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
+    all = await fetchSessions(defaultDaemonEndpoint());
+  } catch {
+    // daemon 忙/不可达：元数据旧一点无伤（灯与状态由事件泵实时维护）
+    return;
+  }
+  const target = all.find((r) => r.id === sessionId);
+  if (target === undefined) return;
+  const { rows } = aggregateLineage(all, target.id, target.conversationId ?? target.id);
+  useWorkbench.setState((s) => {
+    const known = new Set(s.sessions.map((x) => String(x.id)));
+    const add = rows.filter((r) => !known.has(r.id)).map((r) => sessionFromRow(r, asUnitId(unitId)));
+    return add.length === 0 ? {} : { sessions: [...s.sessions, ...add] };
+  });
 }
 
 function getInitialActiveUnit(): UnitId {
@@ -1342,6 +1462,57 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       return { sessions: [...s.sessions, ...add] };
     }),
 
+  adoptPaneSnapshot: (input) => {
+    const s = get();
+    // 门禁：单元还在（同 openSession 的「找不到所属 bot」）、执行器在注册表里
+    // （daemon 下线了它就回落 openSession，由它走「执行器不可用」提示链）
+    if (!s.units.some((u) => u.id === input.unitId)) return false;
+    // 执行器以 sessions[] 里该段的行为准（窗格内换执行器续聊会开新段，窗格带的
+    // 提示可能已过期）；缺行才用提示
+    const rowRid = s.sessions.find((x) => String(x.id) === input.sessionId)?.runtimeId;
+    const rawRid = rowRid !== undefined ? String(rowRid) : input.runtimeId;
+    const rid = rawRid !== undefined && rawRid !== "" ? resolveRuntimeEntryId(rawRid, s.runtimes) : null;
+    if (rid === null) return false;
+    // 视图切换：在途的 openSession 全部作废（同 selectUnit，旧加载落位前校验令牌即弃）
+    sessionViewToken++;
+    // 模型合法性兜底（selectRuntime 的模型半边）。不发「已切换执行器」通知：
+    // 用户点的是「回到那段对话」，执行器跟着对话走，不是一次切换动作
+    const entry = s.runtimes.find((r) => r.id === rid);
+    const modelPatch =
+      entry !== undefined && !canRuntimeUse(entry.models, s.runtimeModels[rid])
+        ? { runtimeModels: { ...s.runtimeModels, [rid]: entry.defaultModel } }
+        : {};
+    // 一次原子 set：中间态不可观察（selectUnit→selectRuntime 分步走时的门禁时序坑
+    // 在这里不存在）。steerQueues / usageBySession / sessions[].status 不在此写 ——
+    // consumeEvents 的生命周期回写对后台会话本来就在全局实时维护
+    set({
+      activeUnitId: asUnitId(input.unitId),
+      activeSessionId: asSessionId(input.sessionId),
+      activeRuntimeId: rid,
+      timeline: input.timeline,
+      busy: input.busy,
+      // 打开的是另一条对话的视图：指向旧视图的分叉意图作废（同 openSession 落位）
+      pendingFork: null,
+      inputHistory: input.inputHistory,
+      // 临时注入配置按 bot 记忆恢复（同 selectUnit）
+      turnContextConfig: s.turnContextByUnit[input.unitId] ?? DEFAULT_TURN_CONFIG,
+      ...modelPatch,
+    });
+    try {
+      localStorage.setItem("agent-workbench:active-unit", input.unitId);
+    } catch {}
+    markSessionViewed(input.sessionId);
+    return true;
+  },
+
+  refreshSessionMetadata: (sessionId, unitId) => {
+    if (sessionMetaTimer !== null) clearTimeout(sessionMetaTimer);
+    sessionMetaTimer = setTimeout(() => {
+      sessionMetaTimer = null;
+      void refreshSessionMetadataNow(sessionId, unitId);
+    }, 500);
+  },
+
   openSession: async (input) => {
     const token = ++sessionViewToken;
     const unit = get().units.find((u) => u.id === input.unitId);
@@ -1360,6 +1531,13 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     }
     // 事件泵必须在 resume 之前挂上：resume 后 daemon 推的任何事件都要能进时间线
     consumeEvents(adapter);
+
+    // 谱系台账与 resume 并行在途（两者互不依赖）：此前 resume 落地才发 session.list，
+    // 冷打开平白多一个串行往返。拉取失败落 null，③ 按本段兜底（与升级前行为一致）。
+    // 下面任一早退时它照常落地、结果丢弃（catch 已接，不冒 unhandled rejection）
+    const ledgerP: Promise<readonly DaemonSessionRow[] | null> = import("../adapters/daemon/client.ts")
+      .then(({ fetchSessions, defaultDaemonEndpoint }) => fetchSessions(defaultDaemonEndpoint()))
+      .catch(() => null);
 
     // ① 尝试接回：live 会话直接返回；死会话凭 cli_ref reattach；都没有则抛（no_cli_ref）
     let session: Session | undefined;
@@ -1392,42 +1570,16 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
       }
     }
 
-    // ③ 谱系聚合回放（review P1 + ADR 0013 树化）：目标段沿 fork_of_session 上溯
-    // 得到 fork 祖先链（链上每段按其子段记录的 fork_at_seq 截断），兄弟分支排除；
-    // 主线普通段（执行器切换，无 fork 血缘）全保留 —— 对话的线性脊柱不变，
-    // 分叉是挂在脊柱上的树枝。已知近似（P1 记录在 docs/18）：普通段没有
-    // parent 链接，若兄弟分支后续又做了执行器切换，那段会两边都出现；
-    // 精确树要等段级 parent 落库（P3+）。回放条目统一本地序号重编 id ——
+    // ③ 谱系聚合回放（规则见 aggregateLineage）。回放条目统一本地序号重编 id ——
     // 各段 seq 独立计数，直接拼会撞 React key。
     const lineageRoot = session.conversationId ?? String(session.id);
-    let lineageRows: readonly DaemonSessionRow[] = [];
-    const forkBounds = new Map<string, number>();
-    try {
-      const { fetchSessions, defaultDaemonEndpoint } = await import("../adapters/daemon/client.ts");
-      const all = await fetchSessions(defaultDaemonEndpoint());
-      const findSeg = (id: string): DaemonSessionRow | undefined => all.find((s) => s.id === id);
-      const inLineage = all.filter((s) => (s.conversationId ?? s.id) === lineageRoot);
-      // fork 祖先链：target → fork 父 → …（环与断链都安全止步）
-      const chain: DaemonSessionRow[] = [];
-      const seen = new Set<string>();
-      let cursor = findSeg(String(session.id));
-      while (cursor !== undefined && !seen.has(cursor.id)) {
-        seen.add(cursor.id);
-        chain.unshift(cursor);
-        cursor = cursor.forkOf != null ? findSeg(cursor.forkOf) : undefined;
-      }
-      for (let i = 0; i < chain.length; i++) {
-        const bound = chain[i + 1]?.forkAtSeq;
-        if (typeof bound === "number") forkBounds.set(chain[i]!.id, bound);
-      }
-      lineageRows = inLineage
-        // fork 段只保留本链上的（兄弟分支排除）；普通段全保留
-        .filter((s) => s.forkOf == null || seen.has(s.id))
-        .sort((a, b) => a.startedAt - b.startedAt);
-    } catch {
-      // 台账拉不到（daemon 忙/不可达）：下面按本段兜底（与升级前行为一致）
-      lineageRows = [];
-    }
+    const ledger = await ledgerP;
+    const aggregated =
+      ledger !== null
+        ? aggregateLineage(ledger, String(session.id), lineageRoot)
+        : { rows: [] as DaemonSessionRow[], forkBounds: new Map<string, number>() };
+    const forkBounds = aggregated.forkBounds;
+    let lineageRows: readonly DaemonSessionRow[] = aggregated.rows;
     // 兜底：目标段必须可见（台账缺行 / 拉取失败时至少回放它自己）
     if (!lineageRows.some((s) => s.id === String(session.id))) {
       lineageRows = [
@@ -1445,20 +1597,27 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
         },
       ];
     }
+    // 各段账本并行拉取（此前逐段串行 await，谱系每多一段就多一个完整往返）；
+    // 拼接按段序、段内按 seq，与串行时结果逐条一致。单段失败照旧跳过不连坐
+    const replays = await Promise.all(
+      lineageRows.map((seg) =>
+        (adapter.eventsSince !== undefined ? adapter.eventsSince(asSessionId(seg.id)) : Promise.resolve([])).catch(
+          (err: unknown) => {
+            console.warn("[workbench] 该段账本回放失败（跳过）", seg.id, err instanceof Error ? err.message : err);
+            return [];
+          },
+        ),
+      ),
+    );
     const rebuilt: { id: number; event: RuntimeEvent; at: number }[] = [];
-    for (const seg of lineageRows) {
+    lineageRows.forEach((seg, i) => {
       const bound = forkBounds.get(seg.id);
-      try {
-        const replay = adapter.eventsSince !== undefined ? await adapter.eventsSince(asSessionId(seg.id)) : [];
-        for (const r of replay) {
-          // fork 祖先段截断：只保留 seq ≤ 子段 fork_at_seq 的前缀
-          if (bound !== undefined && r.seq > bound) continue;
-          rebuilt.push({ id: ++seq, event: r.event, at: r.at });
-        }
-      } catch (err: unknown) {
-        console.warn("[workbench] 该段账本回放失败（跳过）", seg.id, err instanceof Error ? err.message : err);
+      for (const r of replays[i]!) {
+        // fork 祖先段截断：只保留 seq ≤ 子段 fork_at_seq 的前缀
+        if (bound !== undefined && r.seq > bound) continue;
+        rebuilt.push({ id: ++seq, event: r.event, at: r.at });
       }
-    }
+    });
 
     // ④ 落位。顺序要紧（review P0）：selectRuntime 必须在大 set **之前** ——
     // 先 set busy/activeSessionId 再切执行器，会被自家门禁按「本轮进行中」拦下，
@@ -1498,24 +1657,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     }
     set((s) => {
       // 谱系内全部段进 sessions[]：divider 的执行器名/readiness 都从这里查
-      const segSessions: Session[] = lineageRows.map((row) => ({
-        id: asSessionId(row.id),
-        unitId: input.unitId,
-        runtimeId: asRuntimeId(`daemon:${row.runtimeId}`) as never,
-        title: row.title ?? "",
-        status: mapTurnStatus(row.status),
-        startedAt: row.startedAt,
-        ephemeral: false,
-        live: row.live,
-        resumable: row.resumable,
-        conversationId: row.conversationId ?? undefined,
-        // fork 血缘（ADR 0013）：Timeline 的 fork 标记行据此区分「分叉拼接」
-        // 与「执行器切换」两种段边界
-        forkOf: row.forkOf ?? undefined,
-        forkAtSeq: row.forkAtSeq ?? undefined,
-        forkKind: row.forkKind ?? undefined,
-        stats: { messages: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: 0 },
-      }));
+      const segSessions: Session[] = lineageRows.map((row) => sessionFromRow(row, input.unitId));
       let sessions = s.sessions.slice();
       for (const seg of [...segSessions, session!]) {
         const i = sessions.findIndex((x) => x.id === seg.id);
@@ -1530,8 +1672,11 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
         activeSessionId: session!.id,
         // 打开的是另一条对话的视图：指向旧视图的分叉意图作废（零持久化）
         pendingFork: null,
-        steerQueues: queues,
-        usageBySession: usages,
+        // 合并而非替换：别的会话的队列/用量条目由 consumeEvents 对全部会话实时
+        // 维护 —— 整表替换的话，快照直通回到那些会话时排队消息与容量徽标就空了
+        // （直到下一个事件）。本谱系的条目以回放重建为准，覆盖在上
+        steerQueues: { ...s.steerQueues, ...queues },
+        usageBySession: { ...s.usageBySession, ...usages },
         inputHistory: history,
       };
     });

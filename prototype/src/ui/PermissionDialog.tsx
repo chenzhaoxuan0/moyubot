@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Info, ShieldAlert, X } from "lucide-react";
 import { useWorkbench } from "../store/useWorkbench.ts";
+import { CanvasVisibleContext } from "./canvasVisibility.ts";
 import { getMode, needsDialog } from "../core/permission.ts";
 import type { PermissionDecision } from "../core/adapter.ts";
 import { cn } from "./cn.ts";
@@ -81,6 +82,9 @@ export function PermissionDialog() {
   const options = useOptions(unit?.name);
   const [selected, setSelected] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  // 画布常驻挂载：隐藏期间（自动化/清单/出图主视图）不挂 document 级监听 ——
+  // 否则在别的页按个数字就裁决了一个看不见的权限请求
+  const canvasVisible = useContext(CanvasVisibleContext);
 
   // 队列前进时重置选中项到第一项（对齐 ZCode：默认选中 allowOnce）
   useEffect(() => {
@@ -88,7 +92,7 @@ export function PermissionDialog() {
   }, [active?.requestId]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || !canvasVisible) return;
     const onKey = (e: KeyboardEvent) => {
       // ⚠ 这张卡**不抢焦点**（挂在 composer 上方，人还在输入框里打字）。
       // 所以 document 级快捷键必须先确认「这一下按键不是在输入」——
@@ -127,7 +131,7 @@ export function PermissionDialog() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [active, options, selected, resolve]);
+  }, [active, options, selected, resolve, canvasVisible]);
 
   // 保持选中项在可视区内
   useEffect(() => {

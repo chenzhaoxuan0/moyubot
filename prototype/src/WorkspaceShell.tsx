@@ -29,6 +29,7 @@ import { GlobalStatusBar } from "./ui/GlobalStatusBar.tsx";
 import { MobileLayout } from "./ui/mobile/MobileLayout.tsx";
 import { useIsMobile } from "./ui/mobile/useIsMobile.ts";
 import { cn } from "./ui/cn.ts";
+import { CanvasVisibleContext } from "./ui/canvasVisibility.ts";
 
 /**
  * 工作台外壳 —— 布局结构对齐 ZCode 的 WorkspaceShellLayout。
@@ -306,6 +307,15 @@ function SidePaneTopOverlay() {
 
 function ConversationSlot() {
   const mainView = useShell((s) => s.mainView);
+  const showCanvas = mainView === "chat";
+  // 画布常驻（mount-once latch，orca use-app-chrome-layout 同款）：首次进对话视图
+  // 后永不卸载，切到自动化/出图/清单时只 hidden+inert。此前三元切换会把整个
+  // 画布连同全部终端与对话标签卸载，切回来逐个重挂（终端 re-attach + 主题重绘、
+  // 每个对话标签重新归并时间线）——顶部图标来回切卡顿的元凶。轻页面照旧按需
+  // 卸载（重画布常驻、轻页面卸载：orca 同款取舍）。渲染期置位是 React 认可的
+  // 派生写法，不多一轮 effect 提交。
+  const [canvasMounted, setCanvasMounted] = useState(showCanvas);
+  if (showCanvas && !canvasMounted) setCanvasMounted(true);
 
   return (
     <Panel minSize="30%" className="min-w-0">
@@ -324,15 +334,25 @@ function ConversationSlot() {
         <main className="h-full min-h-0" aria-label="清单">
           <WorklistPage />
         </main>
-      ) : (
+      ) : null}
+      {canvasMounted && (
         /* 会话画布（docs/31）：对话与终端窗格统一标签容器，常驻挂载 ——
-           互斥的 conversationView 开关退役，切视图不杀进程、不丢缓冲 */
-        <main className="@container flex h-full min-h-0 flex-col" aria-label="会话">
-          {/* 工作区头部：Agent 身份卡 + 新建会话入口 */}
-          <WorkspaceHeader />
-          <div className="flex min-h-0 flex-1 flex-col">
-            <TerminalPanel variant="canvas" />
-          </div>
+           互斥的 conversationView 开关退役，切视图不杀进程、不丢缓冲。
+           inert：隐藏时不参与焦点与无障碍树（GroupPanel 同口径） */
+        <main
+          className={cn("@container h-full min-h-0 flex-col", showCanvas ? "flex" : "hidden")}
+          aria-label="会话"
+          {...(showCanvas ? {} : { inert: true })}
+          aria-hidden={!showCanvas}
+        >
+          {/* 隐藏期间画布里的全局键盘监听静默（见 CanvasVisibleContext） */}
+          <CanvasVisibleContext value={showCanvas}>
+            {/* 工作区头部：Agent 身份卡 + 新建会话入口 */}
+            <WorkspaceHeader />
+            <div className="flex min-h-0 flex-1 flex-col">
+              <TerminalPanel variant="canvas" />
+            </div>
+          </CanvasVisibleContext>
         </main>
       )}
     </Panel>

@@ -69,7 +69,7 @@ import { COMPUTER_MCP_PATH, controlActions, registerAcpEntriesProvider, setContr
 import { TerminalManager } from "./terminal/terminals.ts";
 import { Store } from "./store/db.ts";
 import { listNativeSessions, readNativeSession, readerOf, readerIds, type NativeSessionSummary } from "./history/index.ts";
-import { syncNativeSession, forgetNativeSyncState, NativeSessionWatcher } from "./history/sync.ts";
+import { syncNativeSession, forgetNativeSyncState, nativeLedgerFresh, NativeSessionWatcher } from "./history/sync.ts";
 import {
   knownNativeRefs,
   materializeImportedSession,
@@ -2341,26 +2341,43 @@ const SESSION_TITLE_CACHE_MAX = 4000;
  * unit.history 的 bot 映射短记忆：listBots 是「文件即数据库」的全量重扫
  * （逐 bot 读 bot.json + AGENTS.md/SOUL.md 全文），这里只取 id/name/rootPath
  * 三个展示字段，30s 记忆化足够新鲜（bot 改名/换目录的滞后 ≤30s，可接受）。
+ * 过期后 stale-while-revalidate：先给旧值、后台单飞重扫 —— 此前过期后的下一个
+ * 请求要同步等完整读盘（每 30s 一次的延迟尖刺，正好落在侧栏首开上）。只有进程内
+ * 首次（还没有旧值可给）才等读盘。
  */
-let unitHistoryBotsMemo: { at: number; bots: Awaited<ReturnType<typeof botRegistry.listBots>> } | null = null;
+type HistoryBots = Awaited<ReturnType<typeof botRegistry.listBots>>;
+let unitHistoryBotsMemo: { at: number; bots: HistoryBots } | null = null;
+let unitHistoryBotsLoad: Promise<HistoryBots> | null = null;
 const UNIT_HISTORY_BOTS_TTL_MS = 30_000;
 
-async function listBotsForHistory() {
-  const now = Date.now();
-  if (unitHistoryBotsMemo !== null && now - unitHistoryBotsMemo.at < UNIT_HISTORY_BOTS_TTL_MS) {
-    return unitHistoryBotsMemo.bots;
+async function listBotsForHistory(): Promise<HistoryBots> {
+  const memo = unitHistoryBotsMemo;
+  if ((memo === null || Date.now() - memo.at >= UNIT_HISTORY_BOTS_TTL_MS) && unitHistoryBotsLoad === null) {
+    const load = botRegistry.listBots().then((bots) => {
+      // 失败不记忆：瞬断只影响本次，别让空映射把 30s 内所有历史行的
+      // unitName/rootPath 解析打回裸 unitId（旧值继续用到下次重扫成功）
+      unitHistoryBotsMemo = { at: Date.now(), bots };
+      return bots;
+    });
+    unitHistoryBotsLoad = load;
+    // 后台重扫的失败就地接住（不冒 unhandled rejection）；首载的调用方下面 await，照常拿到失败
+    void load
+      .catch(() => undefined)
+      .finally(() => {
+        if (unitHistoryBotsLoad === load) unitHistoryBotsLoad = null;
+      });
   }
-  // 失败不记忆：瞬断只影响本次调用，别让空映射把 30s 内所有历史行的
-  // unitName/rootPath 解析打回裸 unitId
-  const bots = await botRegistry.listBots();
-  unitHistoryBotsMemo = { at: now, bots };
-  return bots;
+  if (memo !== null) return memo.bots;
+  const pending = unitHistoryBotsLoad;
+  return pending !== null ? await pending : await botRegistry.listBots();
 }
 
 registerMethod("unit.history", async (params) => {
   const p = (params ?? {}) as { unitId?: string; limit?: number };
   const targetUnitId = typeof p.unitId === "string" && p.unitId.trim() !== "" ? p.unitId.trim() : null;
   const limit = Math.min(Math.max(typeof p.limit === "number" && Number.isFinite(p.limit) ? Math.round(p.limit) : 100, 1), 500);
+  /** 分段计时（慢调用日志用，见 handler 末尾） */
+  const t0 = Date.now();
 
   const entries: UnitHistoryEntry[] = [];
   /** 已被运行记录认领的会话 id（全量，不受单次 limit 影响）：会话条目去重用 */
@@ -2376,6 +2393,7 @@ registerMethod("unit.history", async (params) => {
 
   // 单词请求时间预算保护：若原生扫描累计耗时过长，熔断后续扫描，保障 RPC 毫秒级返回
   const reqStart = Date.now();
+  const prepMs = reqStart - t0;
   const canAttemptMore = () => Date.now() - reqStart < 400;
 
   for (const a of store.listAutomations()) {
@@ -2510,15 +2528,20 @@ registerMethod("unit.history", async (params) => {
     });
   }
 
-  // 影子行判定集：非导入台账行与终端运行认领的 (执行器|原生会话 id)。
-  // 轻量列直查（此前整表 SessionRow 搬进内存只为做 Set）
-  const shadowedNativeRefs = new Set<string>();
-  for (const ref of store.listSessionNativeRefs()) {
-    shadowedNativeRefs.add(`${ref.runtimeId.replace(/^daemon:/, "")}|${ref.cliRef}`);
-  }
+  // 影子行判定：终端运行认领的原生会话按 unit 收窄、量小，整批建集；非导入台账行
+  // 认领的走 hasNonImportedNativeRef 按需逐条问索引 —— 只有导入行需要判定，此前
+  // 每次请求全扫 sessions 表只为建这张集合
+  const runsMs = Date.now() - reqStart;
+  const terminalClaimedRefs = new Set<string>();
   for (const r of store.listTerminalRuns(targetUnitId ?? undefined, 200)) {
-    if (r.resumeRef !== null && r.resumeRef !== "") shadowedNativeRefs.add(`${r.runtimeId.replace(/^daemon:/, "")}|${r.resumeRef}`);
+    if (r.resumeRef !== null && r.resumeRef !== "") terminalClaimedRefs.add(`${r.runtimeId.replace(/^daemon:/, "")}|${r.resumeRef}`);
   }
+  const isShadowedNativeRef = (runtimeId: string, cliRef: string): boolean => {
+    const bare = runtimeId.replace(/^daemon:/, "");
+    return terminalClaimedRefs.has(`${bare}|${cliRef}`) || store.hasNonImportedNativeRef(bare, cliRef);
+  };
+  // 会话行段起算放在影子集构建之后（review P3）：标签要说的是它名字里的那段
+  const tSessions = Date.now();
 
   // 单 bot 历史：SQL 层按 unit 过滤；全局历史才全量（索引 idx_sessions_unit）
   const sessionRows = targetUnitId !== null ? store.listSessionsForUnit(targetUnitId) : store.listSessions();
@@ -2530,7 +2553,7 @@ registerMethod("unit.history", async (params) => {
     // 影子行过滤（展示层兜底；自动收录每轮的清扫通常会先删掉它们）：真会话或
     // 终端运行已认领同一原生会话时，imp_ 行是冗余投影，不再各自成行——
     // 否则「聊天页新建对话 → 侧栏多出一行相同内容」的竞态残留会一直双显
-    if (imported && s.cliRef !== null && s.cliRef !== "" && shadowedNativeRefs.has(`${s.runtimeId.replace(/^daemon:/, "")}|${s.cliRef}`)) {
+    if (imported && s.cliRef !== null && s.cliRef !== "" && isShadowedNativeRef(s.runtimeId, s.cliRef)) {
       continue;
     }
     let title = s.title.trim();
@@ -2636,6 +2659,20 @@ registerMethod("unit.history", async (params) => {
       const override = renames.get(`hist-rename:${merged[i]!.key}`);
       if (override !== undefined && override !== "") merged[i] = { ...merged[i]!, title: override.slice(0, 120) };
     }
+  }
+  // 慢调用留痕：侧栏首开 / 预热 / 轮询都走这里，分段耗时说清楚慢在哪一段
+  // （prep = 认领集 + bot 映射；runs = 自动化/待办/终端运行行；sessions = 会话行）
+  const totalMs = Date.now() - t0;
+  if (totalMs > 200) {
+    log.info("unit.history slow", {
+      unitId: targetUnitId ?? "*",
+      totalMs,
+      prepMs,
+      runsMs,
+      sessionsMs: Date.now() - tSessions,
+      sessionRows: sessionRows.length,
+      entries: merged.length,
+    });
   }
   return { entries: merged };
 });
@@ -4551,8 +4588,14 @@ registerMethod("session.importFile", async (params) => {
 registerMethod("session.events.since", async (params) => {
   const p = (params ?? {}) as { sessionId?: string; afterSeq?: number };
   if (typeof p.sessionId !== "string") throw Object.assign(new Error("sessionId is required"), { code: "bad_params" });
+  // 同步快路径：上次同步落定后原生源文件没变（可信签名一致）就跳过 —— 同步里的
+  // readNativeSession 是全量同步解析，大会话（10MB+ 转录）秒级，冷打开每次都付。
+  // 先同步再 watchSession：watcher 首探能直接接管刚记下的签名走 stat 快路径，
+  // 不再紧跟着把同一个文件全量重读一遍
+  if (!nativeLedgerFresh(p.sessionId, store)) {
+    await syncNativeSession(p.sessionId, store, traceSink, wss);
+  }
   nativeWatcher.watchSession(p.sessionId);
-  await syncNativeSession(p.sessionId, store, traceSink, wss);
   const afterSeq = typeof p.afterSeq === "number" ? p.afterSeq : 0;
   const hot = host.hotEventsSince(asSessionId(p.sessionId), afterSeq);
   const parseLedger = (nd: string): Array<{ seq: number; at: number; event: unknown }> => {
@@ -4573,11 +4616,12 @@ registerMethod("session.events.since", async (params) => {
   if (afterSeq === 0) {
     // 全量重建（openSession / 换代重拉，review P0）：以落盘账本为准 —— 热环只
     // 保留最近 500 条，直接吃环会静默截断长对话；trace append 是异步的，
-    // 账本可能还没写到最后几条，用热环补尾部消除竞态。
-    const records = parseLedger(await traceSink.readSessionNdjson(asSessionId(p.sessionId), 0));
+    // 账本可能还没写到最后几条，用热环补尾部消除竞态。解析走 TraceSink 的按会话
+    // 缓存（此前每次都对整段 NDJSON 逐行 JSON.parse，大会话冷打开秒级）
+    const records = await traceSink.readSessionRecords(asSessionId(p.sessionId));
     const maxLedgerSeq = records.reduce((m, r) => Math.max(m, r.seq), 0);
     const tail = hot.items.filter((e) => e.seq > maxLedgerSeq);
-    return [...records, ...tail];
+    return [...records.map((r) => ({ seq: r.seq, at: r.at ?? 0, event: r.event })), ...tail];
   }
   if (!hot.gap) return hot.items;
   return parseLedger(await traceSink.readSessionNdjson(asSessionId(p.sessionId), afterSeq));

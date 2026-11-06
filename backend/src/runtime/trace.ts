@@ -13,6 +13,11 @@ import type { SessionId, TraceRecord } from "../contract.ts";
 
 const HEADER = JSON.stringify({ v: 1, format: "trace", writtenBy: "agent-workbench-daemon" });
 
+/** 已解析记录缓存：最多缓存的会话数（LRU） */
+const PARSED_CACHE_SESSIONS = 6;
+/** 单会话记录数上限：超出不入缓存（常驻内存兜底，超大会话每次照常解析） */
+const PARSED_CACHE_MAX_RECORDS = 20_000;
+
 export class TraceSink {
   private cachedDate = "";
   private cachedFile = "";
@@ -177,6 +182,57 @@ export class TraceSink {
    */
   async readSessionNdjson(sessionId: SessionId, afterSeq = 0): Promise<string> {
     await this.#ensureIndex();
+    const out = this.#collectLines(sessionId, afterSeq);
+    return out.length > 0 ? out.join("\n") + "\n" : "";
+  }
+
+  /**
+   * 按会话的已解析记录缓存（readSessionRecords 用）。#fileIndex 让账本行零重读，
+   * 但 session.events.since 的全量重建此前仍对整段 NDJSON 逐行 JSON.parse ——
+   * 10MB 级会话每次冷打开都付一遍。失效判据 = 行数 + 末行原文：#fileIndex 未变时
+   * 收集出的行序列是确定的；追加写换末行、重写（pruneExtRecords）删索引条目
+   * 让行数变化，签名都会变。
+   */
+  readonly #parsedBySession = new Map<string, { sig: string; records: readonly TraceRecord[] }>();
+
+  /**
+   * readSessionNdjson(sid, 0) 的已解析版本（session.events.since 全量重建用）：
+   * 同序同内容，坏行与缺 seq/event 的行跳过（与 RPC 侧原 parseLedger 口径一致）。
+   * 返回值只读共享（缓存命中时是同一个数组），调用方不得改。
+   */
+  async readSessionRecords(sessionId: SessionId): Promise<readonly TraceRecord[]> {
+    await this.#ensureIndex();
+    const lines = this.#collectLines(sessionId, 0);
+    const sig = lines.length === 0 ? "" : `${lines.length}\u0000${lines[lines.length - 1]}`;
+    const hit = this.#parsedBySession.get(sessionId);
+    // 命中与否都先摘掉：命中重插到队尾（LRU），未命中重建后再插
+    this.#parsedBySession.delete(sessionId);
+    if (hit !== undefined && hit.sig === sig) {
+      this.#parsedBySession.set(sessionId, hit);
+      return hit.records;
+    }
+    const records: TraceRecord[] = [];
+    for (const line of lines) {
+      try {
+        const rec = JSON.parse(line) as TraceRecord;
+        if (typeof rec.seq === "number" && rec.event !== undefined) records.push(rec);
+      } catch {
+        // 坏行跳过：账本容错读
+      }
+    }
+    if (records.length <= PARSED_CACHE_MAX_RECORDS) {
+      this.#parsedBySession.set(sessionId, { sig, records });
+      while (this.#parsedBySession.size > PARSED_CACHE_SESSIONS) {
+        const oldest = this.#parsedBySession.keys().next().value;
+        if (oldest === undefined) break;
+        this.#parsedBySession.delete(oldest);
+      }
+    }
+    return records;
+  }
+
+  /** 收集一个会话的账本行（调用方先 #ensureIndex）；afterSeq > 0 时只留 seq 更大的行 */
+  #collectLines(sessionId: SessionId, afterSeq: number): string[] {
     const out: string[] = [];
     // 按排序后的文件名序迭代（跨日期文件升序拼接的既定语义）：#fileIndex 的
     // Map 只当缓存用，插入序在「中间文件 stat 失败 continue / prune 后重插」
@@ -201,7 +257,7 @@ export class TraceSink {
         }
       }
     }
-    return out.length > 0 ? out.join("\n") + "\n" : "";
+    return out;
   }
 
   /**

@@ -1,5 +1,6 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useContext, useEffect, useState, useRef, useCallback } from "react";
 import { Search, ChevronUp, ChevronDown, X } from "lucide-react";
+import { CanvasVisibleContext } from "../../canvasVisibility.ts";
 
 /**
  * 查找高亮走 CSS Custom Highlight API：只把匹配文本的 Range 注册进
@@ -44,6 +45,7 @@ export function InChatFindBar({
   const [matchCount, setMatchCount] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const matchesRef = useRef<Range[]>([]);
+  const canvasVisible = useContext(CanvasVisibleContext);
 
   // 定位当前匹配：单独的「当前项」高亮注册 + 平滑滚动到所在元素
   const scrollToMatch = (index: number, list: Range[] = matchesRef.current) => {
@@ -165,8 +167,10 @@ export function InChatFindBar({
     clearHighlights();
   }, [clearHighlights]);
 
-  // 全局快捷键监听 Ctrl+F / Cmd+F
+  // 全局快捷键监听 Ctrl+F / Cmd+F。画布隐藏期间（其他主视图）不挂 —— 不该劫持
+  // 那些页的 Ctrl+F / Escape（见 CanvasVisibleContext）
   useEffect(() => {
+    if (!canvasVisible) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
         const target = e.target as HTMLElement | null;
@@ -187,7 +191,7 @@ export function InChatFindBar({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [open, closeFind]);
+  }, [open, closeFind, canvasVisible]);
 
   // 关键词变化时重新检索
   useEffect(() => {

@@ -41,7 +41,7 @@ import { BrandLogo } from "./BrandLogo.tsx";
 import { detectQuestionnaireFromTimeline } from "./chat/items/QuestionnaireCard.tsx";
 import type { AvatarFrame } from "../core/appearance.ts";
 import { describeRule, formatAbsolute, formatAbsoluteHuman, formatRelative, type Automation } from "../core/automation.ts";
-import { DaemonClient, defaultDaemonEndpoint, dispatchTerminal, exportSession, fetchAutomations, fetchUnitHistory, renameHistoryEntry, type UnitHistoryEntry } from "../adapters/daemon/client.ts";
+import { DaemonClient, defaultDaemonEndpoint, dispatchTerminal, exportSession, renameHistoryEntry, type UnitHistoryEntry } from "../adapters/daemon/client.ts";
 import { saveTextFile, sanitizeFileName } from "./fileSave.ts";
 import { hasUnseenUpdates, useExecutorUpdates } from "../store/useExecutorUpdates.ts";
 import {
@@ -71,6 +71,7 @@ import { useHistoryPrefs } from "../store/useHistoryPrefs.ts";
 import { useSidebarSelection } from "../store/useSidebarSelection.ts";
 import { useTerminalStore } from "../store/useTerminalStore.ts";
 import { useChatPanes } from "../store/useChatPanes.ts";
+import { EMPTY_HISTORY_ENTRY, useUnitHistory } from "../store/useUnitHistory.ts";
 import { openNewTuiForUnit as sessionOpenOpenNewTui } from "../store/sessionOpen.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { QuickContextMenu, quickMenuFromEvent, type QuickMenuState } from "./QuickContextMenu.tsx";
@@ -125,6 +126,43 @@ function readPersistedUnitView(): ViewMode {
     return "bot";
   }
 }
+
+/* ------------------------------------------- 历史子列表的预取节奏（orca 同款参数） */
+
+/** daemon 连上、bot 列表就绪后多久开始空闲预热（让启动期那一波 RPC 先过去） */
+const HISTORY_WARM_DELAY_MS = 2000;
+/** 悬停驻留多久才算「有意图」：指针扫过一排 bot 时不逐个发请求 */
+const HISTORY_HOVER_DWELL_MS = 120;
+/** 展开时缓存新于这个窗口就不重拉（悬停预取刚落地）；更旧的先显示、后台校准 */
+const HISTORY_EXPAND_FRESH_MS = 5000;
+/** 无缓存时「加载中」延迟出现：快响应不闪 */
+const HISTORY_LOADING_DELAY_MS = 200;
+/** 待触发行的数据（useWorkbench.automations）在这个窗口内刷过就不再刷 */
+const SCHED_REFRESH_FRESH_MS = 15_000;
+
+/**
+ * 待触发行（docs/23）的数据刷新：多个展开行共用 useWorkbench.automations 一份数据，
+ * 在途合并 + 节流 —— 此前每个展开行各自拉全量 automation.list 并每 30s 轮询一次，
+ * 且首开时这些行要等那次 RPC 才在列表顶部跳出来。
+ */
+let schedRefreshInflight: Promise<void> | null = null;
+let schedRefreshedAt = 0;
+function refreshScheduledTasks(maxAgeMs: number): void {
+  if (schedRefreshInflight !== null || Date.now() - schedRefreshedAt < maxAgeMs) return;
+  const job = useWorkbench
+    .getState()
+    .refreshAutomations()
+    .finally(() => {
+      schedRefreshedAt = Date.now();
+      schedRefreshInflight = null;
+    });
+  // refreshAutomations 的动态 import 在 try 外，chunk 加载失败会拒绝（review P3）：
+  // 状态在 finally 里已复位，这里吞掉，别让它变成 unhandled rejection
+  schedRefreshInflight = job.catch(() => undefined) as Promise<void>;
+}
+
+/** 收起行的待触发数据：常量引用（收起的行不随 automations 刷新重渲染） */
+const NO_AUTOMATIONS: readonly Automation[] = [];
 
 
 export function Sidebar() {
@@ -253,6 +291,21 @@ export function Sidebar() {
     () => orderUnitsLikeSidebar(visibleUnits, unitOrder),
     [visibleUnits, unitOrder],
   );
+
+  // 历史子列表空闲预热（orca「展开只翻 UI 态」）：daemon 连上、bot 列表就绪后，按
+  // 侧栏显示顺序把各 bot 的历史逐个拉进缓存（单并发、浏览器空闲时取下一条，调度在
+  // useUnitHistory）—— 首次展开就是纯 UI 翻转。切 [bot|项目] 视图 / 拖拽换序时对
+  // 新的可见集同样入队，已新鲜的自动跳过
+  const daemonStatus = useWorkbench((s) => s.daemonStatus);
+  const historyWarmKey = useMemo(
+    () => [...residentUnits, ...normalUnits].map((u) => String(u.id)).join("\n"),
+    [residentUnits, normalUnits],
+  );
+  useEffect(() => {
+    if (daemonStatus !== "connected" || historyWarmKey === "") return;
+    const timer = setTimeout(() => useUnitHistory.getState().warm(historyWarmKey.split("\n")), HISTORY_WARM_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [daemonStatus, historyWarmKey]);
 
   /** 拖进常驻区：普通 bot 升为常驻（resident 写穿 bot.json，冲突由 updateUnit 回滚并抛） */
   const makeResident = (u: WorkUnit): void => {
@@ -742,6 +795,17 @@ function UnitRow({
   /** 会话实时状态（turn 进行中 = 转圈灯的事实来源） */
   const sessions = useWorkbench((s) => s.sessions);
   const activeSessionId = useWorkbench((s) => s.activeSessionId);
+  /**
+   * 焦点对话窗格的会话 —— 行高亮的即时口径（orca use-active-row 同款）：
+   * focusedChatKey 在 focus() 里同步置位，点击当帧就翻；activeSessionId 要等
+   * 冷启动回放落位才变，单靠它高亮会滞后整段 RPC。焦点窗格优先，没有焦点
+   * 窗格（初始态 / 焦点窗格刚关）才回落全局——取或会在回放在途时新旧两行同亮。
+   */
+  const focusedPaneSessionId = useChatPanes((s) =>
+    s.focusedChatKey !== null ? (s.panes[s.focusedChatKey]?.sessionId ?? null) : null,
+  );
+  const highlightedSessionId =
+    focusedPaneSessionId ?? (activeSessionId !== null ? String(activeSessionId) : null);
   const timeline = useWorkbench((s) => s.timeline);
   const busy = useWorkbench((s) => s.busy);
   const mainView = useShell((s) => s.mainView);
@@ -761,14 +825,28 @@ function UnitRow({
   useEffect(() => {
     void useGit.getState().refreshBranchBadge(unit.rootPath);
   }, [unit.rootPath]);
-  /** 历史详情走右侧标签页（点子列表条目预展开那一条）—— 状态在 useSidePane */
-  const [histEntries, setHistEntries] = useState<readonly UnitHistoryEntry[] | null>(null);
-  const [histErr, setHistErr] = useState<string | null>(null);
+  /**
+   * 历史子列表数据在 useUnitHistory（不在组件 state）：空闲预热 / 悬停预取会在展开
+   * 之前把它焐热，[bot|项目] 切换 / 常驻移动导致的重挂也不丢 —— 展开即见。
+   * 历史详情走右侧标签页（点子列表条目预展开那一条）—— 状态在 useSidePane
+   */
+  const histCache = useUnitHistory((s) => s.byUnit[unit.id] ?? EMPTY_HISTORY_ENTRY);
+  const histEntries = histCache.entries;
+  const histErr = histCache.error;
   /**
    * 待触发的定时任务（docs/23）：子列表顶部的「将要发生什么」，与历史行的
-   * 「发生过什么」上下互补 —— 可追溯性的另一半。与 histEntries 同节奏拉取。
+   * 「发生过什么」上下互补 —— 可追溯性的另一半。数据取 useWorkbench.automations
+   * （启动即加载，变更点会刷新）：展开时与历史行同帧出现，不再等一次 RPC 后从
+   * 列表顶部跳进来。收起的行取常量（不随刷新重渲染）
    */
-  const [schedTasks, setSchedTasks] = useState<readonly Automation[]>([]);
+  const automations = useWorkbench((s) => (historyOpen ? s.automations : NO_AUTOMATIONS));
+  const schedTasks = useMemo(
+    () =>
+      automations
+        .filter((a) => a.unitId === String(unit.id) && a.enabled && a.nextRunAt !== undefined)
+        .sort((x, y) => (x.nextRunAt ?? 0) - (y.nextRunAt ?? 0)),
+    [automations, unit.id],
+  );
   const openAutomationDialog = useShell((s) => s.openAutomationDialog);
   /** 历史列表分页：每轮显示 6 条，超过 6 条折叠成「更多」 */
   const [visibleCount, setVisibleCount] = useState(6);
@@ -813,45 +891,18 @@ function UnitRow({
     if (!historyOpen) setVisibleCount(6);
   }, [historyOpen]);
 
-  // 展开时拉最近执行记录，且**开着期间保持实时**：派发终端的 created/exit 帧、
-  // 会话起止事件都会改写历史（新条目出现 / 状态收口），命中即去抖重拉；
-  // 30s 轮询兜底覆盖其余路径（如待办状态迁移、别处触发的派发）。
+  // 展开：有缓存先显示（预热/预取早已拉好），旧于几秒才后台校准（SWR）；开着期间
+  // **保持实时**：派发终端的 created/exit 帧、会话起止事件都会改写历史（新条目
+  // 出现 / 状态收口），命中即去抖强刷；30s 轮询兜底覆盖其余路径（如待办状态迁移、
+  // 别处触发的派发）。请求经 useUnitHistory 在途合并：多个触发点同时到也只发一次
   useEffect(() => {
     if (!historyOpen) return;
     let alive = true;
+    void useUnitHistory.getState().ensure(unit.id, { maxAgeMs: HISTORY_EXPAND_FRESH_MS });
+    refreshScheduledTasks(SCHED_REFRESH_FRESH_MS);
     const load = (): void => {
-      if (!alive) return;
-      setHistErr(null);
-      void fetchUnitHistory(unit.id, 100)
-        .then((list) => {
-          if (alive) {
-            setHistEntries(list);
-            useHistoryPrefs.getState().runAutoArchive(list);
-          }
-        })
-        .catch((e: unknown) => {
-          if (alive) setHistErr(e instanceof Error ? e.message : String(e));
-        });
+      if (alive) void useUnitHistory.getState().ensure(unit.id);
     };
-    // 待触发任务与历史同节奏：拉全量自动化后按 bot 过滤（SQLite 小表，客户端筛足够）
-    const loadSched = (): void => {
-      if (!alive) return;
-      void fetchAutomations()
-        .then((list) => {
-          if (alive) {
-            setSchedTasks(
-              list
-                .filter((a) => a.unitId === String(unit.id) && a.enabled && a.nextRunAt !== undefined)
-                .sort((x, y) => (x.nextRunAt ?? 0) - (y.nextRunAt ?? 0)),
-            );
-          }
-        })
-        .catch(() => {
-          /* 拉不到就不显示待触发行，历史行不受影响 */
-        });
-    };
-    load();
-    loadSched();
     let debounce: ReturnType<typeof setTimeout> | null = null;
     const scheduleLoad = (): void => {
       if (!alive) return;
@@ -860,7 +911,7 @@ function UnitRow({
     };
     const poll = setInterval(() => {
       load();
-      loadSched();
+      refreshScheduledTasks(SCHED_REFRESH_FRESH_MS);
     }, 30_000);
     const client = DaemonClient.get(defaultDaemonEndpoint());
     const unsubFrame = client.onTerminalFrame((f) => {
@@ -870,7 +921,7 @@ function UnitRow({
       if (e.type === "session.started" || e.type === "session.ended") scheduleLoad();
     });
     // 导入外部会话完成（设置页/bot 设置里）的即时刷新：导入的那一刻用户就
-    // 指望在子列表最顶上看到它，等 30s 轮询等于没导入
+    // 指望在子列表最顶上看到它，等 30s 轮询等于没导入（缓存失效由 store 统一处理）
     const onImported = (ev: Event): void => {
       const detail = (ev as CustomEvent<{ unitId?: string }>).detail;
       if (detail?.unitId === undefined || String(detail.unitId) === String(unit.id)) scheduleLoad();
@@ -885,6 +936,49 @@ function UnitRow({
       window.removeEventListener("awb:history-refresh", onImported as EventListener);
     };
   }, [historyOpen, unit.id]);
+
+  // 自动归档只作用于用户**看得到**的列表（展开行的数据每次落地都过一遍）：预热 /
+  // 预取是投机拉取，不该替用户做归档决定
+  useEffect(() => {
+    if (historyOpen && histEntries !== null) useHistoryPrefs.getState().runAutoArchive(histEntries);
+  }, [historyOpen, histEntries]);
+
+  // 「加载中…」只在无缓存且在途超过 200ms 时出现（orca 同款）：缓存命中直接出列表，
+  // 快响应不闪一下
+  const histPending = historyOpen && histEntries === null && histErr === null;
+  const [showHistLoading, setShowHistLoading] = useState(false);
+  useEffect(() => {
+    if (!histPending) {
+      setShowHistLoading(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowHistLoading(true), HISTORY_LOADING_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [histPending]);
+
+  // 意图预取（orca 行级 hover 同款）：悬停驻留 120ms 才算有意图、滚轮重置驻留（滚过
+  // 不预取）、按下 / 键盘聚焦立即预取。调度与单槽「最新者胜」在 useUnitHistory
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearHoverTimer = (): void => {
+    if (hoverTimer.current !== null) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+  };
+  const prefetchHistory = (): void => {
+    clearHoverTimer();
+    if (!historyOpen) useUnitHistory.getState().prefetch(String(unit.id));
+  };
+  const armHistoryPrefetch = (): void => {
+    clearHoverTimer();
+    if (!historyOpen) hoverTimer.current = setTimeout(prefetchHistory, HISTORY_HOVER_DWELL_MS);
+  };
+  useEffect(
+    () => () => {
+      if (hoverTimer.current !== null) clearTimeout(hoverTimer.current);
+    },
+    [],
+  );
   // ZCode: unavailableLocalDirectory —— 路径不可用要显式说出来，不能当成正常单元
   // **兜底 ?? []**：bot.json 是手可编辑的（见 useWorkbench 的合并守卫注释），
   // 一个字段缺失不该让整个界面白屏。管家 bot 一度就因为没写 tags 把整页搞崩了。
@@ -934,6 +1028,13 @@ function UnitRow({
           if (useSidebarSelection.getState().selected.size > 0) useSidebarSelection.getState().clear();
           onToggleHistory();
         }}
+        onPointerEnter={armHistoryPrefetch}
+        onPointerLeave={clearHoverTimer}
+        onWheel={() => {
+          if (hoverTimer.current !== null) armHistoryPrefetch();
+        }}
+        onPointerDown={prefetchHistory}
+        onFocus={prefetchHistory}
         onContextMenu={(e) =>
           setQuickMenu(
             quickMenuFromEvent(e, [
@@ -1067,7 +1168,7 @@ function UnitRow({
               onOpen={() => openAutomationDialog({ mode: "edit", automation: t })}
             />
           ))}
-          {histEntries === null && histErr === null && <p className="px-1.5 py-1 text-[10px] text-ash">加载中…</p>}
+          {showHistLoading && histPending && <p className="px-1.5 py-1 text-[10px] text-ash">加载中…</p>}
           {histEntries !== null && histEntries.length === 0 && (
             <p className="px-1.5 py-1 text-[10px] text-ash">还没有执行记录 —— 自动化、待办或会话跑过之后出现在这里</p>
           )}
@@ -1123,18 +1224,22 @@ function UnitRow({
             const lightOverride =
               historyPrefs.lightOverrides[e.key] ??
               (e.sessionId !== null ? historyPrefs.lightOverrides[`session-${e.sessionId}`] : undefined);
-            const rowActive =
+            const rowActive = mainView === "chat" && e.sessionId !== null && highlightedSessionId === e.sessionId;
+            // 灯的本地兜底只认「全局链路此刻就是这一行」：timeline/busy 是全局活跃
+            // 会话的镜像，冷启动回放在途时高亮已先翻到新行、全局还属于旧会话 ——
+            // 拿它推新行的灯会把旧会话的转圈/待交互串过来
+            const rowOwnsGlobal =
               mainView === "chat" && e.sessionId !== null && String(activeSessionId) === e.sessionId;
             // 等你交互：只认挂在时间线上**未答**的问卷/决策卡（检测只认 pending，
             // 已答即出清）。注意 busy 不进这里——它是「活跃会话在跑」的本地镜像
             // （见 useWorkbench 的 busy 注释），在灯模型拆分后属于 running。
             const isRowAwaitingDecision =
-              Boolean(rowActive && detectQuestionnaireFromTimeline(
+              Boolean(rowOwnsGlobal && detectQuestionnaireFromTimeline(
                 timeline.filter((t) => "sessionId" in t.event && t.event.sessionId === activeSessionId)
               ) !== null);
             // running 的本地兜底：store 的会话状态登记可能滞后一拍，busy 是
-            // 「当前活跃会话有轮次在飞」的前端镜像，行激活时以它为准
-            const isRowActiveRunning = Boolean(rowActive && busy);
+            // 「当前活跃会话有轮次在飞」的前端镜像，行持有全局链路时以它为准
+            const isRowActiveRunning = Boolean(rowOwnsGlobal && busy);
             const light = deriveHistoryLight(
               e,
               sessionStatusById,
