@@ -27,7 +27,6 @@ import { SidePaneColumn } from "./ui/SidePanePanel.tsx";
 import { useSidePane } from "./store/useSidePane.ts";
 import { sidePaneOccupies } from "./core/sidePaneTabs.ts";
 import { GlobalStatusBar } from "./ui/GlobalStatusBar.tsx";
-import { CompressGhost } from "./ui/taskbar/CompressGhost.tsx";
 import { MobileLayout } from "./ui/mobile/MobileLayout.tsx";
 import { useIsMobile } from "./ui/mobile/useIsMobile.ts";
 import { cn } from "./ui/cn.ts";
@@ -139,12 +138,9 @@ export function WorkspaceShell() {
           <SidePaneColumn />
         </Group>
       </div>
-      {/* 全局底栏 —— 状态显示类功能的专席（工作状态 / 后台守护）。横贯全窗，
-          弹层有足够的水平空间向上展开，不再受任何一列的宽度钳制 */}
+      {/* 全局底栏 —— 纯状态条（会话灯说明 / 工作状态 / 后台守护 / toast / 通知铃）。
+          任务栏会话折叠机制已退役（docs/32 §九：会话全量由画布标签管理） */}
       <GlobalStatusBar />
-      {/* 任务栏动画层（渲染为 null）：订阅底栏信号播「压缩进底栏/展开回对话」
-          的 ghost —— 挂在 shell 层保证设置页覆盖之下也常驻 */}
-      <CompressGhost />
 
       {/* 设置覆盖层 —— 对齐 ZCode 的 WorkspaceSettingsLayer：absolute inset-0 压在
           shell 之上，shell 不卸载；Esc / 返回工作台退出（useShell.closeSettings） */}

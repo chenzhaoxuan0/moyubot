@@ -17,19 +17,20 @@ import { cn } from "./cn.ts";
  * 对话窗格（docs/32 组栈模型）—— 组栈里的标签内容：无 mini-bar（标题/关闭/
  * 拆分全在组标签条），拖拽吸附在 GroupPanel。双态渲染（「单活+快照注册表」，
  * docs/31 口径不变）：
- * - 焦点态（live）：渲染全局链路 —— Timeline/Composer/PermissionDialog/
- *   ChatTerminalDock 原班人马；全局 activeUnitId/activeSessionId 在焦点同步
- *   器里被定义为「本窗格的会话」。
- * - 非焦点态 / 恢复中：渲染注册表快照（ChatViewport 只读投影）——失焦那刻
- *   从全局拍照，之后事件泵实时追加；点击窗格任意处即聚焦（权威重建在后台
- *   跑，restoring 落地前一直显示快照，无闪跳）。
+ * - live 态（本窗格持有全局对话链路）：渲染 Timeline/Composer/PermissionDialog/
+ *   ChatTerminalDock 原班人马。**live 归属 ≠ 画布焦点**：焦点移到终端窗格时
+ *   对话格仍是 live（终端从不争用全局对话链路，见 installChatPaneSync）——
+ *   只有另一个对话格聚焦才交接。
+ * - 快照态（另一个对话格持有链路 / 恢复中）：ChatViewport 只读投影 + 本窗格
+ *   bot 的空态头像 + 休眠输入框（点击即接管）——外观保持完整，不随焦点塌成
+ *   空白（用户实测反馈：并排时失焦一侧输入框/头像消失、草稿一片空白）。
  *
- * 常驻挂载（A1）由 GroupPanel 控制；后台运行中的呼吸灯移到组标签条（busy 由
- * GroupPanel 经注册表订阅显示——这里保留数据面给标签用）。
+ * 常驻挂载（A1）由 GroupPanel 控制。
  */
 export const ChatPaneSlot = memo(function ChatPaneSlot({ paneKey }: { paneKey: string }) {
   const pane = useChatPanes((s) => s.panes[paneKey]);
   const focusedChatKey = useChatPanes((s) => s.focusedChatKey);
+  const activePaneId = useTerminalStore((s) => s.activePaneId);
   const unit = useWorkbench((s) => s.units.find((u) => u.id === pane?.unitId));
   const sessions = useWorkbench((s) => s.sessions);
   const runtimes = useWorkbench((s) => s.runtimes);
@@ -37,18 +38,22 @@ export const ChatPaneSlot = memo(function ChatPaneSlot({ paneKey }: { paneKey: s
   const accentStyle = useChatAccentStyle();
 
   if (pane === undefined) return null;
-  const isFocused = focusedChatKey === paneKey;
+  /** 本窗格持有全局对话链路（live 归属，跨终端焦点保持） */
+  const ownsLive = focusedChatKey === paneKey;
+  /** 画布焦点（视觉高亮用；与 live 归属解耦） */
+  const hasCanvasFocus = activePaneId === paneKey;
   // 恢复中（openSession 在途）也先渲染快照：全局正被清空/重建，直接读会闪
-  const isLive = isFocused && !pane.restoring;
+  const isLive = ownsLive && !pane.restoring;
+  const activate = (): void => {
+    if (!hasCanvasFocus) useTerminalStore.getState().activatePane(paneKey);
+  };
 
   return (
     <div
-      onMouseDown={() => {
-        if (!isFocused) useTerminalStore.getState().activatePane(paneKey);
-      }}
+      onMouseDown={activate}
       className={cn(
         "flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden bg-canvas select-none",
-        isFocused ? "ring-1 ring-teal/50" : "ring-1 ring-line/20",
+        hasCanvasFocus ? "ring-1 ring-teal/50" : "ring-1 ring-line/20",
       )}
     >
       {/* 窗格主体 */}
@@ -66,20 +71,58 @@ export const ChatPaneSlot = memo(function ChatPaneSlot({ paneKey }: { paneKey: s
             runtimes={runtimes}
             chatColumnWidth={chatColumnWidth}
           />
-          {/* F5 后还没聚焦过的窗格没有快照可看：给一个明确的「点这里加载」，
-              免得空窗格被误以为会话丢了（点击任意处聚焦 → openSession 重建） */}
-          {pane.timeline.length === 0 && pane.sessionId !== null && (
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-              <span className="rounded-btn border border-line/60 bg-card px-3 py-1.5 text-caption text-ash shadow-sm">
-                点击窗格加载会话
-              </span>
-            </div>
-          )}
+          {/* 休眠输入框：占住输入区的位置与外观，点击即接管 live（焦点链
+              openSession 回放后换成真 Composer）——并排时两侧版式一致 */}
+          <DormantComposer chatColumnWidth={chatColumnWidth} unitName={unit?.name} onActivate={activate} />
+          {pane.timeline.length === 0 &&
+            (pane.sessionId === null ? (
+              /* 草稿：本窗格 bot 的空态头像与问候（全局此刻属于别的对话格） */
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center pb-32">
+                <EmptyState unit={unit} />
+              </div>
+            ) : (
+              /* F5 后还没聚焦过的窗格没有快照：明确的「点这里加载」，免得
+                 空窗格被误以为会话丢了（点击任意处聚焦 → openSession 重建） */
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center pb-32">
+                <span className="rounded-btn border border-line/60 bg-card px-3 py-1.5 text-caption text-ash shadow-sm">
+                  点击窗格加载会话
+                </span>
+              </div>
+            ))}
         </div>
       )}
     </div>
   );
 });
+
+/* ------------------------------------------------------------- 快照态输入区 */
+
+/**
+ * 休眠输入框 —— 快照态对话格的输入区占位：与 Composer 同列宽同圆角，文案提示
+ * 点击接管。不承载输入（全局 Composer 属于 live 的那个对话格）。
+ */
+function DormantComposer({
+  chatColumnWidth,
+  unitName,
+  onActivate,
+}: {
+  chatColumnWidth: number;
+  unitName: string | undefined;
+  onActivate: () => void;
+}) {
+  return (
+    <div className="shrink-0 px-4 pb-4 pt-2">
+      <button
+        type="button"
+        onClick={onActivate}
+        className="mx-auto flex w-full items-center rounded-panel border border-line/70 bg-card px-4 py-3 text-left text-body-sm text-ash shadow-subtle transition hover:border-teal/40 hover:text-graphite"
+        style={{ maxWidth: chatColumnWidth }}
+      >
+        {unitName ? `点击继续与「${unitName}」对话…` : "点击继续对话…"}
+      </button>
+    </div>
+  );
+}
 
 /* ------------------------------------------------------------- 焦点态 */
 

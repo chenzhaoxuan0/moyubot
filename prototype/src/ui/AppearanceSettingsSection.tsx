@@ -19,14 +19,12 @@ import {
   Pencil,
   Smartphone,
   Laptop,
-  PanelBottom,
   Bot,
   Sticker,
 } from "lucide-react";
 import { useAppearance } from "../store/useAppearance.ts";
 import { BrandLogo } from "./BrandLogo.tsx";
 import { LogoCropDialog } from "./LogoCropDialog.tsx";
-import { Toggle } from "./Toggle.tsx";
 import { useLayoutStore } from "./mobile/useIsMobile.ts";
 import { useShell as useShellState } from "../store/useShell.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
@@ -263,10 +261,6 @@ export function AppearanceSettingsSection() {
   const layoutPref = useLayoutStore((s) => s.preference);
   const setLayoutPref = useLayoutStore((s) => s.setPreference);
   const windowIsMobile = useLayoutStore((s) => s.windowIsMobile);
-
-  const statusBarHeight = useShellState((s) => s.statusBarHeight);
-  const statusBarLocked = useShellState((s) => s.statusBarLocked);
-  const setStatusBarLocked = useShellState((s) => s.setStatusBarLocked);
 
   const chatColumnWidth = useShellState((s) => s.chatColumnWidth);
   const chatColumnMode = useShellState((s) => s.chatColumnMode);
@@ -706,29 +700,6 @@ export function AppearanceSettingsSection() {
               </button>
             );
           })}
-        </div>
-      </SectionCard>
-
-      {/* ---------------------------------------------------- 底栏（任务栏） */}
-      <SectionCard
-        icon={<PanelBottom size={16} />}
-        title="底栏（任务栏）"
-        desc="折叠对话停靠的地方。高度可锁（任务栏锁定语义）：锁定时固定不可拖拽，默认锁定在最薄一档 28px。"
-      >
-        <div className="flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <p
-              className="text-body-sm font-medium text-ink"
-              title={
-                statusBarLocked
-                  ? `已锁定在当前高度（${statusBarHeight}px）。解锁后可拖动底栏上缘调整。`
-                  : "未锁定：拖动底栏上缘可在 28–44px 间调整（拉高显示任务详情行），双击手柄复位最薄档。"
-              }
-            >
-              锁定底栏高度
-            </p>
-          </div>
-          <Toggle on={statusBarLocked} onChange={setStatusBarLocked} ariaLabel="锁定底栏高度" />
         </div>
       </SectionCard>
 

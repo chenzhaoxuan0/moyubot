@@ -1,4 +1,5 @@
 import { useWorkbench, selectActiveUnit } from "../store/useWorkbench.ts";
+import type { WorkUnit } from "../core/units.ts";
 import { useAppearance } from "../store/useAppearance.ts";
 import { useShell } from "../store/useShell.ts";
 import { botAvatarStyle } from "./Sidebar.tsx";
@@ -40,11 +41,13 @@ export function Timeline() {
 /* ------------------------------------------------------------- 空态 */
 
 /**
- * 对话空态主角（头像 + 问候 + 交代任务提示）。由 WorkspaceShell 渲染为对话列
- * 上的绝对定位覆盖层（固定预留居中，与输入区高度解耦）
+ * 对话空态主角（头像 + 问候 + 交代任务提示）。由对话窗格渲染为绝对定位覆盖层
+ * （固定预留居中，与输入区高度解耦）。unit 缺省取全局激活 bot；非活跃对话格
+ * （快照态）显式传本窗格的 bot——全局此刻属于另一个对话格（docs/32 §九）。
  */
-export function EmptyState() {
-  const unit = useWorkbench(selectActiveUnit);
+export function EmptyState({ unit: unitProp }: { unit?: WorkUnit } = {}) {
+  const activeUnit = useWorkbench(selectActiveUnit);
+  const unit = unitProp ?? activeUnit;
   const avatarFrame = useAppearance((s) => s.avatarFrame);
 
   const hour = new Date().getHours();

@@ -362,7 +362,11 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
 export function installChatPaneSync(): () => void {
   const unsubCanvas = import("./useTerminalStore.ts").then(({ useTerminalStore }) => {
     // docs/32 焦点单轨：游标是 activePaneId（终端或对话皆可）；chat 侧只关心
-    // 它指向对话窗格的时刻 —— 投影成 chatKey 再比前后，终端↔终端切换不打扰
+    // 它指向**另一个对话窗格**的时刻。
+    // 焦点移到终端窗格时**不交接**：全局对话链路（Timeline/Composer/审批）
+    // 只会被另一个对话窗格争用，终端从不碰它——此前把终端焦点当作「对话失
+    // 焦」降级成只读快照，分屏并排时对话格的输入框/空态头像随焦点消失、草稿
+    // 一片空白（用户实测反馈）。现在对话格在终端聚焦期间保持 live。
     const chatKeyOf = (paneId: string | null): string | null => {
       if (paneId === null) return null;
       return useTerminalStore.getState().panes[paneId]?.kind === "chat" ? paneId : null;
@@ -370,7 +374,7 @@ export function installChatPaneSync(): () => void {
     let prev = chatKeyOf(useTerminalStore.getState().activePaneId);
     return useTerminalStore.subscribe((s) => {
       const cur = chatKeyOf(s.activePaneId);
-      if (cur === prev) return;
+      if (cur === null || cur === prev) return;
       prev = cur;
       useChatPanes.getState().handleCanvasFocusChange(cur);
     });

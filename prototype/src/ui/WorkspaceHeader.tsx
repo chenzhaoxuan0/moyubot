@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
-import { Check, ChevronDown, FolderOpen, MessageSquarePlus, PanelBottom, Plus, RotateCw, Smartphone, Terminal, X, Zap } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, MessageSquarePlus, Plus, RotateCw, Smartphone, Terminal, X, Zap } from "lucide-react";
 import { useShell } from "../store/useShell.ts";
 import { useWorkbench, selectActiveUnit } from "../store/useWorkbench.ts";
-import { useTaskbar } from "../store/useTaskbar.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { sidePaneOccupies } from "../core/sidePaneTabs.ts";
 import { listEditors, openInEditor, type DaemonEditorInfo } from "../adapters/daemon/client.ts";
@@ -128,11 +127,9 @@ export function WorkspaceHeader() {
           </button>
         )}
 
-        {/* 折叠对话到底栏（任务栏最小化的对位）：有活跃会话才出现。折叠后对话列
-            回到空白态可开新对话，被折叠的会话停靠在底栏（运行中则任务转后台
-            跟踪），点底栏条目随时切回 —— 时间线由 openSession 谱系回放重建。
-            <480 隐（阶梯④）：极窄时让位给切换器；底栏入口仍可从运行中的对话
-            压缩动画到达，宽度恢复即回 */}
+        {/* 从外部源文件同步（有活跃会话才出现）。<480 隐（阶梯④）。
+            原「折叠对话到底栏」钮已随任务栏机制退役（docs/32 §九：会话
+            全量由画布标签管理，底栏不再承载会话） */}
         {activeSessionId !== null && (
           <>
             <button
@@ -171,14 +168,6 @@ export function WorkspaceHeader() {
               ) : (
                 <RotateCw size={13} className={isSyncing ? "animate-spin text-teal" : ""} />
               )}
-            </button>
-            <button
-              onClick={() => useTaskbar.getState().minimize()}
-              aria-label="折叠对话到底栏"
-              title="折叠当前对话到底栏（最小化，任何状态可用）：运行中的任务转后台继续、空闲对话停靠为「已折叠」，对话列回到空白可开新对话；从底栏条目随时点回"
-              className="hidden h-7 w-7 shrink-0 items-center justify-center rounded-btn text-graphite transition hover:bg-line-soft hover:text-ink @min-[480px]:flex"
-            >
-              <PanelBottom size={13} />
             </button>
           </>
         )}

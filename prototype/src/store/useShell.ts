@@ -224,50 +224,6 @@ function persistChatColumnWidth(w: number): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// 全局底栏高度（任务栏）：默认最薄一档（28px，与原状态栏同高），可拖拽调高
-// 给愿意用高度换信息的用户 —— 拉高后任务 chip 展开「正在干什么」的细节行。
-// ---------------------------------------------------------------------------
-
-const STATUSBAR_HEIGHT_KEY = "agent-workbench:statusbar-height-px";
-/** 原全局状态栏高度（h-7）—— 单行紧凑 chip 正好放下，也是默认档 */
-export const STATUSBAR_MIN = 28;
-/** 上限 = 折叠对话会用到的最高高度：双行详情 chip（32px）+ 上下留白。
- *  再高只会在 chip 之外堆空白，不给拖 */
-const STATUSBAR_MAX = 44;
-const STATUSBAR_DEFAULT = 28;
-
-function readStatusBarHeight(): number {
-  if (typeof window === "undefined") return STATUSBAR_DEFAULT;
-  try {
-    const raw = window.localStorage.getItem(STATUSBAR_HEIGHT_KEY);
-    const n = raw === null ? NaN : Number(raw);
-    if (!Number.isFinite(n)) return STATUSBAR_DEFAULT;
-    return Math.min(STATUSBAR_MAX, Math.max(STATUSBAR_MIN, Math.round(n)));
-  } catch {
-    return STATUSBAR_DEFAULT;
-  }
-}
-
-function persistStatusBarHeight(h: number): void {
-  try {
-    window.localStorage.setItem(STATUSBAR_HEIGHT_KEY, String(Math.round(h)));
-  } catch {
-    /* ignore */
-  }
-}
-
-const STATUSBAR_LOCKED_KEY = "agent-workbench:statusbar-locked";
-/** 默认锁定（任务栏锁定语义）：高度固定不可拖拽，停在最薄一档 */
-function readStatusBarLocked(): boolean {
-  if (typeof window === "undefined") return true;
-  try {
-    return window.localStorage.getItem(STATUSBAR_LOCKED_KEY) !== "0";
-  } catch {
-    return true;
-  }
-}
-
 interface ShellState {
   sidebarWidth: number;
   /** 对话阅读列最大宽度（时间线与输入框共用）—— 由 chatColumnMode 派生的实际像素 */
@@ -275,10 +231,6 @@ interface ShellState {
   /** 对话列宽模式：standard(768/Codex) | wide(900/超宽) | custom(滑杆自定) */
   chatColumnMode: ChatColumnMode;
   sidebarCollapsed: boolean;
-  /** 全局底栏（任务栏）高度，px。默认 28（最薄档）；拖上缘调高，双击手柄复位 */
-  statusBarHeight: number;
-  /** 底栏高度锁定（默认 true）：锁定时隐藏拖拽手柄、高度固定 —— 设置页开关 */
-  statusBarLocked: boolean;
   /**
    * 当前折叠是不是「窗口变窄触发的自动折叠」。窄→宽时要跟着自动展开；
    * 用户手动收起（toggleSidebar）会清掉这个标记 —— 显式选择优先于自动恢复。
@@ -307,10 +259,6 @@ interface ShellState {
   setChatColumnWidth: (w: number) => void;
   /** 切换对话列宽模式：standard/wide 落预设像素；custom 保留当前值交给滑杆 */
   setChatColumnMode: (mode: ChatColumnMode) => void;
-  /** 底栏高度（px）。拖拽过程传 persist:false 只改内存，落定后默认落盘 */
-  setStatusBarHeight: (h: number, opts?: { persist?: boolean }) => void;
-  /** 锁定底栏高度（默认 true） */
-  setStatusBarLocked: (locked: boolean) => void;
   toggleSidebar: () => void;
 
   setConversationView: (v: ConversationView) => void;
@@ -331,8 +279,6 @@ export const useShell = create<ShellState>((set, get) => ({
   sidebarWidth: readWidth(),
   chatColumnWidth: readChatColumnWidth(readChatColumnMode()),
   chatColumnMode: readChatColumnMode(),
-  statusBarHeight: readStatusBarHeight(),
-  statusBarLocked: readStatusBarLocked(),
   sidebarCollapsed: false,
   sidebarAutoCollapsed: false,
 
@@ -385,22 +331,7 @@ export const useShell = create<ShellState>((set, get) => ({
     persistChatColumnWidth(w);
   },
 
-  /** 底栏高度：拖拽中连续 set（不落盘，跟手），结束时调用方传 persist 落盘 */
-  setStatusBarHeight: (h, opts) => {
-    const clamped = Math.min(STATUSBAR_MAX, Math.max(STATUSBAR_MIN, Math.round(h)));
-    set({ statusBarHeight: clamped });
-    if (opts?.persist !== false) persistStatusBarHeight(clamped);
-  },
 
-  /** 锁定/解锁底栏高度（设置页开关）。锁定只固定高度，不改变当前值 */
-  setStatusBarLocked: (locked) => {
-    set({ statusBarLocked: locked });
-    try {
-      window.localStorage.setItem(STATUSBAR_LOCKED_KEY, locked ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
-  },
 
   // 手动开合 = 用户接管：清掉自动折叠标记，宽回来时不替用户做主
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed, sidebarAutoCollapsed: false })),

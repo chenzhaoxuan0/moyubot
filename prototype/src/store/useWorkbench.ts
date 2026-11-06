@@ -983,8 +983,9 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     // 历史属于这场对话（终端换 shell），不该带进另一个 bot 的输入框。
     // busy 必须跟着复位：它是「活跃会话在跑」的镜像，活跃会话都被切走了还
     // 挂 true 的话，后续 session.status 事件找不到活跃会话、永远没人清它 ——
-    // openSession 门禁从此锁死，被切走的运行中对话也回不去（底栏条目点的
-    // 就是这条路）。运行状态本身由任务栏（useTaskbar）继续跟踪。
+    // openSession 门禁从此锁死，被切走的运行中对话也回不去（侧栏历史行 /
+    // 对话标签重新聚焦走的就是这条路）。后台运行状态由侧栏历史状态灯与
+    // 画布标签的快照事件泵承担（任务栏机制已退役，docs/32 §九）。
     // 临时注入配置按 bot 记忆：切回来恢复这个 bot 上次的覆盖态（不重置回跟随预设）
     const restoredTurn = get().turnContextByUnit[String(activeUnitId)] ?? DEFAULT_TURN_CONFIG;
     set({
