@@ -580,6 +580,9 @@ function createWindow() {
           minWidth: 480,
           minHeight: 320,
           autoHideMenuBar: true,
+          // 弹出窗同样按持久化主题给底色 —— 否则首绘前露 Chromium 默认白底，
+          // 深色用户开弹出窗也要挨一下闪白（主窗口同款治理）
+          backgroundColor: startupUseDark() ? "#000000" : "#f7f7f4",
           ...(process.platform === "darwin" ? {} : { titleBarStyle: "hidden" }),
           webPreferences: {
             preload: path.join(__dirname, "preload.cjs"),

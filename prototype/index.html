@@ -64,6 +64,17 @@
         });
       })();
     </script>
+    <style>
+      /* 首帧底色兜底 —— 治「开窗闪白」：上面的内联脚本已按持久化主题把 data-theme
+         设到 <html> 上，但 body 的 bg-canvas 是 Tailwind 类，样式表（dev 由 Vite 经
+         JS 注入）到达之前不生效，Chromium 就按默认白底绘一帧 —— 深色用户开窗
+         眼前一亮。这里用原生 CSS 直接给 html 上画布色（与 styles.css 的
+         --color-canvas 同值：dark #000000 / light #f7f7f4），首帧即终色。
+         只写在 html 上：styles.css 到位后 body 的画布色 / 壁纸层（html::before）
+         都画在它上面，这条规则从此不可见，不会盖住外观设置的自定义底色。 */
+      html[data-theme="dark"] { background: #000000; }
+      html[data-theme="light"] { background: #f7f7f4; }
+    </style>
   </head>
   <body class="bg-canvas text-ink">
     <div id="root"></div>
