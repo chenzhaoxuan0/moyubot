@@ -203,6 +203,7 @@ agent-workbench/
 |---|---|---|
 | **ZCode**（`zocdeusually/ZCode`） | Apache-2.0 | 外壳骨架总蓝本：Shell 布局「收起即归零」、设置覆盖层、命令中心、自动化页两条口径、空态原则（功能不因空而消失）；MCP 配置同步的原子写与坏文件 fail-stop 规范、技能扫描策略（点目录跳过）→ MCP / 技能管理；聊天轮级过程折叠（AssistantHistory：最终正文永远可见、过程默认收起、落定才收口、展开态跨虚拟滚动记忆）→ ChatViewport 工作组 |
 | **Apache Maka**（Apache 软件基金会，孵化中） | Apache-2.0 | **仅架构与设计参照，未复制代码**（2026-10 引入的后期架构参照，非起步四家之一）：①「日志即运行时」——host 拥有 canonical 对话账本，界面 / 历史 / 恢复都是这份日志的投影；② 对话谱系 = 段的链；③ 分支 = 新物理段 + 血缘字段 + 读模型折叠 → `backend/src/runtime/host.ts` `backend/src/store/db.ts` `prototype/src/core/events.ts` `prototype/src/ui/forkHistory.ts`；逐条明细见本节下方「Apache Maka —— 借鉴点明细」 |
+| **orca**（`stablyai/orca`，Lovecast Inc.） | MIT | **仅交互与性能范式参照，未复制代码**（2026-11 引入的后期参照，分两轮；两轮比对的 29 个 orca 特征标识符在本项目零命中）：① **组栈画布**（docs/32）——「叶子=标签组」分屏模型、组内标签常驻挂载 + 非激活组变暗、五向拖放几何、组内 MRU、Splitter 松手才提交 → `useTerminalStore.ts` `GroupPanel.tsx` `TerminalSplitTree.tsx` `canvasLayout.ts`；② **切换瞬时化 + 首开即见**——「切换只翻 UI 态、数据先到、重活后置」：重视图常驻挂载、行高亮本地即时、回切直用快照不重建、数据意图预取（悬停 120ms 驻留）+ 空闲预热、加载提示只在无缓存时延迟 200ms 出现 → `WorkspaceShell.tsx` `useChatPanes.ts` `useUnitHistory.ts` `Sidebar.tsx`；逐条明细见 [`docs/05-reference-map.md`](docs/05-reference-map.md) §十八 |
 | **t3code**（T3） | MIT | 供应商实例管理（ProviderInstancesPanel）、模型偏好系统（隐藏/排序/自定义模型）、harness 品牌图标、opencode 接入形态（serve + SSE） |
 | **deepseek-harness**（dsh） | MIT | 轨迹账本与轮次头、会话内页签、StatsPills/ModelsSection；其 ACP 协议实现是 dsh/mcode/hermes/kimi 四家 acp 接入的参照 |
 | **waku / waku-agent**（Sean Chen / ShenSeanChen） | MIT | 记忆三柱（语义事实/情节事件/程序性技能）与编排、管家（steward）机制 |

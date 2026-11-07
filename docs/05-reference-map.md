@@ -27,6 +27,7 @@
 | termux-app | 本地克隆（GPL-3.0） | 移动端终端虚拟键盘辅助按键栏形式与排布（2x7 双行网格、倒 T 方向键集群、修饰键粘滞状态机） | `prototype/src/ui/mobile/MobileVirtualKeyBar.tsx` | `C:\Users\chenziyu\project\Agent\termux-app` | 无（纯前端触控交互） |
 | GrokBot | 视觉参照 | 侧栏 bot 头像形态 | `Sidebar.tsx` `UnitRow` | 无本地克隆（仅视觉参照） | 无 |
 | Apache Maka | 本地克隆（Apache-2.0，ASF 孵化中；**2026-10 引入的后期架构参照**，不在起步四家之列） | 对话账本归 host、对话谱系与分叉 | `backend/src/runtime/host.ts` `backend/src/store/db.ts` `prototype/src/core/events.ts` `prototype/src/ui/forkHistory.ts` | `C:\Users\chenziyu\project\Agent\maka` | `core/events.ts` RuntimeEvent union + `store/db.ts` 账本 seq 与血缘三列 + `session.events.since` 账本读通道 |
+| orca | 本地克隆（MIT，stablyai/orca v1.4.214；**2026-11 引入的后期参照**，分两轮） | 组栈画布（「叶子=标签组」、组内常驻挂载、五向拖放，docs/32）；切换瞬时化与首开即见（常驻挂载、行高亮即时、回切直用缓存、意图预取 / 空闲预热、延迟加载提示）——明细见 §十八 | `prototype/src/store/useTerminalStore.ts` `prototype/src/ui/GroupPanel.tsx` `prototype/src/ui/TerminalSplitTree.tsx` `prototype/src/store/canvasLayout.ts` `prototype/src/WorkspaceShell.tsx` `prototype/src/store/useChatPanes.ts` `prototype/src/store/useUnitHistory.ts` `prototype/src/ui/Sidebar.tsx` | `C:\Users\chenziyu\project\Agent\orca` | 无（纯前端交互模式；daemon 侧的 `unit.history` / `session.events.since` 降本为本项目自研） |
 | Codex 桌面版排版真值 | 数值参照（**只采测量数值，零代码复制**；经 Suk1u/codex-clone 拆解产出，codex-ui-kit@0.1.2 MIT 对账确认；Suk1u 仓库本身无许可证，协议备注见 docs/28） | 对话页排版体系：14/22 正文档、单色标题阶梯、轮次间距 12/34px、气泡、行内代码、过程卡统一 | `prototype/src/styles.css`（text-thread）`MarkdownContent.tsx` `UserMessageBubble.tsx` `ChatViewport.tsx` 等（全清单见 docs/28） | `C:\Users\chenziyu\project\Agent\codexskin\codex-clone` | 无（纯前端视觉参数） |
 
 > 上述 git 克隆（含 WeKnora 源码）已于 2026-09-29 全量 `git pull --ff-only` 同步至各自上游 HEAD；
@@ -191,7 +192,7 @@ ZCode 是工作台布局与交互习惯的**总参照**，几乎每个壳层文�
 
 ## 十二、许可证状况
 
-参照仓库均满足「只接受 Apache-2.0 / MIT」的硬约束：ZCode（Apache-2.0）、t3code / deepseek-harness / pi / gpt_image_playground / waku-agent（MIT）、WeKnora（Apache-2.0）、Apache Maka（Apache-2.0，ASF 孵化中）。逐仓库的 HEAD 与活跃度证据见 `02-reference-audit.md`（waku-agent、gpt_image_playground、WeKnora、Apache Maka 四家为后期引入，尚未补入该审计表）。
+参照仓库均满足「只接受 Apache-2.0 / MIT」的硬约束：ZCode（Apache-2.0）、t3code / deepseek-harness / pi / gpt_image_playground / waku-agent（MIT）、WeKnora（Apache-2.0）、Apache Maka（Apache-2.0，ASF 孵化中）、orca（MIT）。逐仓库的 HEAD 与活跃度证据见 `02-reference-audit.md`（waku-agent、gpt_image_playground、WeKnora、Apache Maka、orca 五家为后期引入，尚未补入该审计表）。
 
 ---
 
@@ -317,3 +318,61 @@ ZCode 是工作台布局与交互习惯的**总参照**，几乎每个壳层文�
 移出需求；Context compaction 历史压缩、Eval 体系（Experiment → Cell → Attempt → Result）、
 Peer Mesh 远程多端、交互式 user-question 工具——这四块分别走自己的路线（compaction 记入
 ADR 0012 future work；eval 参照 waku-agent 见 §四；远程走 ADR 0006 双轨；question 工具未实现）。
+
+---
+
+## 十八、orca —— 组栈画布与切换性能的交互范式
+
+本地克隆：`C:\Users\chenziyu\project\Agent\orca`（stablyai/orca v1.4.214，MIT，Copyright (c) 2026
+Lovecast Inc.；「Next-gen IDE for parallel agentic development」）。下文 orca 出处路径默认相对
+`src/renderer/src/`，`src/shared/`、`src/main/` 下的单独标全路径。
+
+**它是 2026-11 引入的后期参照，分两轮**（orca 与本项目同为 Electron + React 19 + Zustand 5 的
+agent 工作台，两轮都对照 v1.4.214 源码实证）：
+
+1. **组栈画布**（2026-11-05，提交 `a4357ac`，设计全文见 `docs/32-group-stack-canvas.md`）：会话画布从
+   「叶子=窗格」迁到 orca 同型的「叶子=标签组」，并采纳 A 级五项、B 级拖拽两项体验。
+2. **切换瞬时化 + 首开即见**（2026-11-07，提交 `94e1c05`）：动因是实测左侧栏切换会话标签延迟大、
+   bot 历史子列表首次展开要等「加载中…」。核心一句话：**切换只翻 UI 态，数据先到，重活后置**。
+
+> **借鉴边界**：取的是**交互范式与时序 / 几何参数**，**未复制或改编任何 orca 的代码与资产**。
+> 两轮去重共比对 30 个 orca 标识符——画布侧 `src/shared/tab-types.ts` /
+> `components/tab-group/tab-drop-zone.ts` / `runtime/web-session-tabs-sync/tab-group-layout-tree.ts` /
+> `components/tab-group/RetainedPaneHost.tsx` 的全部导出（21 个），加切换侧十个特征名
+> （`scheduleAfterInputQuiet` / `mountedWorktreeIds` / `RetainedPaneHost` / `useActiveRow` /
+> `TerminalWorkbenchContainer` / `setTerminalPrewarmWorktrees` / `shouldKeepPaintable` /
+> `hasMountedTerminalWorkbench` / `worktree-row-hover-prewarm` / `terminal-hidden-view-parking`；
+> `RetainedPaneHost` 与画布侧重复）——除通用词 `Tab` 外的 29 个在本项目**零命中**。数值上与 orca 一致的只有参数：悬停驻留 120ms（`HOVER_PREWARM_DWELL_MS`）、
+> 加载提示延迟 200ms、分屏比例容差 ±0.005（`SPLIT_RATIO_TOLERANCE`）；非激活组变暗只借做法、
+> 取值不同（本项目 0.75，orca 现值 0.95）。代码中约 20 处「对齐 orca / orca 同款」注释标注的是
+> 思路出处。因此 orca 与 Maka 同例，**不进** `THIRD-PARTY-NOTICES.md`。
+
+### 十八·1 第一轮借鉴点：组栈画布（详见 docs/32）
+
+| # | 借鉴点 | orca 出处 | 本项目落点 | 取舍 |
+|---|---|---|---|---|
+| 1 | **「叶子=标签组」分屏模型**：每个分屏格子是完整标签栈，拖标签入格即入栈，空组自动塌缩 | `src/shared/tab-types.ts`（组栈模型）；`runtime/web-session-tabs-sync/tab-group-layout-tree.ts`（树操作面） | `prototype/src/store/useTerminalStore.ts`（`PaneGroup` / `GroupLayoutNode`）；`prototype/src/ui/TerminalSplitTree.tsx` | 只换布局骨架：会话身份 / 焦点链 / 快照注册表沿用 docs/31（docs/32 §二） |
+| 2 | **组内标签常驻挂载 + 非激活组变暗** | `components/tab-group/RetainedPaneHost.tsx`；`components/tab-group/split-group-dim.ts` | `prototype/src/ui/GroupPanel.tsx`（`hidden` + `inert`，切标签零 remount；非焦点格 `opacity-75`） | 变暗只借做法、取值不同（见上方边界说明） |
+| 3 | **五向拖放几何 + 组内 MRU** | `components/tab-group/tab-drop-zone.ts`；`src/shared/tab-types.ts` | `GroupPanel.tsx`（中央入栈 / 四边分出新组）；`useTerminalStore.ts` 组内 `recentPaneIds` | 拖拽悬停预览改为「组激活」，而非 orca 的目标标签内容预览（docs/32 §八） |
+| 4 | **Splitter 松手才提交 + 比例容差序列化 + 卸载前补写** | `components/tab-group/TabGroupSplitNodeTree.tsx`；`src/shared/workspace-layout/terminal-pane-tree.ts`（`SPLIT_RATIO_TOLERANCE`） | `TerminalSplitTree.tsx`（拖动中只写 DOM style）；`prototype/src/store/canvasLayout.ts`（±0.005 省略、beforeunload 补写） | 一致 |
+
+### 十八·2 第二轮借鉴点：切换瞬时化与首开即见
+
+| # | 借鉴点 | orca 出处 | 本项目落点 | 取舍 |
+|---|---|---|---|---|
+| 1 | **重视图常驻挂载**：首次需要时挂载、之后永不卸载，隐藏只翻 `hidden` + `inert` | `app-shell/use-app-chrome-layout.ts`（mount-once latch）；`components/TerminalWorktreeSplitSurface.tsx`（class 翻转） | `prototype/src/WorkspaceShell.tsx` ConversationSlot（`canvasMounted`） | 同口径「重画布常驻、轻页面卸载」。另补 orca 用不上的 `CanvasVisibleContext`（`prototype/src/ui/canvasVisibility.ts`）：本项目画布内有挂 window/document 键盘监听的组件，`inert` 挡得住焦点、挡不住全局监听 |
+| 2 | **行高亮本地即时**：点击当帧就翻，不等数据落位 | `components/sidebar/worktree-list/navigation/use-active-row.ts` | `prototype/src/ui/Sidebar.tsx`（`highlightedSessionId` 取焦点窗格的会话） | 高亮与灯分口径：灯的运行中 / 待交互兜底仍只认持有全局链路的那一行（`rowOwnsGlobal`），防回放在途时串灯 |
+| 3 | **隐藏视图保留最后数据，回切直用、不重建** | `components/native-chat/use-native-chat-retained-session.ts` | `prototype/src/store/useChatPanes.ts` 快照直通；`prototype/src/store/useWorkbench.ts` `adoptPaneSnapshot` | **架构不同**：orca 每个对话视图各自持有会话；本项目是「单活 + 快照注册表」（docs/31 §九），回切 = 把新鲜快照一次原子提升为全局视图，冷启动仍回落 openSession 权威重建 |
+| 4 | **重活推出切换路径**：等输入安静 / 浏览器空闲再做 | `lib/input-quiet-scheduler.ts` | `useWorkbench.ts` `refreshSessionMetadata`（500ms 去抖）；`useUnitHistory.ts` 空闲预热队列（`requestIdleCallback`） | 未引入 input-quiet 调度原语，以去抖 + 空闲回调近似 |
+| 5 | **意图预取**：悬停 120ms 驻留才算有意图、滚轮重置驻留、按下立即；单槽「最新者胜」 | `components/sidebar/workspace-card/surface/worktree-row-hover-prewarm.ts` | `Sidebar.tsx` bot 行 `onPointerEnter` / `onPointerLeave` / `onWheel` / `onPointerDown` / `onFocus`；`useUnitHistory.ts` hover 槽 | orca 预热的是**视图**（终端挂载与布局），本项目预取的是**数据**（`unit.history`）——借的是触发节奏，不是预热内容 |
+| 6 | **投机预取跳过新鲜 / 在途，失败静默，由真实路径报错** | `components/sidebar/SidebarTaskNavButton.tsx`；`store/slices/worktrees/create/prefetch-worktree-create-base.ts` | `useUnitHistory.ts` `ensure`（新鲜窗口 / 在途合并 / `silent`） | 一致 |
+| 7 | **有缓存即显示 + 后台刷新；加载提示只在无缓存时、且延迟 200ms 出现** | `components/right-sidebar/ai-vault/scanning/ai-vault-session-refresh.ts`；`components/right-sidebar/ai-vault/session-list/use-subagent-sessions.ts` | `Sidebar.tsx` 历史子列表（`HISTORY_LOADING_DELAY_MS`）+ `useUnitHistory.ts` SWR | 一致；本项目另加失效代际与请求序号，防改动前发出的旧请求结果覆盖新数据 |
+
+### 十八·3 看了但没跟的
+
+| orca 的做法 | 本项目为何不跟 | 出处 |
+|---|---|---|
+| 侧栏行数据由主进程推送快照 + 事件，展开**零请求** | 这是终极形态；本项目 daemon 尚无「每 bot 历史」推送通道，先用前端缓存 + 意图预取 + 空闲预热逼近，推送记为后续方向 | `hooks/ipc-events/agent-status-ipc-bridge.ts` |
+| 隐藏视图淘汰策略（parking：最少保留时长、最近 N 个常驻、TTL 回收） | 本项目对话 / 终端窗格的数量级用不上淘汰 | `components/terminal-pane/terminal-hidden-view-parking.ts` |
+| 键盘导航时预热 ±1 邻居 | 侧栏没有键盘逐行导航的场景 | `components/sidebar/worktree-list/navigation/use-neighbor-prewarm.ts` |
+| 原生会话解析结果**落盘**缓存、扫描进程降 OS 优先级 | 本项目 daemon 用进程内 LRU（`backend/src/runtime/trace.ts` `readSessionRecords`）+ 源文件签名跳过重解析（`backend/src/history/sync.ts` `nativeLedgerFresh`），暂不落盘 | `src/main/ai-vault/parse-cache/session-parse-cache-store.ts`；`src/main/ai-vault/scan-service/session-scanner-service-priority.ts` |
