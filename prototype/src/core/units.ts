@@ -544,11 +544,16 @@ export function isProjectUnit(u?: WorkUnit | null): boolean {
 /**
  * 侧栏与单元切换器共用的列表排序（两侧同序才好选）：常驻节在前（总管 steward
  * 最前，其余跟定义序），普通节跟用户拖拽序 —— unitOrder 未记录的单元排末尾。
- * unitOrder 由 useWorkbench 持有（会话内记忆，侧栏拖拽写入，两侧共享读取）。
+ * unitOrder 由 useWorkbench 持有（侧栏拖拽写入，两侧共享读取）。
+ *
+ * 常驻节同款支持手动排序：residentOrder（useWorkbench 持久化的常驻拖拽序）
+ * 有记录时按它排（未记录的单元排末尾，保持彼此间的默认相对序），没有才回落
+ * 「总管最前、其余跟定义序」的缺省。
  */
 export function orderUnitsLikeSidebar(
   units: readonly WorkUnit[],
   unitOrder: readonly string[] | null,
+  residentOrder?: readonly string[] | null,
 ): { residentUnits: WorkUnit[]; normalUnits: WorkUnit[] } {
   const residents: WorkUnit[] = [];
   const normals: WorkUnit[] = [];
@@ -564,7 +569,12 @@ export function orderUnitsLikeSidebar(
         (a, b) => (unitOrder.indexOf(a.id) + 1 || 99) - (unitOrder.indexOf(b.id) + 1 || 99),
       )
     : stewardFirst(normals);
-  return { residentUnits: stewardFirst(residents), normalUnits: orderedNormals };
+  const orderedResidents = residentOrder
+    ? stewardFirst(residents).sort(
+        (a, b) => (residentOrder.indexOf(a.id) + 1 || 99) - (residentOrder.indexOf(b.id) + 1 || 99),
+      )
+    : stewardFirst(residents);
+  return { residentUnits: orderedResidents, normalUnits: orderedNormals };
 }
 
 // ---------------------------------------------------------------------------

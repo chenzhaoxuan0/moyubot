@@ -35,18 +35,21 @@ export function MobileDrawer({
   const refreshUnits = useWorkbench((s) => s.refreshUnits);
   /** PC 侧栏普通节的拖拽顺序 —— 手机端同一份，两端列表同序 */
   const unitOrder = useWorkbench((s) => s.unitOrder);
+  /** 常驻节的拖拽顺序（PC 端 localStorage 持久化）—— 同样两端共享 */
+  const residentOrder = useWorkbench((s) => s.residentOrder);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const openSettings = useShell((s) => s.openSettings);
   const resolvedAppearance = useAppearance((s) => s.resolvedAppearance);
   const setMode = useAppearance((s) => s.setMode);
 
   // 与 PC 侧栏同一套排序（core/units.ts 的 orderUnitsLikeSidebar，单一口径）：
-  // 常驻（pin）节整体置前、总管恒在首位，普通节按 PC 端拖拽顺序排 —— 手机抽屉
-  // 不再按 daemon 返回的原始顺序裸列，和 PC 端对不上的错位感就出在这里
+  // 常驻（pin）节整体置前、节内跟 PC 端拖拽顺序（没拖过回落「总管最前」的缺省），
+  // 普通节同样按 PC 端拖拽顺序排 —— 手机抽屉不再按 daemon 返回的原始顺序裸列，
+  // 和 PC 端对不上的错位感就出在这里
   const orderedUnits = useMemo(() => {
-    const { residentUnits, normalUnits } = orderUnitsLikeSidebar(units, unitOrder);
+    const { residentUnits, normalUnits } = orderUnitsLikeSidebar(units, unitOrder, residentOrder);
     return [...residentUnits, ...normalUnits];
-  }, [units, unitOrder]);
+  }, [units, unitOrder, residentOrder]);
 
   // 原生手势左滑退出状态
   const [dragX, setDragX] = useState(0);

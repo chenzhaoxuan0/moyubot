@@ -253,6 +253,9 @@ export function Sidebar() {
   /** 普通节拖拽排序：store 持有（单元切换器弹层共享同一份顺序，两侧同序） */
   const unitOrder = useWorkbench((s) => s.unitOrder);
   const setUnitOrder = useWorkbench((s) => s.setUnitOrder);
+  /** 常驻节拖拽排序：同一条共享链路（localStorage 持久化，重启后顺序还在） */
+  const residentOrder = useWorkbench((s) => s.residentOrder);
+  const setResidentOrder = useWorkbench((s) => s.setResidentOrder);
   const [dragUnit, setDragUnit] = useState<string | null>(null);
   /** 拖拽悬停的分区（常驻/普通）——drop zone 高亮用 */
   const [zoneHover, setZoneHover] = useState<"resident" | "normal" | null>(null);
@@ -288,8 +291,8 @@ export function Sidebar() {
   // 常驻 / 普通两节（排序逻辑在 core/units.ts 的 orderUnitsLikeSidebar，
   // 单元切换器弹层用同一函数）：常驻节天然归 bot tab（常驻的是服务型 bot）
   const { residentUnits, normalUnits } = useMemo(
-    () => orderUnitsLikeSidebar(visibleUnits, unitOrder),
-    [visibleUnits, unitOrder],
+    () => orderUnitsLikeSidebar(visibleUnits, unitOrder, residentOrder),
+    [visibleUnits, unitOrder, residentOrder],
   );
 
   // 历史子列表空闲预热（orca「展开只翻 UI 态」）：daemon 连上、bot 列表就绪后，按
@@ -455,7 +458,14 @@ export function Sidebar() {
             aria-label="常驻 bot"
             onDragOver={(e) => {
               e.preventDefault();
-              if (dragUnit !== null) setZoneHover("resident");
+              // 「松手设为常驻」提示只给普通 bot 的升级拖拽：常驻拖常驻是区内
+              // 排序（与普通节区内排序不亮提示同口径），亮提示反而误导
+              const dragged = allUnits.find((x) => x.id === dragUnit);
+              if (dragUnit !== null && dragged !== undefined && !isResidentUnit(dragged)) {
+                setZoneHover("resident");
+              } else {
+                setZoneHover((z) => (z === "resident" ? null : z));
+              }
             }}
             onDragLeave={(e) => {
               if (e.currentTarget.contains(e.relatedTarget as Node)) return;
@@ -476,6 +486,7 @@ export function Sidebar() {
             {residentUnits.map((u) => {
               const active = u.id === activeUnitId;
               const isSynthetic = isSyntheticUnit(u);
+              const unitId = u.id as UnitId;
               return (
                 <div
                   key={u.id}
@@ -495,7 +506,25 @@ export function Sidebar() {
                   onDrop={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
-                    onDropZone("resident");
+                    if (dragUnit && dragUnit !== unitId) {
+                      const dragged = allUnits.find((x) => x.id === dragUnit);
+                      if (dragged !== undefined && isResidentUnit(dragged)) {
+                        // 常驻行落到常驻行 = 区内排序（与普通节同款 splice 口径）
+                        const order = residentUnits.map((x) => x.id as string);
+                        const from = order.indexOf(dragUnit);
+                        const to = order.indexOf(unitId);
+                        if (from >= 0 && to >= 0) {
+                          order.splice(to, 0, ...order.splice(from, 1));
+                          setResidentOrder(order);
+                        }
+                      } else {
+                        // 普通 bot 落到常驻行上 = 升为常驻（落空白区走 section 的 onDropZone）
+                        onDropZone("resident");
+                        return;
+                      }
+                    }
+                    setDragUnit(null);
+                    setZoneHover(null);
                   }}
                   className={cn("mb-1", dragUnit === u.id && "opacity-40")}
                 >

@@ -64,6 +64,7 @@ export function UnitSwitcher(props: {
   const { current, isMobile, onOpenDrawer } = props;
   const units = useWorkbench((s) => s.units);
   const unitOrder = useWorkbench((s) => s.unitOrder);
+  const residentOrder = useWorkbench((s) => s.residentOrder);
   const selectUnit = useWorkbench((s) => s.selectUnit);
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<ViewMode>("bot");
@@ -94,6 +95,7 @@ export function UnitSwitcher(props: {
     const { residentUnits, normalUnits } = orderUnitsLikeSidebar(
       units.filter((u) => !isProjectUnit(u)),
       unitOrder,
+      residentOrder,
     );
     return [...residentUnits, ...normalUnits];
   })();
@@ -101,6 +103,7 @@ export function UnitSwitcher(props: {
     const { residentUnits, normalUnits } = orderUnitsLikeSidebar(
       units.filter((u) => isProjectUnit(u)),
       unitOrder,
+      residentOrder,
     );
     return [...residentUnits, ...normalUnits];
   })();

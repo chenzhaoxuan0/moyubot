@@ -88,6 +88,20 @@ function readLoopParams(): Record<string, LoopParamsState> {
   }
 }
 
+/** 常驻节拖拽序 —— 命名风格同 agent-workbench:active-unit */
+const RESIDENT_ORDER_KEY = "agent-workbench:resident-order";
+
+function readResidentOrder(): readonly string[] | null {
+  try {
+    const raw = localStorage.getItem(RESIDENT_ORDER_KEY);
+    if (raw === null) return null;
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : null;
+  } catch {
+    return null;
+  }
+}
+
 /** 时间线条目：归一化事件 + 序号 + 时间戳。UI 唯一消费的会话数据形状 */
 export interface TimelineItem {
   readonly id: number;
@@ -119,6 +133,12 @@ interface WorkbenchState {
    * 切换器弹层读到同一份顺序——两侧同序才好选（orderUnitsLikeSidebar 消费）。
    */
   unitOrder: readonly string[] | null;
+  /**
+   * 侧栏常驻节的拖拽排序（localStorage 持久化，键 agent-workbench:resident-order）。
+   * 常驻 bot 是后台服务，顺序是长期偏好——与 unitOrder 不同，重启后要还在。
+   * 同样被单元切换器弹层 / 移动抽屉共享（orderUnitsLikeSidebar 第三参）。
+   */
+  residentOrder: readonly string[] | null;
   runtimes: readonly RuntimeEntry[];
   activeRuntimeId: string;
   /**
@@ -248,6 +268,8 @@ interface WorkbenchState {
   refreshChannelIdentity: (profiles?: readonly string[]) => Promise<void>;
 
   setUnitOrder: (order: readonly string[]) => void;
+  /** 常驻节拖拽序（localStorage 持久化）——语义同 setUnitOrder，多一步落盘 */
+  setResidentOrder: (order: readonly string[]) => void;
   selectUnit: (id: UnitId) => void;
   addUnit: (u: WorkUnit, opts?: { createRoot?: boolean }) => Promise<void>;
   /**
@@ -699,6 +721,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
   daemonStatus: "connecting",
   activeUnitId: getInitialActiveUnit(),
   unitOrder: null,
+  residentOrder: readResidentOrder(),
   runtimes: [],
   activeRuntimeId: "zcode",
   // 注册表订阅到位后由下方 subscribe 补齐各执行器的默认模型
@@ -1109,6 +1132,16 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
 
   setUnitOrder: (unitOrder) => {
     set({ unitOrder });
+  },
+
+  setResidentOrder: (residentOrder) => {
+    set({ residentOrder });
+    // 顺序是长期偏好：写崩（隐私模式等）不影响本次会话内的排序生效
+    try {
+      localStorage.setItem(RESIDENT_ORDER_KEY, JSON.stringify(residentOrder));
+    } catch {
+      /* 私有模式写不进就算了 */
+    }
   },
 
   selectUnit: (activeUnitId) => {
