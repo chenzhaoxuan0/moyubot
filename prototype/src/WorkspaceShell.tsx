@@ -350,7 +350,7 @@ function ConversationSlot() {
             {/* 工作区头部：Agent 身份卡 + 新建会话入口 */}
             <WorkspaceHeader />
             <div className="flex min-h-0 flex-1 flex-col">
-              <TerminalPanel variant="canvas" />
+              <TerminalPanel />
             </div>
           </CanvasVisibleContext>
         </main>

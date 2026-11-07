@@ -1,20 +1,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { X, Plus, MessageSquarePlus, Maximize2, ExternalLink, ChevronDown, Zap, Columns2, Rows2 } from "lucide-react";
+import { X, Plus, MessageSquarePlus, Maximize2, ExternalLink, ChevronDown, Zap, Columns2, Rows2, RotateCw, Trash2, History, Combine } from "lucide-react";
 import { useTerminalStore, SUPPORTED_TERMINAL_PROFILES, type DropZone, type CanvasPane } from "../store/useTerminalStore.ts";
 import { useChatPanes } from "../store/useChatPanes.ts";
 import { useCanvasDnd } from "../store/canvasDnd.ts";
 import { useCanvasPopouts } from "../store/useCanvasPopouts.ts";
 import { dispatchTerminal } from "../adapters/daemon/client.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
+import { useSidePane } from "../store/useSidePane.ts";
+import { terminalSessionRegistry } from "../store/TerminalSessionManager.ts";
 import { deriveSessionLight, lightFlagsFromStatus, type SessionLightKind } from "../core/sessionLight.ts";
 import { TerminalPaneSlot, ShellOrAgentIcon } from "./TerminalPaneSlot.tsx";
 import { ChatPaneSlot } from "./ChatPaneSlot.tsx";
 import { SessionLightDot } from "./SessionLightDot.tsx";
 import { QuickContextMenu, quickMenuFromEvent, type QuickMenuState } from "./QuickContextMenu.tsx";
+import { useIsMobile } from "./mobile/useIsMobile.ts";
 import { cn } from "./cn.ts";
 
 /** 悬停焦点预览的时长阈值（B，docs/32 §四.4） */
 const HOVER_FOCUS_PREVIEW_MS = 300;
+
+/**
+ * 拆分某格（组栈语义：该格一分为二，新组承载新标签 —— 焦点标签是 chat → 新格
+ * 开草稿对话；是终端 → 开终端）。条尾直出按钮与「选择▾」菜单共用。
+ */
+function splitGroupPane(groupId: string, direction: "horizontal" | "vertical"): void {
+  const ts = useTerminalStore.getState();
+  ts.setActiveGroup(groupId);
+  const activeKind = ts.panes[ts.groups[groupId]?.activePaneId ?? ""]?.kind;
+  if (activeKind === "chat") {
+    ts.splitPane({ direction, chatPaneKey: useChatPanes.getState().createDraftRecord() });
+    return;
+  }
+  ts.splitPane({ direction, cwd: useWorkbench.getState().units.find((u) => u.id === useWorkbench.getState().activeUnitId)?.rootPath });
+}
 
 /**
  * 分屏格 = 标签组（docs/32 组栈模型）—— 每个格子自带标签条；窗格（终端/
@@ -276,20 +294,9 @@ export function GroupPanel({ groupId }: { groupId: string }) {
             标签在哪，＋就在哪）；工具条只剩图标化的拆分/最大化等全局动作 */}
         <GroupCreateBar groupId={groupId} />
 
-        <div className="ml-auto flex shrink-0 items-center gap-0.5 pr-0.5">
-          {/* 窗格级最大化（双 kind 通用）：当前激活标签整幅显示 */}
-          <button
-            type="button"
-            onClick={() => {
-              const paneId = group.activePaneId;
-              if (paneId !== null) useTerminalStore.getState().toggleMaximize(paneId);
-            }}
-            title="最大化当前标签（整格全幅显示）"
-            className="rounded p-0.5 text-ash hover:bg-line-soft hover:text-ink transition"
-          >
-            <Maximize2 size={11} />
-          </button>
-        </div>
+        {/* 条尾右端：本格动作组（原画布顶栏 2026-11 整行退役，动作下沉到每格 ——
+            语义更准：全部作用于**本格**的激活标签，而非全局聚焦） */}
+        <GroupTailActions groupId={groupId} />
       </div>
 
       {/* 窗格层：全部标签常驻挂载（A1），仅激活可见；五向吸附落点也在这一层 */}
@@ -344,6 +351,117 @@ export function GroupPanel({ groupId }: { groupId: string }) {
   );
 }
 
+/* ------------------------------------------------------------- 条尾动作组 */
+
+/**
+ * 格子标签条右端的动作组（原画布顶栏退役后下沉）：按**本格激活标签**的种类出钮 ——
+ * chat（已选 bot）→ 新对话 / 历史；终端 → 清屏 / 重启；拆分右/下（桌面端）与
+ * 最大化（原格已有）恒在。全部图标钮（h-5 w-5），title 悬停说明。
+ */
+function GroupTailActions({ groupId }: { groupId: string }) {
+  const { isMobile } = useIsMobile();
+  // 跨 store 订阅拆成原始值链（selector 只依赖自己 store 的状态，异 store 的
+  // getState 在 selector 里读了也不会触发重算 —— 草稿格选完 bot 按钮不出现的坑）：
+  // 终端 store 出 activePaneId → chat store 出 unitId → workbench 出 unit 元素
+  const activePaneIdOfGroup = useTerminalStore((s) => s.groups[groupId]?.activePaneId ?? null);
+  const group = useTerminalStore((s) => s.groups[groupId]);
+  const activePane = useTerminalStore((s) => (activePaneIdOfGroup === null ? undefined : s.panes[activePaneIdOfGroup]));
+  const chatUnitId = useChatPanes((s) => (activePaneIdOfGroup === null ? "" : (s.panes[activePaneIdOfGroup]?.unitId ?? "")));
+  const chatUnit = useWorkbench((s) => (chatUnitId === "" ? undefined : s.units.find((u) => u.id === chatUnitId)));
+  if (group === undefined) return null;
+  const isChat = activePane?.kind === "chat";
+
+  return (
+    <div className="ml-auto flex shrink-0 items-center gap-0.5 pr-0.5">
+      {/* chat 动作：本格激活标签是对话且已选 bot */}
+      {isChat && activePane !== undefined && chatUnit !== undefined && (
+        <>
+          <button
+            type="button"
+            onClick={() => useChatPanes.getState().openChatPane({ unitId: chatUnit.id, sessionId: null })}
+            title={`给 ${chatUnit.name} 新开一个对话标签（草稿）`}
+            aria-label="新对话"
+            className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
+          >
+            <MessageSquarePlus size={11} />
+          </button>
+          <button
+            type="button"
+            onClick={() => useSidePane.getState().openTab({ unitId: chatUnit.id, unitName: chatUnit.name })}
+            title="在右侧面板打开这个 bot 的历史会话列表"
+            aria-label="历史会话"
+            className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
+          >
+            <History size={11} />
+          </button>
+        </>
+      )}
+
+      {/* 终端动作：本格激活标签是终端 */}
+      {!isChat && activePane !== undefined && (
+        <>
+          <button
+            type="button"
+            onClick={() => terminalSessionRegistry.get(activePane.id)?.clear()}
+            title="清空当前窗格屏幕 (Ctrl+L 重绘)"
+            aria-label="清屏"
+            className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
+          >
+            <Trash2 size={11} />
+          </button>
+          <button
+            type="button"
+            onClick={() => void terminalSessionRegistry.get(activePane.id)?.restart()}
+            title="重启当前终端进程"
+            aria-label="重启终端"
+            className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-teal-tint hover:text-teal"
+          >
+            <RotateCw size={11} />
+          </button>
+        </>
+      )}
+
+      {/* 拆分（桌面端）：拆的是本格 */}
+      {!isMobile && (
+        <>
+          <button
+            type="button"
+            onClick={() => splitGroupPane(groupId, "horizontal")}
+            title="向右拆分当前格：新格承载新标签"
+            aria-label="向右拆分当前格"
+            className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
+          >
+            <Columns2 size={11} />
+          </button>
+          <button
+            type="button"
+            onClick={() => splitGroupPane(groupId, "vertical")}
+            title="向下拆分当前格：新格承载新标签"
+            aria-label="向下拆分当前格"
+            className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
+          >
+            <Rows2 size={11} />
+          </button>
+        </>
+      )}
+
+      {/* 窗格级最大化（双 kind 通用）：本格激活标签整幅显示（还原入口在最大化态浮动钮） */}
+      <button
+        type="button"
+        onClick={() => {
+          const paneId = group.activePaneId;
+          if (paneId !== null) useTerminalStore.getState().toggleMaximize(paneId);
+        }}
+        title="最大化当前标签（整格全幅显示）"
+        aria-label="最大化当前标签"
+        className="rounded p-0.5 text-ash hover:bg-line-soft hover:text-ink transition"
+      >
+        <Maximize2 size={11} />
+      </button>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------- chat 标签灯 */
 
 /**
@@ -376,6 +494,7 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
   const unit = useWorkbench((s) => s.units.find((u) => u.id === s.activeUnitId));
   const activeRuntimeId = useWorkbench((s) => s.activeRuntimeId);
   const runtimes = useWorkbench((s) => s.runtimes);
+  const popoutCount = useCanvasPopouts((s) => s.entries.length);
   // ⚠️ 派生数组绝不能放 selector 里（s.runtimes.filter(...)）：filter 每次返回新
   // 引用，useSyncExternalStore 的 Object.is 快照比较恒不等 → forceStoreRerender
   // 循环 → Maximum update depth exceeded（实测：新建对话即触发）。先选稳定引用，
@@ -413,15 +532,8 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
     }
     useTerminalStore.getState().createTab({ profileId: "pwsh", cwd: unit?.rootPath, executorId: bareId, title: `${displayName} (TUI)` });
   };
-  /** 拆本格（组栈语义：本格一分为二，新格承载新标签） */
-  const splitGroup = (direction: "horizontal" | "vertical"): void => {
-    useTerminalStore.getState().setActiveGroup(groupId);
-    if (useTerminalStore.getState().panes[useTerminalStore.getState().groups[groupId]?.activePaneId ?? ""]?.kind === "chat") {
-      useTerminalStore.getState().splitPane({ direction, chatPaneKey: useChatPanes.getState().createDraftRecord() });
-      return;
-    }
-    useTerminalStore.getState().splitPane({ direction, cwd: unit?.rootPath });
-  };
+  /** 拆本格（组栈语义：本格一分为二，新格承载新标签）—— 模块级实现，条尾按钮共用 */
+  const splitGroup = (direction: "horizontal" | "vertical"): void => splitGroupPane(groupId, direction);
 
   return (
     <div className="relative flex shrink-0 items-center gap-0.5 pl-0.5">
@@ -551,6 +663,23 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
               <Rows2 size={13} className="text-teal" />
               <span className="font-mono text-caption">向下拆分当前格 (Split Down)</span>
             </button>
+
+            {/* 归拢弹出窗口（全局动作；原顶栏按钮退役后收进菜单 —— 罕见动作不占条内空间） */}
+            {popoutCount > 0 && (
+              <>
+                <div className="my-1.5 h-px shrink-0 bg-line/50" />
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    useCanvasPopouts.getState().recallAll();
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-teal transition hover:bg-teal-tint"
+                >
+                  <Combine size={13} />
+                  <span className="font-mono text-caption">归拢 {popoutCount} 个弹出窗口回标签栏</span>
+                </button>
+              </>
+            )}
           </div>
         </>
       )}

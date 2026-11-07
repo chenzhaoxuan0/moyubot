@@ -101,7 +101,7 @@ export function MobileLayout({
           )}
         >
           <div className="flex-1 min-h-0 relative bg-black">
-            <TerminalPanel variant="canvas" />
+            <TerminalPanel />
           </div>
 
           {/* 终端虚拟辅助键行 */}
