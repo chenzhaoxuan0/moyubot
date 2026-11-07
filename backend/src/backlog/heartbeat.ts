@@ -1029,6 +1029,9 @@ export class BacklogEngine {
     }
     const kind = report !== null ? report.state : status === "done" ? ("ready" as const) : ("failed" as const);
     const title = item.title;
+    // 通知 key 带轮次（runId）：同任务连续两轮 blocked/两次完成在 5 分钟窗内
+    // 不互吞 —— 去重要防的是「同一次结果的重发」，不是「新一轮的结果」
+    const nk = `${ctx?.runId ?? "na"}`;
     if (kind === "dropped") {
       // 执行器判定无需处理（docs/33 §2.1）：静默终态 —— 不通知，日报可见
       this.deps.store.updateBacklogItem(itemId, { status: "dropped", lastError: null, attention: null });
@@ -1039,18 +1042,18 @@ export class BacklogEngine {
       this.deps.store.updateBacklogItem(itemId, { status: "blocked", attention: question, lastError: null });
       this.deps.broadcast({ kind: "items" });
       this.pushState(true);
-      this.notifyOnce(`blocked:${itemId}`, `【待办受阻】「${title}」需要你回答：${question}`);
+      this.notifyOnce(`blocked:${itemId}:${nk}`, `【待办受阻】「${title}」需要你回答：${question}`);
     } else if (kind === "handback") {
       // 超出任务范围，交回路由（docs/33 §2.1）：回 ready + 摘 auto（重新分类是安全的）
       this.deps.store.updateBacklogItem(itemId, { status: "ready", auto: false, lastError: report?.summary ?? "执行器判定超出任务范围，已交回重新分类", attention: null });
       this.deps.broadcast({ kind: "items" });
       this.pushState(true);
-      this.notifyOnce(`handback:${itemId}`, `【待办交回】「${title}」：${report?.summary ?? "执行器判定超出任务范围"}（已摘除自动执行，待重新分类）`);
+      this.notifyOnce(`handback:${itemId}:${nk}`, `【待办交回】「${title}」：${report?.summary ?? "执行器判定超出任务范围"}（已摘除自动执行，待重新分类）`);
     } else if (kind === "failed") {
       this.deps.store.updateBacklogItem(itemId, { status: "ready", lastError: `执行失败：${report?.summary ?? detail}`, attention: null });
       this.deps.broadcast({ kind: "items" });
       this.pushState(true);
-      this.notifyOnce(`failed:${itemId}`, `【待办失败】「${title}」：${report?.summary ?? detail}（已回就绪，${item.auto ? "退避后闲时自动重试" : "下次心跳可能再提议"}）`);
+      this.notifyOnce(`failed:${itemId}:${nk}`, `【待办失败】「${title}」：${report?.summary ?? detail}（已回就绪，${item.auto ? "退避后闲时自动重试" : "下次心跳可能再提议"}）`);
     } else {
       // ready：追加未消费的任务不自动结案（docs/33 §1）—— pendingInput 非空说明
       // 有直通上下文还没被执行过，autoReview 也落待验收，人看过追加再关。
@@ -1067,7 +1070,7 @@ export class BacklogEngine {
         this.deps.store.updateBacklogItem(itemId, { status: "awaiting_review", lastError: null, attention: null });
         this.deps.broadcast({ kind: "items" });
         this.pushState(true);
-        this.notifyOnce(`review:${itemId}`, `【待办完成待验收】「${title}」跑完了${report?.summary !== undefined && report.summary !== "" ? ` —— ${report.summary}` : ""}，回工作台看产出并验收`);
+        this.notifyOnce(`review:${itemId}:${nk}`, `【待办完成待验收】「${title}」跑完了${report?.summary !== undefined && report.summary !== "" ? ` —— ${report.summary}` : ""}，回工作台看产出并验收`);
       }
     }
     // 结算即唤醒（docs/33 §4.1）：落定后立刻让 autopilot 看一眼下一任务，
@@ -1105,8 +1108,9 @@ export class BacklogEngine {
     if (hit === undefined) return;
     this.runByTerminal.delete(terminalId);
     const ok = exitCode === 0;
-    this.deps.store.finishBacklogRun(hit.runId, ok ? "done" : "failed", `terminal exit ${exitCode}`);
-    this.settleExecution(hit.itemId, ok ? "done" : "failed", `terminal exit ${exitCode}`);
+    // 与会话路径同款：settleExecution 统一收口 run 行（outcome 走 inferOutcome ——
+    // TUI 消息不入库，无 report 可解析）+ 状态机 + 唤醒
+    this.settleExecution(hit.itemId, ok ? "done" : "failed", `terminal exit ${exitCode}`, { runId: hit.runId });
   }
 
   /** 重启自愈：running 的运行记录按会话台账收口；awaiting_confirm 无提议的行回就绪 */

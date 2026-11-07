@@ -77,7 +77,7 @@ function loadViewPrefs(): ViewPrefs {
     return {
       sortMode: p.sortMode === "queue" ? "queue" : "time",
       statusFilter:
-        p.statusFilter === "executing" || p.statusFilter === "awaiting_review" || p.statusFilter === "awaiting_confirm" || p.statusFilter === "backoff" || p.statusFilter === "sleeping"
+        p.statusFilter === "executing" || p.statusFilter === "awaiting_review" || p.statusFilter === "awaiting_confirm" || p.statusFilter === "blocked" || p.statusFilter === "backoff" || p.statusFilter === "sleeping"
           ? p.statusFilter
           : null,
       tagFilter: typeof p.tagFilter === "string" && p.tagFilter !== "" ? p.tagFilter : null,
