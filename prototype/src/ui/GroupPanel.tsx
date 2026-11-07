@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { X, Plus, MessageSquarePlus, Maximize2, ExternalLink, ChevronDown, Zap, Columns2, Rows2 } from "lucide-react";
 import { useTerminalStore, SUPPORTED_TERMINAL_PROFILES, type DropZone, type CanvasPane } from "../store/useTerminalStore.ts";
 import { useChatPanes } from "../store/useChatPanes.ts";
@@ -375,7 +375,12 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
   const [open, setOpen] = useState(false);
   const unit = useWorkbench((s) => s.units.find((u) => u.id === s.activeUnitId));
   const activeRuntimeId = useWorkbench((s) => s.activeRuntimeId);
-  const executorOptions = useWorkbench((s) => s.runtimes.filter((r) => !r.testOnly));
+  const runtimes = useWorkbench((s) => s.runtimes);
+  // ⚠️ 派生数组绝不能放 selector 里（s.runtimes.filter(...)）：filter 每次返回新
+  // 引用，useSyncExternalStore 的 Object.is 快照比较恒不等 → forceStoreRerender
+  // 循环 → Maximum update depth exceeded（实测：新建对话即触发）。先选稳定引用，
+  // useMemo 派生 —— 原 TerminalPanel 的写法就是这么防的。
+  const executorOptions = useMemo(() => runtimes.filter((r) => !r.testOnly), [runtimes]);
   const defaultProfileId = useTerminalStore((s) => s.defaultProfileId);
 
   const newChat = (): void => {
