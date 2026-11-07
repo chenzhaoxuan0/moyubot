@@ -52,7 +52,10 @@ export const ChatPaneSlot = memo(function ChatPaneSlot({ paneKey }: { paneKey: s
     <div
       onMouseDown={activate}
       className={cn(
-        "flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden bg-canvas select-none",
+        // @container（inline-size）：ChatViewport/Composer 的 @min-[…] 响应式以
+        // **本格实际宽度**求值 —— 无容器祖先时容器查询回退按 viewport 求值，
+        // 左右分屏后小格子里会渲染大宽形态（@min-[720px] 的松边距/大按钮）而挤不下
+        "@container flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden bg-canvas select-none",
         hasCanvasFocus ? "ring-1 ring-teal/50" : "ring-1 ring-line/20",
       )}
     >

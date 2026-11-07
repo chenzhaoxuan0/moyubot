@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
-import { X, Plus, MessageSquarePlus, Maximize2, ExternalLink } from "lucide-react";
-import { useTerminalStore, type DropZone, type CanvasPane } from "../store/useTerminalStore.ts";
+import { X, Plus, MessageSquarePlus, Maximize2, ExternalLink, ChevronDown, Zap, Columns2, Rows2 } from "lucide-react";
+import { useTerminalStore, SUPPORTED_TERMINAL_PROFILES, type DropZone, type CanvasPane } from "../store/useTerminalStore.ts";
 import { useChatPanes } from "../store/useChatPanes.ts";
 import { useCanvasDnd } from "../store/canvasDnd.ts";
 import { useCanvasPopouts } from "../store/useCanvasPopouts.ts";
+import { dispatchTerminal } from "../adapters/daemon/client.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { deriveSessionLight, lightFlagsFromStatus, type SessionLightKind } from "../core/sessionLight.ts";
 import { TerminalPaneSlot, ShellOrAgentIcon } from "./TerminalPaneSlot.tsx";
@@ -270,8 +271,10 @@ export function GroupPanel({ groupId }: { groupId: string }) {
           <div className="my-1.5 w-0.5 shrink-0 self-center rounded-full bg-teal shadow-sm" />
         )}
 
-        {/* 条尾 ＋：组内新建（小菜单） */}
-        <GroupCreateButton />
+        {/* 条尾新建组（docs/32 → 2026-11 调整）：新建对话 / 新建终端 / 选择▾（全菜单）
+            —— 原顶栏的左侧新建区整体退役，新建能力归属每个格子的标签尾部（IDE 惯例：
+            标签在哪，＋就在哪）；工具条只剩图标化的拆分/最大化等全局动作 */}
+        <GroupCreateBar groupId={groupId} />
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5 pr-0.5">
           {/* 窗格级最大化（双 kind 通用）：当前激活标签整幅显示 */}
@@ -363,49 +366,185 @@ function ChatTabLight({ paneId }: { paneId: string }) {
 
 /* ------------------------------------------------------------- 组内新建 */
 
-/** 条尾「＋」：本格新建（对话 / 系统终端；Agent TUI 派发在顶部「＋」菜单） */
-function GroupCreateButton() {
+/**
+ * 条尾新建组：新建对话 | 新建终端 | 选择▾（对话 / Agent CLI 派发 / 系统 Shell / 拆分本格）。
+ * 顶栏左侧新建区退役后的唯一新建入口 —— 标签在哪，＋就在哪（每格一份，组内直开、
+ * 不跨格）。三个都是图标钮（h-6 w-6），下拉沿用原顶栏菜单结构。
+ */
+function GroupCreateBar({ groupId }: { groupId: string }) {
   const [open, setOpen] = useState(false);
   const unit = useWorkbench((s) => s.units.find((u) => u.id === s.activeUnitId));
+  const activeRuntimeId = useWorkbench((s) => s.activeRuntimeId);
+  const executorOptions = useWorkbench((s) => s.runtimes.filter((r) => !r.testOnly));
+  const defaultProfileId = useTerminalStore((s) => s.defaultProfileId);
+
+  const newChat = (): void => {
+    const chat = useChatPanes.getState();
+    if (unit !== undefined) {
+      chat.openChatPane({ unitId: unit.id, sessionId: null });
+      return;
+    }
+    // 无 bot：开「未选 bot」草稿（窗格内嵌选择器）
+    useTerminalStore.getState().createChatTab(chat.createDraftRecord());
+  };
+  const newTerminal = (): void => {
+    useTerminalStore.getState().createTab({ profileId: defaultProfileId, cwd: unit?.rootPath });
+  };
+  /** Agent CLI：全部走派发系统（记历史、免审批、标签带「派发」徽章）；无 bot 退回手动开 */
+  const launchExecutor = (execId: string, displayName: string): void => {
+    const bareId = execId.replace(/^daemon:/, "").replace(/:yolo$/, "");
+    if (unit && bareId !== "") {
+      void dispatchTerminal({ unitId: unit.id, unitName: unit.name, rootPath: unit.rootPath, runtimeId: bareId }).catch((err: unknown) => {
+        console.error("[GroupPanel] 派发终端失败，退回手动:", err);
+        useTerminalStore.getState().createTab({
+          profileId: "pwsh",
+          cwd: unit.rootPath,
+          executorId: bareId,
+          unitId: unit.id,
+          title: `${unit.name} · ${displayName} (TUI)`,
+        });
+      });
+      return;
+    }
+    useTerminalStore.getState().createTab({ profileId: "pwsh", cwd: unit?.rootPath, executorId: bareId, title: `${displayName} (TUI)` });
+  };
+  /** 拆本格（组栈语义：本格一分为二，新格承载新标签） */
+  const splitGroup = (direction: "horizontal" | "vertical"): void => {
+    useTerminalStore.getState().setActiveGroup(groupId);
+    if (useTerminalStore.getState().panes[useTerminalStore.getState().groups[groupId]?.activePaneId ?? ""]?.kind === "chat") {
+      useTerminalStore.getState().splitPane({ direction, chatPaneKey: useChatPanes.getState().createDraftRecord() });
+      return;
+    }
+    useTerminalStore.getState().splitPane({ direction, cwd: unit?.rootPath });
+  };
+
   return (
-    <div className="relative flex shrink-0 items-center">
+    <div className="relative flex shrink-0 items-center gap-0.5 pl-0.5">
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        title="本格新建标签：对话 / 系统终端（Agent TUI 派发在顶部「＋」菜单）"
+        onClick={newChat}
+        title={unit ? `新建对话（${unit.name}，新草稿）` : "新建对话（先选 bot）"}
+        aria-label="新建对话"
+        className="flex h-6 w-6 items-center justify-center rounded text-ash hover:bg-line-soft hover:text-teal transition"
+      >
+        <MessageSquarePlus size={12} />
+      </button>
+      <button
+        type="button"
+        onClick={newTerminal}
+        title="新建终端（默认 Shell，新标签进本格）"
+        aria-label="新建终端"
         className="flex h-6 w-6 items-center justify-center rounded text-ash hover:bg-line-soft hover:text-teal transition"
       >
         <Plus size={12} />
       </button>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        title="选择要打开的：对话 / Agent CLI（派发）/ 系统 Shell / 拆分本格"
+        aria-label="选择对话或终端"
+        aria-expanded={open}
+        className="flex h-6 w-6 items-center justify-center rounded text-ash/80 hover:bg-line-soft hover:text-ink transition"
+      >
+        <ChevronDown size={12} />
+      </button>
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-40 mt-1 min-w-[190px] rounded-panel border border-line bg-card p-1 shadow-2xl">
+          <div className="absolute left-0 top-full z-40 mt-1 max-h-[480px] min-w-[260px] overflow-y-auto rounded-panel border border-line bg-card p-1.5 shadow-2xl scrollbar-thin">
+            {/* 分组 0：对话 */}
+            <div className="flex shrink-0 items-center gap-1 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-teal/80">
+              <MessageSquarePlus size={11} />
+              <span>对话</span>
+            </div>
             <button
               onClick={() => {
                 setOpen(false);
-                const chat = useChatPanes.getState();
-                if (unit !== undefined) {
-                  chat.openChatPane({ unitId: unit.id, sessionId: null });
-                  return;
-                }
-                // 无 bot：开「未选 bot」草稿（窗格内嵌选择器）
-                useTerminalStore.getState().createChatTab(chat.createDraftRecord());
+                newChat();
               }}
-              className="flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-caption font-mono text-ink hover:bg-teal-tint hover:text-teal transition"
+              className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal active:bg-teal-tint"
             >
-              <MessageSquarePlus size={12} className="text-teal" />
-              {unit ? `对话 · ${unit.name}` : "对话（先选 bot）"}
+              <MessageSquarePlus size={13} className="shrink-0 text-teal" />
+              <span className="flex-1 truncate font-mono text-caption font-medium">
+                {unit ? `与 ${unit.name} 对话` : "新对话（先选 bot）"}
+              </span>
+              <span className="shrink-0 rounded bg-line-soft px-1 py-0.2 font-sans text-[9px] text-ash">结构化时间线</span>
+            </button>
+            <div className="my-1.5 h-px shrink-0 bg-line/50" />
+
+            {/* 分组 1：Agent 执行器（全部经派发系统打开） */}
+            <div className="flex shrink-0 items-center gap-1 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-teal/80">
+              <Zap size={11} />
+              <span>Agent CLI (TUI · 派发)</span>
+              <span className="ml-auto font-sans text-[9px] normal-case tracking-normal text-ash/50">记入历史</span>
+            </div>
+            <div className="flex flex-col gap-0.5">
+              {executorOptions.map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => {
+                    setOpen(false);
+                    launchExecutor(r.id, r.presentation.displayName);
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal active:bg-teal-tint"
+                >
+                  <ShellOrAgentIcon icon={r.id} />
+                  <div className="flex min-w-0 flex-1 items-center justify-between gap-1.5">
+                    <span className="truncate font-mono text-caption font-medium">{r.presentation.displayName}</span>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {activeRuntimeId === r.id && (
+                        <span className="rounded bg-teal/15 px-1 py-0.2 font-sans text-[9px] font-medium text-teal">当前</span>
+                      )}
+                      <span className="rounded bg-line-soft px-1 py-0.2 font-sans text-[9px] text-ash">TUI 派发</span>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+            <div className="my-1.5 h-px shrink-0 bg-line/50" />
+
+            {/* 分组 2：原生系统 Shell */}
+            <div className="shrink-0 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-ash/70">原生系统终端</div>
+            <div className="flex flex-col gap-0.5">
+              {SUPPORTED_TERMINAL_PROFILES.map((profile) => (
+                <button
+                  key={profile.id}
+                  onClick={() => {
+                    setOpen(false);
+                    useTerminalStore.getState().createTab({ profileId: profile.id, cwd: unit?.rootPath });
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal active:bg-teal-tint"
+                >
+                  <ShellOrAgentIcon icon={profile.icon} />
+                  <span className="flex-1 truncate font-mono text-caption">{profile.name}</span>
+                  {profile.id === defaultProfileId && (
+                    <span className="shrink-0 rounded bg-teal/10 px-1 py-0.2 font-sans text-[9px] text-teal/80">默认</span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            {/* 分组 3：拆分本格 */}
+            <div className="my-1.5 h-px shrink-0 bg-line/50" />
+            <button
+              onClick={() => {
+                setOpen(false);
+                splitGroup("horizontal");
+              }}
+              className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal"
+            >
+              <Columns2 size={13} className="text-teal" />
+              <span className="font-mono text-caption">向右拆分当前格 (Split Right)</span>
             </button>
             <button
               onClick={() => {
                 setOpen(false);
-                useTerminalStore.getState().createTab({ cwd: unit?.rootPath });
+                splitGroup("vertical");
               }}
-              className="flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-caption font-mono text-ink hover:bg-teal-tint hover:text-teal transition"
+              className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal"
             >
-              <ShellOrAgentIcon icon="pwsh" />
-              系统终端 (PowerShell 7)
+              <Rows2 size={13} className="text-teal" />
+              <span className="font-mono text-caption">向下拆分当前格 (Split Down)</span>
             </button>
           </div>
         </>
