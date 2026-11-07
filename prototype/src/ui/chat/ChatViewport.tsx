@@ -218,7 +218,13 @@ export function ChatViewport({
     <div className="chat-viewport-root relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <div
         ref={containerRef}
-        className="relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden selection:bg-teal-tint selection:text-ink"
+        // @container（inline-size）：正文阅读列的 @min-[560/720px] 以**本列实际宽度**
+        // 求值 —— 此前最近的容器祖先是画布层（WorkspaceShell），左右分屏后小格子
+        // 仍按画布全宽命中大宽形态而挤不下。挂滚动容器：消费者就在其内；内部唯一
+        // 的 fixed（InChatFindBar）顺带锚到本列（贴列右上，贴合「这一列的查找」语义）。
+        // **不要**上移到窗格根：container-type 隐含 contain:layout，根会成为全部
+        // fixed 后代的锚点并新建 stacking context，弹层层叠会被打乱。
+        className="@container relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden selection:bg-teal-tint selection:text-ink"
       >
         {/* 顶部悬浮查找栏（Ctrl+F） */}
         <InChatFindBar containerRef={containerRef} />

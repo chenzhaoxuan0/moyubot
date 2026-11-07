@@ -438,10 +438,13 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
         : `对「${unit.name}」下任务…（可添加图片/代码附件，输入 / 调出 ${executorName} 命令面板）`;
 
   return (
-    <div className="shrink-0">
-      {/* 内边距与列宽联动（@container，挂在对话列 main 上）：面板/侧栏任何一列
-          占宽时 Composer 按自己的实际宽度收紧，而不是按整窗宽度摆阔 —— 否则
-          列已被挤窄、工具条还按宽屏规格排，溢出出横向滚动条。
+    // @container（inline-size）：工具钮尺寸与内边距的 @min-[480/560px] 以 Composer
+    // 自身实际宽度求值 —— 此前最近的容器祖先是画布层（WorkspaceShell），左右分屏
+    // 后小格仍按全宽排工具条。挂外壳而非带 @min- 的列自身（容器查询不查自己）；
+    // 内部无 fixed 定位，contain 副作用为零。**不要**上移到窗格根（ChatPaneSlot）：
+    // contain:layout 会把它变成 fixed 锚点 + 新 stacking context，打乱弹层层叠。
+    <div className="@container shrink-0">
+      {/* 内边距与列宽联动：面板/侧栏任何一列占宽时 Composer 按自己的实际宽度收紧。
           列宽与时间线阅读列共用 useShell.chatColumnWidth —— 输入框和对话永远等宽 */}
       <div
         style={{ maxWidth: chatColumnWidth }}
