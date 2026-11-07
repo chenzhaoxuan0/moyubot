@@ -34,10 +34,13 @@ export const DEFAULT_INBOX_CATEGORIES: readonly InboxCategoryDef[] = [
   { id: "todo", label: "待办", actionable: true },
   { id: "note", label: "资料", actionable: false },
   { id: "later", label: "以后再说", actionable: false },
+  // followup = 订阅直通（docs/33 §1）：同话题后续条目绕过分类器直接投递给已
+  // 订阅的任务，壳条目挂这个分类 —— 它不是分类产物，是投递回执
+  { id: "followup", label: "追加", actionable: false },
 ];
 
 /** 内置分类的展示顺序（自定义分类跟在后面） */
-export const BUILTIN_CATEGORY_ORDER: readonly string[] = ["goal", "todo", "idea", "note", "later"];
+export const BUILTIN_CATEGORY_ORDER: readonly string[] = ["goal", "todo", "idea", "note", "later", "followup"];
 
 export function inboxCategoryLabel(id: string, extra: readonly InboxCategoryDef[] = []): string {
   return DEFAULT_INBOX_CATEGORIES.find((c) => c.id === id)?.label ?? extra.find((c) => c.id === id)?.label ?? id;
@@ -103,6 +106,9 @@ export interface InboxEntry {
   /** 来源分级（docs/30）：typed = 用户键入（默认可信，沉淀任务自动打勾）；
    *  pasted = 粘贴进来的外部文本（间接提示注入的落点，必须人工打勾才进闲时队列） */
   readonly provenance: "typed" | "pasted" | null;
+  /** 话题指纹（docs/33 §1）：入口生成（gtd:<unit>:<slug> / feishu:<chat>:<root>…），
+   *  null = 手动一次性输入（无话题，不参与幂等与订阅直通） */
+  readonly threadKey: string | null;
   readonly status: InboxStatus;
   readonly createdAt: number;
   readonly classifiedAt: number | null;

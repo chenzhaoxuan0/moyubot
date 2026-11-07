@@ -700,6 +700,11 @@ export class BacklogEngine {
    *  终态由终端 exit 帧回灌；chat / headless：复用 automation 的会话语义
    *  （source=automation → 权限全放行，deny 仍优先），chat 额外把前端拉到该会话。 */
   async dispatch(item: BacklogRow, runtimeId: string, model: string | null, trigger: "gtd" | "manual" | "autopilot" = "gtd"): Promise<{ runId: number; sessionId: string }> {
+    // 直通追加（docs/33 §1）：pendingInput 拼进 prompt 前缀 —— 发送成功即视为已
+    // 消费（消费即清）；失败回 ready 保留，下次派发重拼，不会丢也不会双拼
+    const fresh = this.deps.store.getBacklogItem(item.id) ?? item;
+    const pending = fresh.pendingInput;
+    const effectivePrompt = pending !== null ? `${pending}\n\n——\n\n【原任务】\n${item.prompt}` : item.prompt;
     if (item.launchMode === "terminal" && this.deps.launchTerminal !== undefined) {
       const runId = this.deps.store.startBacklogRun(item.id, null, runtimeId, trigger);
       this.deps.store.updateBacklogItem(item.id, { status: "executing", runtimeId, model, lastError: null, lastRunAt: Date.now() });
@@ -709,8 +714,9 @@ export class BacklogEngine {
           runtimeId,
           unitId: item.unitId,
           rootPath: item.rootPath,
-          prompt: item.prompt,
+          prompt: effectivePrompt,
         });
+        if (pending !== null) this.deps.store.updateBacklogItem(item.id, { pendingInput: null });
         this.deps.store.setBacklogRunSession(runId, terminalId);
         this.runByTerminal.set(terminalId, { runId, itemId: item.id });
         log.info("backlog item dispatched to terminal", { itemId: item.id, runId, terminalId, runtimeId });
@@ -746,13 +752,14 @@ export class BacklogEngine {
       ) {
         if (!this.deps.host.isLive(asSessionId(explicit))) this.deps.host.resumeSession(asSessionId(explicit));
         this.runBySession.set(explicit, { runId, itemId: item.id });
-        this.deps.host.sendMessage(asSessionId(explicit), item.prompt, undefined, undefined, "automation");
+        this.deps.host.sendMessage(asSessionId(explicit), effectivePrompt, undefined, undefined, "automation");
         sessionId = explicit;
         log.info("backlog item dispatched to specified session", { itemId: item.id, runId, sessionId });
       } else if (resumeSid !== null) {
         this.deps.host.resumeSession(asSessionId(resumeSid));
         this.runBySession.set(resumeSid, { runId, itemId: item.id });
-        this.deps.host.sendMessage(asSessionId(resumeSid), BACKLOG_RESUME_PROMPT, undefined, undefined, "automation");
+        const resumePrompt = pending !== null ? `${pending}\n\n——\n\n${BACKLOG_RESUME_PROMPT}` : BACKLOG_RESUME_PROMPT;
+        this.deps.host.sendMessage(asSessionId(resumeSid), resumePrompt, undefined, undefined, "automation");
         sessionId = resumeSid;
         log.info("backlog item resumed previous session", { itemId: item.id, runId, sessionId });
       } else {
@@ -761,13 +768,14 @@ export class BacklogEngine {
           unitId: asUnitId(item.unitId),
           unitName: item.unitName,
           rootPath: item.rootPath,
-          prompt: item.prompt,
+          prompt: effectivePrompt,
           model: model === null || model === "" ? null : asModelId(model),
           mode: (item.mode ?? undefined) as "plan" | "build" | "edit" | "yolo" | undefined,
           source: "automation",
         });
         sessionId = String(session.id);
       }
+      if (pending !== null) this.deps.store.updateBacklogItem(item.id, { pendingInput: null });
       this.deps.store.setBacklogRunSession(runId, sessionId);
       // 快执行器可能在 startSession 的 promise 落定前就已 ended（automation 同款坑）
       const ended = this.deps.store.getSession(sessionId);
@@ -825,6 +833,29 @@ export class BacklogEngine {
     if (row === undefined) return false;
     if (row.runtimeId !== runtimeId) return false;
     return this.deps.host.isLive(asSessionId(sessionId)) || row.cliRef !== null;
+  }
+
+  /**
+   * 订阅直通投递（docs/33 §1）：同话题后续条目送达已订阅任务。
+   * - done → 唤醒回 ready（原型语义：人的消息可唤醒已结束任务；auto 旗保持原值
+   *   —— 它沉淀时就被信任过）→ "woken"
+   * - 其余状态一律 pendingInput 暂存 → "queued"。executing 也不抢注入：与轮结算
+   *   的 500ms 收尾窗竞态会把任务提前结案；晚到几秒的上下文无损（失败回 ready /
+   *   验收打回 / 唤醒都会走 dispatch 重新拼上）
+   */
+  deliverFollowup(itemId: number, text: string): "queued" | "woken" {
+    const item = this.deps.store.getBacklogItem(itemId);
+    if (item === undefined) return "queued";
+    const note = `【追加 · ${new Date().toLocaleString("zh-CN", { hour12: false })}】\n${text}`;
+    const merged = item.pendingInput === null ? note : `${item.pendingInput}\n\n${note}`;
+    if (item.status === "done") {
+      this.deps.store.updateBacklogItem(itemId, { status: "ready", pendingInput: merged });
+      this.deps.broadcast({ kind: "items" });
+      this.pushState(true);
+      return "woken";
+    }
+    this.deps.store.updateBacklogItem(itemId, { pendingInput: merged });
+    return "queued";
   }
 
   // ---- 轮落定结算（turn watcher）------------------------------------------------
@@ -902,7 +933,9 @@ export class BacklogEngine {
   private settleExecution(itemId: number, status: "done" | "failed", detail: string): void {
     const item = this.deps.store.getBacklogItem(itemId);
     if (item === undefined || item.status !== "executing") return;
-    const autoReview = this.isAutoReview(item);
+    // 追加未消费的任务不自动结案（docs/33 §1）：pendingInput 非空说明有直通上下文
+    // 还没被执行过 —— autoReview 也落待验收，人看过追加再关
+    const autoReview = this.isAutoReview(item) && item.pendingInput === null;
     if (status === "done") {
       this.deps.store.updateBacklogItem(itemId, { status: autoReview ? "done" : "awaiting_review", lastError: null });
     } else {
@@ -1115,6 +1148,8 @@ export class BacklogEngine {
       reviewNote: row.reviewNote,
       source: row.source === "inbox" ? "inbox" : "manual",
       sortPos: row.sortPos,
+      subscriptions: row.subscriptions,
+      pendingInput: row.pendingInput,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       lastRun: run === undefined

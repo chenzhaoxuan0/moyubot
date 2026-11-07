@@ -248,6 +248,8 @@ export class InboxClassifier {
           // targetSessionId 只认用户亲手预置的 hints —— routing 的输出不收这个字段
           // （间接提示注入可以把任意已有会话 id 塞进来，把任务 prompt 灌进别人的对话）
           targetSessionId: hints?.targetSessionId ?? null,
+          // 订阅源话题（docs/33 §1）：同话题后续条目直通本任务，不重过分类器
+          subscriptions: entry.threadKey !== null ? [entry.threadKey] : undefined,
           source: "inbox",
         });
         this.deps.store.updateInboxEntry(entry.id, {

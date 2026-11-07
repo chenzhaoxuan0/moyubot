@@ -137,6 +137,7 @@ import {
 } from "./backlog/heartbeatBot.ts";
 import { draftPromptOf, type BacklogConfig, type BacklogSignal } from "../../prototype/src/core/backlog.ts";
 import { InboxClassifier } from "./inbox/classifier.ts";
+import { gateAdmit } from "./inbox/gate.ts";
 import { getInboxConfig, setInboxConfig } from "./inbox/config.ts";
 import {
   ensureRoutingBot,
@@ -3114,6 +3115,8 @@ registerMethod("inbox.add", (params) => {
     reminderAt?: number | null;
     /** 来源分级（docs/30）：typed = 键入（默认可信）；pasted = 粘贴的外部文本（沉淀任务需人工打勾） */
     provenance?: "typed" | "pasted" | null;
+    /** 话题指纹（docs/33 §1）：入口生成（gtd:/feishu:… 前缀）；缺省 = 一次性输入，不参与幂等与直通 */
+    threadKey?: string | null;
   };
   if (typeof p.text !== "string" || p.text.trim() === "") throw badBacklog("text is required");
   // 清单是自由文本入口，但原话会变成分类 prompt 与任务 goal —— 钳住上限
@@ -3123,9 +3126,28 @@ registerMethod("inbox.add", (params) => {
   }
   const cfg = getInboxConfig(store);
   const hints = normalizeInboxHints(p.hints);
+  // 准入闸（docs/33 §1）：幂等（同话题同文本近期已有）→ 订阅直通（同话题任务
+  // 追加上下文，不重过分类器）→ new 原路走分类。fanout/duplicate 的副作用在闸内完成。
+  const threadKey = typeof p.threadKey === "string" && p.threadKey.trim() !== "" ? p.threadKey.trim().slice(0, 200) : null;
+  if (threadKey !== null) {
+    const verdict = gateAdmit(
+      {
+        store,
+        deliver: (itemId, text) => {
+          const engine = requireEngine();
+          return engine.deliverFollowup(itemId, text);
+        },
+        broadcast: (signal) => broadcastInbox(wss, signal),
+      },
+      p.text.trim(),
+      threadKey,
+    );
+    if (verdict.kind === "duplicate") return { duplicate: true, id: verdict.entryId };
+    if (verdict.kind === "fanout") return { fanout: true, id: verdict.entryId, taskId: verdict.itemId };
+  }
   // category 直接给了就不进分类队列（用户自己分好了）
   const category = typeof p.category === "string" && p.category.trim() !== "" ? p.category.trim() : null;
-  const id = store.createInboxEntry({ text: p.text.trim(), category, hints, provenance: p.provenance ?? null });
+  const id = store.createInboxEntry({ text: p.text.trim(), category, hints, provenance: p.provenance ?? null, threadKey });
   if (category === null && cfg.autoClassify) inboxClassifier.schedule();
   // 提醒是独立的一次性钟控行，不依赖分类完成 —— 到点它提醒的是这条原话。
   // 过去时刻与 reminder.create 同口径直接拒：静默变成「立即补发」最坑

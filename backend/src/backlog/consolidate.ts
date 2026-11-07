@@ -109,6 +109,9 @@ async function consolidateRoot(
     }
     // 任务必有源（docs/30 单列时间轴）：收录也生成壳条目——时间轴上留下
     // 「今天从 GTD.md 收了什么」的痕迹，任务挂在壳下。任务+壳+链接同生共死。
+    // 话题指纹（docs/33 §1）：unit + 归一目标 —— 同一目标重写/未勾行再统合时
+    // gate 幂等拦下；后续同话题条目直通任务，不再重过分类器。
+    const threadKey = `gtd:${unit.unitId}:${norm.slice(0, 60)}`;
     const id = store.transaction(() => {
       const taskId = store.createBacklogItem({
         title: e.goal.split(/\r?\n/)[0]!.slice(0, 40),
@@ -117,9 +120,10 @@ async function consolidateRoot(
         unitId: unit.unitId,
         unitName: unit.unitName,
         rootPath,
+        subscriptions: [threadKey],
         source: "inbox",
       });
-      const shellId = store.createInboxEntry({ text: e.goal.slice(0, 8000), category: "todo", status: "classified" });
+      const shellId = store.createInboxEntry({ text: e.goal.slice(0, 8000), category: "todo", status: "classified", threadKey });
       store.updateInboxEntry(shellId, { taskId });
       return taskId;
     });

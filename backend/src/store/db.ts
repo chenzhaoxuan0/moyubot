@@ -71,6 +71,25 @@ interface StatsJson {
 const EMPTY_STATS: StatsJson = { messages: 0, toolCalls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, durationMs: 0 };
 
 /** backlog_items 行的读取形态（心跳引擎与 RPC 层共用） */
+/** subscriptions_json 的解析（脏数据不能掀翻任务面）：只收非空字符串、去重、限 32 条 */
+function parseThreadKeys(raw: unknown): string[] {
+  if (raw === null || raw === undefined) return [];
+  try {
+    const arr = JSON.parse(String(raw));
+    if (!Array.isArray(arr)) return [];
+    const out: string[] = [];
+    for (const v of arr) {
+      if (typeof v === "string" && v.trim() !== "" && !out.includes(v)) {
+        out.push(v.trim().slice(0, 200));
+        if (out.length >= 32) break;
+      }
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 export interface BacklogRow {
   id: number;
   title: string;
@@ -97,6 +116,10 @@ export interface BacklogRow {
   reviewNote: string | null;
   source: string;
   sortPos: number;
+  /** 订阅的话题指纹（docs/33 §1）：同话题后续条目直通本任务，不重过分类器 */
+  subscriptions: string[];
+  /** 直通追加暂存的上下文：派发时拼进 prompt 前缀、消费即清；非空时 autoReview 不自动结案 */
+  pendingInput: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -379,6 +402,13 @@ export class Store {
       // 来源分级（docs/30）：typed = 键入（默认可信），pasted = 粘贴的外部文本
       // （间接提示注入的落点，沉淀任务必须人工打勾）
       `ALTER TABLE inbox_entries ADD COLUMN provenance TEXT`,
+      // 话题指纹与订阅（docs/33 §1 Thread/Subscription）：thread_key 标记条目
+      // 所属话题（gtd:<unit>:<slug> / feishu:<chat>:<root>…）；任务订阅话题后，
+      // 同话题的后续条目直通投递、不再重过分类器；pending_input 暂存直通追加
+      // 的上下文（派发时拼进 prompt，消费即清）
+      `ALTER TABLE inbox_entries ADD COLUMN thread_key TEXT`,
+      `ALTER TABLE backlog_items ADD COLUMN subscriptions_json TEXT`,
+      `ALTER TABLE backlog_items ADD COLUMN pending_input TEXT`,
     ]) {
       try {
         this.db.exec(stmt);
@@ -946,6 +976,8 @@ export class Store {
       reviewNote: r["review_note"] === null || r["review_note"] === undefined ? null : String(r["review_note"]),
       source: String(r["source"] ?? "manual"),
       sortPos: Number(r["sort_pos"] ?? 0),
+      subscriptions: parseThreadKeys(r["subscriptions_json"]),
+      pendingInput: r["pending_input"] === null || r["pending_input"] === undefined ? null : String(r["pending_input"]),
       createdAt: Number(r["created_at"]),
       updatedAt: Number(r["updated_at"]),
     };
@@ -967,13 +999,15 @@ export class Store {
     targetSessionId?: string | null;
     source?: "manual" | "inbox";
     sortPos?: number;
+    /** 订阅的话题指纹（docs/33 §1）：源条目的 thread_key，沉淀时自动挂上 */
+    subscriptions?: string[];
   }): number {
     const now = Date.now();
     const result = this.db
       .prepare(
         `INSERT INTO backlog_items (title, goal, prompt, unit_id, unit_name, root_path, runtime_id, model, mode,
-           size, launch_mode, auto, target_session_id, status, ignore_count, source, sort_pos, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 0, ?, ?, ?, ?)`,
+           size, launch_mode, auto, target_session_id, status, ignore_count, source, sort_pos, subscriptions_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 0, ?, ?, ?, ?, ?)`,
       )
       .run(
         a.title,
@@ -991,6 +1025,7 @@ export class Store {
         a.targetSessionId ?? null,
         a.source ?? "manual",
         a.sortPos ?? now,
+        a.subscriptions !== undefined && a.subscriptions.length > 0 ? JSON.stringify(a.subscriptions) : null,
         now,
         now,
       );
@@ -1034,6 +1069,8 @@ export class Store {
       lastError: string | null;
       reviewNote: string | null;
       sortPos: number;
+      subscriptions: string[];
+      pendingInput: string | null;
     }>,
   ): boolean {
     const sets: string[] = [];
@@ -1062,6 +1099,8 @@ export class Store {
     if (patch.lastError !== undefined) put("last_error", patch.lastError);
     if (patch.reviewNote !== undefined) put("review_note", patch.reviewNote);
     if (patch.sortPos !== undefined) put("sort_pos", patch.sortPos);
+    if (patch.subscriptions !== undefined) put("subscriptions_json", patch.subscriptions.length > 0 ? JSON.stringify(patch.subscriptions) : null);
+    if (patch.pendingInput !== undefined) put("pending_input", patch.pendingInput);
     if (sets.length === 0) return true;
     sets.push("updated_at = ?");
     values.push(Date.now());
@@ -1202,6 +1241,7 @@ export class Store {
       urgent: Number(r["urgent"] ?? 0) === 1,
       urgencyHint: r["urgency_hint"] === null || r["urgency_hint"] === undefined ? null : String(r["urgency_hint"]),
       provenance: r["provenance"] === "typed" || r["provenance"] === "pasted" ? r["provenance"] : null,
+      threadKey: r["thread_key"] === null || r["thread_key"] === undefined ? null : String(r["thread_key"]),
       status: (["pending", "classified", "failed"].includes(String(r["status"])) ? String(r["status"]) : "pending") as InboxStatus,
       createdAt: Number(r["created_at"]),
       classifiedAt: nOrNull(r["classified_at"]),
@@ -1209,12 +1249,20 @@ export class Store {
     };
   }
 
-  createInboxEntry(a: { text: string; category?: string | null; hints?: InboxHints | null; status?: InboxStatus; provenance?: "typed" | "pasted" | null }): number {
+  createInboxEntry(a: {
+    text: string;
+    category?: string | null;
+    hints?: InboxHints | null;
+    status?: InboxStatus;
+    provenance?: "typed" | "pasted" | null;
+    /** 话题指纹（docs/33 §1）：入口自生成（gtd:/feishu:/manual: 前缀） */
+    threadKey?: string | null;
+  }): number {
     const now = Date.now();
     const result = this.db
       .prepare(
-        `INSERT INTO inbox_entries (text, category, hints_json, status, provenance, created_at, classified_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO inbox_entries (text, category, hints_json, status, provenance, thread_key, created_at, classified_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         a.text,
@@ -1222,6 +1270,7 @@ export class Store {
         a.hints === null || a.hints === undefined ? null : JSON.stringify(a.hints),
         a.status ?? (a.category !== undefined && a.category !== null ? "classified" : "pending"),
         a.provenance ?? null,
+        a.threadKey !== undefined && a.threadKey !== null && a.threadKey !== "" ? a.threadKey.slice(0, 200) : null,
         now,
         a.category !== undefined && a.category !== null ? now : null,
         now,

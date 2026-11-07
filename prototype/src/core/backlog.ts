@@ -98,6 +98,12 @@ export interface BacklogItem {
    * null = 新开会话。
    */
   readonly targetSessionId: string | null;
+  /** 订阅的话题指纹（docs/33 §1）：沉淀时挂源条目的 thread_key；
+   *  同话题后续条目直通本任务（pendingInput 暂存），不重过分类器 */
+  readonly subscriptions: readonly string[];
+  /** 直通追加暂存的上下文：派发时拼进 prompt 前缀、消费即清；
+   *  非空时 autoReview 不自动结案（追加没被执行过的任务不该静默关闭） */
+  readonly pendingInput: string | null;
   /** 连续被忽略计数：达到上限进休眠（明确拒绝直接休眠） */
   readonly ignoreCount: number;
   readonly lastProposedAt: number | null;
