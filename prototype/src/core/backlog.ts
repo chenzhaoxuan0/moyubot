@@ -21,7 +21,9 @@ import type { LaunchMode } from "./automation.ts";
 /**
  * 待办生命周期：
  *   draft → ready → awaiting_confirm → executing → awaiting_review → done
- *                                              ↘（失败回 ready）
+ *                                            ↘（失败回 ready）
+ *                executing → blocked（结构化问人，docs/33 §2：回答后回 executing）
+ *                executing → dropped（执行器判定无需处理，静默终态）
  *   任意活跃态 → sleeping（被反复忽略 / 明确拒绝 / 手动），手动唤醒回 ready
  */
 export type BacklogStatus =
@@ -29,8 +31,10 @@ export type BacklogStatus =
   | "ready"
   | "awaiting_confirm"
   | "executing"
+  | "blocked"
   | "awaiting_review"
   | "done"
+  | "dropped"
   | "sleeping";
 
 export const BACKLOG_STATUS_LABEL: Record<BacklogStatus, string> = {
@@ -38,14 +42,16 @@ export const BACKLOG_STATUS_LABEL: Record<BacklogStatus, string> = {
   ready: "就绪",
   awaiting_confirm: "待确认",
   executing: "执行中",
+  blocked: "受阻",
   awaiting_review: "待验收",
   done: "已完成",
+  dropped: "无需处理",
   sleeping: "休眠",
 };
 
-/** 活跃态 = 还在生命周期里流转（清单默认视图只看这些） */
+/** 活跃态 = 还在生命周期里流转（清单默认视图只看这些）；dropped 是静默终态 */
 export function isActiveStatus(s: BacklogStatus): boolean {
-  return s !== "done";
+  return s !== "done" && s !== "dropped";
 }
 
 // ---------------------------------------------------------------------------
@@ -58,7 +64,7 @@ export type BacklogSize = "big" | "small";
 export interface BacklogRunRef {
   readonly runId: number;
   readonly sessionId: string | null;
-  /** running | done | failed */
+  /** running | done | failed | skipped（precheck 条件门拦下） */
   readonly status: string;
   readonly runtimeId: string;
   /** 谁派发的：autopilot（闲时托管）/ manual（手动立即执行）/ gtd（心跳确认后） */
@@ -66,6 +72,38 @@ export interface BacklogRunRef {
   readonly startedAt: number;
   readonly finishedAt: number | null;
   readonly detail: string | null;
+  /** 执行结果态（docs/33 §2）：report 态或 stopReason 推断 —— ready/blocked/failed/dropped/limit/refusal */
+  readonly outcome?: string | null;
+  /** 执行器的一句话结果（report.summary；日报与 L1 通知的数据面） */
+  readonly summary?: string | null;
+  readonly model?: string | null;
+  /** 用量归因 JSON（tokens/cost/duration，从会话 stats 按时间窗取） */
+  readonly usageJson?: string | null;
+  /** 产物深链（文件/会话） */
+  readonly deliverable?: string | null;
+  /** 重试指向的旧尝试（docs/33 §5 Dispatch 尝试身份） */
+  readonly retryOf?: number | null;
+}
+
+/** 授权记录（docs/33 §3）：任务为什么可以被（自动）执行的凭据 */
+export interface BacklogMandate {
+  /** explicit = 用户亲手键入；inferred = 粘贴/渠道/GTD 等间接来源 */
+  readonly strength: "explicit" | "inferred";
+  /** 授权依据：typed = 键入 / pasted = 粘贴 / gtd = GTD 收录 / channel = 渠道捕获 / classifier = 分类沉淀 */
+  readonly basis: string;
+  readonly acceptedAt: number;
+  /** observe 模式（docs/33 §3.1）：true = 本会自动跑但被观察期拦下（回看后可放行） */
+  readonly wouldAutoRun?: boolean;
+}
+
+/** 派发单增量（docs/33 §3.3）：executor/model/launchMode/targetSessionId 是顶层字段 */
+export interface BacklogAssignment {
+  /** 记忆注入档位：minimal = MEMORY.md 语义柱（默认）；full = bot 上下文清单整套；none = 不注入记忆 */
+  readonly memory?: "none" | "minimal" | "full";
+  /** 附加指令：拼在任务 prompt 之后、report 约定之前 */
+  readonly appendPrompt?: string;
+  /** 技能白名单（bot 绑定技能时过滤注入目录；自由技能则拼进 prompt 引导） */
+  readonly skills?: readonly string[];
 }
 
 export interface BacklogItem {
@@ -104,6 +142,15 @@ export interface BacklogItem {
   /** 直通追加暂存的上下文：派发时拼进 prompt 前缀、消费即清；
    *  非空时 autoReview 不自动结案（追加没被执行过的任务不该静默关闭） */
   readonly pendingInput: string | null;
+  /** 授权记录（docs/33 §3）：只记录不重验 —— observe 模式回看「它本会自动跑」的凭据 */
+  readonly mandate: BacklogMandate | null;
+  /** blocked 时给人的问题文本（docs/33 §2 结构化问人；回答后清空回 executing） */
+  readonly attention: string | null;
+  /** 派发单（docs/33 §3.3）：executor/model/launchMode/targetSessionId 在顶层字段，
+   *  这里存增量 —— memory 档位 / 附加指令 / 技能白名单 */
+  readonly assignment: BacklogAssignment | null;
+  /** 派发前条件门命令（docs/33 §5）：非 0 退出即 skip（记 skipped run，任务留 ready） */
+  readonly precheck: string | null;
   /** 连续被忽略计数：达到上限进休眠（明确拒绝直接休眠） */
   readonly ignoreCount: number;
   readonly lastProposedAt: number | null;
@@ -252,6 +299,10 @@ export interface BacklogConfig {
     readonly botId: string;
     readonly accountId: string;
     readonly receiveId: string;
+    /** 确认会话消息进清单（docs/33 §1.4 渠道候选准入）：开 = 该会话消息成为
+     *  清单条目（thread_key=feishu:<chat>，走分类）；关 = 仅话题直通生效（同话题
+     *  追加仍直达任务），其余消息照常进 bot 聊天 —— 默认关，不改变现有行为 */
+    readonly inboxCapture: boolean;
   };
   /**
    * 闲时自动执行（autopilot）——「用量还有富余就持续把清单做完」的引擎面：
@@ -319,7 +370,7 @@ export const DEFAULT_BACKLOG_CONFIG: BacklogConfig = {
     message: "用量窗口已恢复，请接着刚才中断的工作继续推进。",
     runtimes: null,
   },
-  feishu: { enabled: false, botId: "steward", accountId: "main", receiveId: "" },
+  feishu: { enabled: false, botId: "steward", accountId: "main", receiveId: "", inboxCapture: false },
   // autopilot 默认开（maxConcurrent=1 单飞）：这是 personal agent 的核心定位 ——
   // 有闲置用量就持续把清单做完；开关在待办设置里随时可关。
   autopilot: { enabled: true, maxConcurrent: 1, headroomFloorPercent: 10, autoReview: true },

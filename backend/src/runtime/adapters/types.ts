@@ -203,6 +203,18 @@ export interface ExecutorAdapter {
   readonly models: readonly ExecutorModelInfo[];
   readonly capabilities: RuntimeCapabilities;
   /**
+   * 无人值守审计标注（docs/33 §4.2，元信息非参数）：该执行器的启动参数集已审
+   * 计确认**不会在无人值守（automation/backlog）场景挂起等人**——审批走统一
+   * 权限闸（host 对 headless 来源自动放行，host.ts 的 interactive 契约），
+   * 交互确认工具被禁用或翻译成 permission.requested。
+   *
+   * - 标 true = 已审计（claude：SDK query + canUseTool 全量接管，无原生弹窗；
+   *   codex：app-server approvalPolicy 走 thread/start 参数，审批请求走 JSON-RPC 而非终端）
+   * - 不标 = 未审计：无人值守派发仍可跑（权限闸兜底），但日志会提示待审。
+   * 各家 CLI 的 --yes/--headless 等价参数清单在适配器实现里维护，不在此拼接。
+   */
+  readonly unattendedVerified?: boolean;
+  /**
    * 该执行器在 cwd 下**原生读取**的项目上下文文件名（规范大写，如 "AGENTS.md"）。
    * ADR 0014 D4 —— 唯一的防双注注册表（openclaw 把这件事硬编码在每个适配层里，
    * 这里做成声明式能力位）。host 的注入计划据此判定：声明了 AGENTS.md 的执行器

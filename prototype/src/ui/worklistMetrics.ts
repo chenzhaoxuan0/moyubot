@@ -11,7 +11,7 @@ import type { BacklogConfig, BacklogItem, BacklogStateSnapshot, QuotaHeadroom } 
 export const FAILURE_BACKOFF_MS = 10 * 60_000;
 
 /** 状态过滤：五个可扫视的机器状态（done 不进带子——完成走「今日完成」计数） */
-export type StatusFilter = "executing" | "awaiting_review" | "awaiting_confirm" | "backoff" | "sleeping";
+export type StatusFilter = "executing" | "awaiting_review" | "awaiting_confirm" | "blocked" | "backoff" | "sleeping";
 
 export type SortMode = "time" | "queue";
 
@@ -34,16 +34,19 @@ export interface StatusCounts {
   executing: number;
   awaiting_review: number;
   awaiting_confirm: number;
+  /** 受阻（docs/33 §2 结构化问人）：要人回答的，排在待确认同级 */
+  blocked: number;
   backoff: number;
   sleeping: number;
 }
 
 export function statusCounts(items: readonly BacklogItem[]): StatusCounts {
-  const c: StatusCounts = { executing: 0, awaiting_review: 0, awaiting_confirm: 0, backoff: 0, sleeping: 0 };
+  const c: StatusCounts = { executing: 0, awaiting_review: 0, awaiting_confirm: 0, blocked: 0, backoff: 0, sleeping: 0 };
   for (const i of items) {
     if (i.status === "executing") c.executing += 1;
     else if (i.status === "awaiting_review") c.awaiting_review += 1;
     else if (i.status === "awaiting_confirm") c.awaiting_confirm += 1;
+    else if (i.status === "blocked") c.blocked += 1;
     else if (i.status === "sleeping") c.sleeping += 1;
     else if (inBackoff(i)) c.backoff += 1;
   }

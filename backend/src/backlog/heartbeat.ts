@@ -15,10 +15,13 @@
  */
 
 import { mkdirSync } from "node:fs";
+import { exec } from "node:child_process";
 import path from "node:path";
 import type {
+  BacklogAssignment,
   BacklogConfig,
   BacklogItem,
+  BacklogMandate,
   BacklogProposal,
   BacklogSignal,
   BacklogStateSnapshot,
@@ -31,9 +34,12 @@ import type { SessionId } from "../../../prototype/src/core/units.ts";
 import { asModelId, asSessionId, asUnitId } from "../../../prototype/src/core/units.ts";
 import { QuotaProbe } from "./probe.ts";
 import { consolidateInboxes, type ConsolidateResult } from "./consolidate.ts";
+import { inferOutcome, parseExecutionReport, REPORT_PROMPT_SUFFIX, type ExecutionReport } from "./report.ts";
 import { log } from "../log.ts";
 
 const TICK_MS = 20_000;
+/** 未审计执行器的提醒去重（docs/33 §4.2）：每 runtime 一条，不刷日志 */
+const unattendedWarned = new Set<string>();
 /** 心跳会话一跳的总预算：超时按沉默收场，绝不让一跳挂住调度器 */
 const BEAT_BUDGET_MS = 3 * 60_000;
 /**
@@ -208,6 +214,12 @@ export class BacklogEngine {
     if (this.activeProposal !== null) {
       return { phase: "awaiting_confirm", reason: `提议挂起：「${this.activeProposal.title}」等用户确认`, lastActivity };
     }
+    // blocked（结构化问人，docs/33 §2）在提议之后、执行之前 —— 回答了才能继续，
+    // 与待确认同级都是"等你"，reason 点名问题让人不点开也知道要答什么
+    const blockedItem = items.find((i) => i.status === "blocked");
+    if (blockedItem !== undefined) {
+      return { phase: "awaiting_confirm", reason: `待办受阻：「${blockedItem.title}」${blockedItem.attention !== null ? ` —— ${blockedItem.attention}` : ""}`, lastActivity };
+    }
     if (items.some((i) => i.status === "executing")) {
       const run = items.find((i) => i.status === "executing");
       return { phase: "executing", reason: `长任务执行中：「${run!.title}」`, lastActivity };
@@ -317,11 +329,14 @@ export class BacklogEngine {
       const executing = this.deps.store.listBacklogItems().filter((i) => i.status === "executing");
       if (running.length > 0 || executing.length >= Math.max(1, ap.maxConcurrent)) return;
       // 清单顺序即优先级（listBacklogItems 已按 sortPos 升序，done 沉底）——取第一条。
-      // 失败退避：最近一次运行 10 分钟内失败的条目跳过（见 AUTOPILOT_FAILURE_BACKOFF_MS）
+      // 失败退避：最近一次运行 10 分钟内失败的条目跳过（见 AUTOPILOT_FAILURE_BACKOFF_MS）；
+      // precheck 拦下的 skipped 同窗退避（条件门的复查节奏，防 20s 一跑的白费 precheck）。
+      // 注：并发门只拦 autopilot —— 手动 runNow 直接 dispatch 不查 maxConcurrent，
+      // 这就是「人的额外槽」（docs/33 §5）：自动任务占满时人派活永远插得进。
       const next = this.deps.store.listBacklogItems().find((i) => {
         if (i.status !== "ready" || !i.auto) return false;
         const last = this.deps.store.latestBacklogRun(i.id);
-        return !(last !== undefined && last.status === "failed" && Date.now() - last.startedAt < AUTOPILOT_FAILURE_BACKOFF_MS);
+        return !(last !== undefined && (last.status === "failed" || last.status === "skipped") && Date.now() - last.startedAt < AUTOPILOT_FAILURE_BACKOFF_MS);
       });
       if (next === undefined) return;
       // 余量门：指定了执行器就看它，没指定就在订阅执行器里挑剩余最多的
@@ -700,13 +715,38 @@ export class BacklogEngine {
    *  终态由终端 exit 帧回灌；chat / headless：复用 automation 的会话语义
    *  （source=automation → 权限全放行，deny 仍优先），chat 额外把前端拉到该会话。 */
   async dispatch(item: BacklogRow, runtimeId: string, model: string | null, trigger: "gtd" | "manual" | "autopilot" = "gtd"): Promise<{ runId: number; sessionId: string }> {
+    // precheck 廉价条件门（docs/33 §5）：非 0 退出即 skip —— 记 skipped run 留痕
+    // （日报 misfire 面可见），任务留 ready 等条件变化；lastRunAt 退避防热循环
+    if (item.precheck !== null && item.precheck.trim() !== "") {
+      const pre = await runPrecheck(item.precheck.trim(), item.rootPath);
+      if (!pre.ok) {
+        const runId = this.deps.store.startBacklogRun(item.id, null, runtimeId, trigger);
+        this.deps.store.finishBacklogRun(runId, "skipped", `precheck: ${pre.detail}`);
+        this.deps.store.updateBacklogItem(item.id, { lastRunAt: Date.now() });
+        this.deps.broadcast({ kind: "items" });
+        log.info("backlog dispatch skipped by precheck", { itemId: item.id, detail: pre.detail });
+        return { runId, sessionId: "" };
+      }
+    }
     // 直通追加（docs/33 §1）：pendingInput 拼进 prompt 前缀 —— 发送成功即视为已
-    // 消费（消费即清）；失败回 ready 保留，下次派发重拼，不会丢也不会双拼
+    // 消费（消费即清）；失败回 ready 保留，下次派发重拼，不会丢也不会双拼。
+    // 派发单增量（docs/33 §3.3）：appendPrompt / skills 拼在原任务后，report
+    // 输出约定（docs/33 §2.1）压轴 —— 13 家执行器零适配的注入约定。
     const fresh = this.deps.store.getBacklogItem(item.id) ?? item;
     const pending = fresh.pendingInput;
-    const effectivePrompt = pending !== null ? `${pending}\n\n——\n\n【原任务】\n${item.prompt}` : item.prompt;
+    const assignment = assignmentOf(fresh);
+    const parts: string[] = [];
+    if (pending !== null) parts.push(pending, "", "——", "", "【原任务】");
+    parts.push(item.prompt);
+    if (assignment?.appendPrompt !== undefined) parts.push("", "【附加指令】", assignment.appendPrompt);
+    if (assignment?.skills !== undefined && assignment.skills.length > 0) parts.push("", `【可用技能】${assignment.skills.join("、")}`);
+    parts.push(REPORT_PROMPT_SUFFIX);
+    const effectivePrompt = parts.join("\n");
+    // 重试身份（docs/33 §5 Dispatch）：上次失败 → 本次 run 指向旧尝试
+    const lastRun = this.deps.store.latestBacklogRun(item.id);
+    const retryOf = lastRun !== undefined && lastRun.status === "failed" ? lastRun.id : undefined;
     if (item.launchMode === "terminal" && this.deps.launchTerminal !== undefined) {
-      const runId = this.deps.store.startBacklogRun(item.id, null, runtimeId, trigger);
+      const runId = this.deps.store.startBacklogRun(item.id, null, runtimeId, trigger, retryOf);
       this.deps.store.updateBacklogItem(item.id, { status: "executing", runtimeId, model, lastError: null, lastRunAt: Date.now() });
       this.deps.broadcast({ kind: "items" });
       try {
@@ -730,8 +770,18 @@ export class BacklogEngine {
       }
     }
 
-    const runId = this.deps.store.startBacklogRun(item.id, null, runtimeId, trigger);
-    this.deps.store.updateBacklogItem(item.id, { status: "executing", runtimeId, model, lastError: null, lastRunAt: Date.now() });
+    const runId = this.deps.store.startBacklogRun(item.id, null, runtimeId, trigger, retryOf);
+    this.deps.store.updateBacklogItem(item.id, { status: "executing", runtimeId, model, lastError: null, lastRunAt: Date.now(), attention: null });
+    // 无人值守审计提示（docs/33 §4.2）：该执行器未标注 unattendedVerified —— 权限闸
+    // 兜底仍会放行，但「会不会有原生交互挂死」未审计过，每个 runtime 只提醒一次
+    try {
+      if (!this.deps.host.getAdapter(runtimeId).unattendedVerified && !unattendedWarned.has(runtimeId)) {
+        unattendedWarned.add(runtimeId);
+        log.warn("executor not audited for unattended runs (docs/33 §4.2)", { runtimeId });
+      }
+    } catch {
+      /* getAdapter 抛错（未知执行器）由 startSession 报真错误 */
+    }
     this.deps.broadcast({ kind: "items" });
     try {
       // 显式指定会话（清单升级的可选项）：接得上就往那个会话里发 prompt，
@@ -758,7 +808,7 @@ export class BacklogEngine {
       } else if (resumeSid !== null) {
         this.deps.host.resumeSession(asSessionId(resumeSid));
         this.runBySession.set(resumeSid, { runId, itemId: item.id });
-        const resumePrompt = pending !== null ? `${pending}\n\n——\n\n${BACKLOG_RESUME_PROMPT}` : BACKLOG_RESUME_PROMPT;
+        const resumePrompt = [pending !== null ? `${pending}\n\n——\n\n` : "", BACKLOG_RESUME_PROMPT, REPORT_PROMPT_SUFFIX].join("");
         this.deps.host.sendMessage(asSessionId(resumeSid), resumePrompt, undefined, undefined, "automation");
         sessionId = resumeSid;
         log.info("backlog item resumed previous session", { itemId: item.id, runId, sessionId });
@@ -772,6 +822,14 @@ export class BacklogEngine {
           model: model === null || model === "" ? null : asModelId(model),
           mode: (item.mode ?? undefined) as "plan" | "build" | "edit" | "yolo" | undefined,
           source: "automation",
+          // 记忆档位（docs/33 §3.3）：none = 不注入记忆柱；minimal = 仅语义柱
+          // （MEMORY.md）；full/缺省 = 该单元默认注入计划（清单任务多为无 manifest
+          // 的调用方，注入器本就退回 legacy —— 档位只在有注入面时生效）
+          ...(assignment?.memory === "none"
+            ? { memoryOptions: { scopes: [] as Array<"semantic" | "daily" | "procedural"> } }
+            : assignment?.memory === "minimal"
+              ? { memoryOptions: { scopes: ["semantic"] as Array<"semantic" | "daily" | "procedural"> } }
+              : {}),
         });
         sessionId = String(session.id);
       }
@@ -781,8 +839,7 @@ export class BacklogEngine {
       const ended = this.deps.store.getSession(sessionId);
       if (ended !== undefined && ended.endedAt !== null) {
         const failed = ended.status === "failed";
-        this.deps.store.finishBacklogRun(runId, failed ? "failed" : "done", `ended: ${ended.status}`);
-        this.settleExecution(item.id, failed ? "failed" : "done", `ended: ${ended.status}`);
+        this.settleExecution(item.id, failed ? "failed" : "done", `ended: ${ended.status}`, { runId, sessionId });
       } else {
         this.runBySession.set(sessionId, { runId, itemId: item.id });
         // 轮落定结算：session.ended 只在进程退出时发 —— ACP 系常驻执行器跑完一轮
@@ -848,8 +905,16 @@ export class BacklogEngine {
     if (item === undefined) return "queued";
     const note = `【追加 · ${new Date().toLocaleString("zh-CN", { hour12: false })}】\n${text}`;
     const merged = item.pendingInput === null ? note : `${item.pendingInput}\n\n${note}`;
-    if (item.status === "done") {
+    if (item.status === "done" || item.status === "dropped") {
       this.deps.store.updateBacklogItem(itemId, { status: "ready", pendingInput: merged });
+      this.deps.broadcast({ kind: "items" });
+      this.pushState(true);
+      return "woken";
+    }
+    if (item.status === "blocked") {
+      // 原型语义（002：人的消息释放 blocked）：同话题来人 = 回答了 attention ——
+      // 回 ready 带着追加重新入列，attention 清空
+      this.deps.store.updateBacklogItem(itemId, { status: "ready", pendingInput: merged, attention: null });
       this.deps.broadcast({ kind: "items" });
       this.pushState(true);
       return "woken";
@@ -916,8 +981,7 @@ export class BacklogEngine {
       unsub();
       this.turnWatchers.delete(sessionId);
     }
-    this.deps.store.finishBacklogRun(hit.runId, failed ? "failed" : "done", detail);
-    this.settleExecution(hit.itemId, failed ? "failed" : "done", detail);
+    this.settleExecution(hit.itemId, failed ? "failed" : "done", detail, { runId: hit.runId, sessionId });
   }
 
   /**
@@ -930,27 +994,100 @@ export class BacklogEngine {
     return item.auto && this.deps.getConfig().autopilot.autoReview;
   }
 
-  private settleExecution(itemId: number, status: "done" | "failed", detail: string): void {
+  /**
+   * 执行终态收口（docs/33 §2 结算链）：run 行结果事实源 + report 六态 + 两级通知
+   * + 结算即唤醒。report（会话末条 assistant 的自报）优先于进程级 done/failed；
+   * dropped 静默终态、blocked 带结构化问题回人、handback 摘 auto 交回路由。
+   */
+  private settleExecution(itemId: number, status: "done" | "failed", detail: string, ctx?: { runId?: number; sessionId?: string }): void {
     const item = this.deps.store.getBacklogItem(itemId);
     if (item === undefined || item.status !== "executing") return;
-    // 追加未消费的任务不自动结案（docs/33 §1）：pendingInput 非空说明有直通上下文
-    // 还没被执行过 —— autoReview 也落待验收，人看过追加再关
-    const autoReview = this.isAutoReview(item) && item.pendingInput === null;
-    if (status === "done") {
-      this.deps.store.updateBacklogItem(itemId, { status: autoReview ? "done" : "awaiting_review", lastError: null });
-    } else {
-      this.deps.store.updateBacklogItem(itemId, { status: "ready", lastError: `执行失败：${detail}` });
+    // report 解析：TUI 运行（autoterm_）拿不到消息，按无 report 结算
+    let report: ExecutionReport | null = null;
+    if (ctx?.sessionId !== undefined && ctx.sessionId !== "" && !ctx.sessionId.startsWith("autoterm_")) {
+      const msgs = this.deps.store.listMessages(ctx.sessionId, 8);
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i]!.role === "assistant") {
+          report = parseExecutionReport(msgs[i]!.text);
+          break;
+        }
+      }
     }
-    this.deps.broadcast({ kind: "items" });
-    this.pushState(true);
+    // run 行升级为结果事实源（docs/33 §2.2）：outcome/summary/model/usage/deliverable
+    if (ctx?.runId !== undefined) {
+      const sess = ctx.sessionId !== undefined && !ctx.sessionId.startsWith("autoterm_") ? this.deps.store.getSession(asSessionId(ctx.sessionId)) : undefined;
+      const stats = sess?.stats;
+      this.deps.store.finishBacklogRun(ctx.runId, status, detail, {
+        outcome: report !== null ? report.state : inferOutcome(status, detail),
+        summary: report !== null && report.summary !== "" ? report.summary : null,
+        model: item.model,
+        usageJson:
+          stats !== undefined && (stats.inputTokens > 0 || stats.outputTokens > 0 || stats.costUsd > 0)
+            ? JSON.stringify({ inputTokens: stats.inputTokens, outputTokens: stats.outputTokens, costUsd: stats.costUsd, durationMs: stats.durationMs })
+            : null,
+      });
+    }
+    const kind = report !== null ? report.state : status === "done" ? ("ready" as const) : ("failed" as const);
     const title = item.title;
-    void this.deps.notify(
-      status === "done"
-        ? autoReview
-          ? `【清单任务完成】「${title}」已自动执行完毕（闲时托管）`
-          : `【待办完成待验收】「${title}」跑完了 —— 回工作台看产出并验收`
-        : `【待办失败】「${title}」：${detail}（已回就绪，${item.auto ? "退避后闲时自动重试" : "下次心跳可能再提议"}）`,
-    );
+    if (kind === "dropped") {
+      // 执行器判定无需处理（docs/33 §2.1）：静默终态 —— 不通知，日报可见
+      this.deps.store.updateBacklogItem(itemId, { status: "dropped", lastError: null, attention: null });
+      this.deps.broadcast({ kind: "items" });
+      this.pushState(true);
+    } else if (kind === "blocked") {
+      const question = report?.humanAction ?? "执行器报了受阻但没给出问题 —— 请回工作台看会话";
+      this.deps.store.updateBacklogItem(itemId, { status: "blocked", attention: question, lastError: null });
+      this.deps.broadcast({ kind: "items" });
+      this.pushState(true);
+      this.notifyOnce(`blocked:${itemId}`, `【待办受阻】「${title}」需要你回答：${question}`);
+    } else if (kind === "handback") {
+      // 超出任务范围，交回路由（docs/33 §2.1）：回 ready + 摘 auto（重新分类是安全的）
+      this.deps.store.updateBacklogItem(itemId, { status: "ready", auto: false, lastError: report?.summary ?? "执行器判定超出任务范围，已交回重新分类", attention: null });
+      this.deps.broadcast({ kind: "items" });
+      this.pushState(true);
+      this.notifyOnce(`handback:${itemId}`, `【待办交回】「${title}」：${report?.summary ?? "执行器判定超出任务范围"}（已摘除自动执行，待重新分类）`);
+    } else if (kind === "failed") {
+      this.deps.store.updateBacklogItem(itemId, { status: "ready", lastError: `执行失败：${report?.summary ?? detail}`, attention: null });
+      this.deps.broadcast({ kind: "items" });
+      this.pushState(true);
+      this.notifyOnce(`failed:${itemId}`, `【待办失败】「${title}」：${report?.summary ?? detail}（已回就绪，${item.auto ? "退避后闲时自动重试" : "下次心跳可能再提议"}）`);
+    } else {
+      // ready：追加未消费的任务不自动结案（docs/33 §1）—— pendingInput 非空说明
+      // 有直通上下文还没被执行过，autoReview 也落待验收，人看过追加再关。
+      // 两级通知（docs/33 §2.3）：例行自动完成不发 L1（进主管日报）；urgent 或
+      // 需人验收的才即时 —— 「发出后人有一个具体动作要做」是 L1 的唯一准入。
+      const autoReview = this.isAutoReview(item) && item.pendingInput === null;
+      const urgent = this.deps.store.listInboxEntries().some((e) => e.task?.id === itemId && e.urgent);
+      if (autoReview && !urgent) {
+        this.deps.store.updateBacklogItem(itemId, { status: "done", lastError: null, attention: null });
+        this.deps.broadcast({ kind: "items" });
+        this.pushState(true);
+        // L2：主管日报的 executed 行带 run.summary，这里静默
+      } else {
+        this.deps.store.updateBacklogItem(itemId, { status: "awaiting_review", lastError: null, attention: null });
+        this.deps.broadcast({ kind: "items" });
+        this.pushState(true);
+        this.notifyOnce(`review:${itemId}`, `【待办完成待验收】「${title}」跑完了${report?.summary !== undefined && report.summary !== "" ? ` —— ${report.summary}` : ""}，回工作台看产出并验收`);
+      }
+    }
+    // 结算即唤醒（docs/33 §4.1）：落定后立刻让 autopilot 看一眼下一任务，
+    // 不等 20s tick —— tick 降为兜底对账（与 dsh-superagent Passes 的
+    // 「定时 + 命令触发即跑」混合模式同构）。autopilotBusy 单飞防重入。
+    void this.maybeAutopilot();
+  }
+
+  /** L1 通知去重（docs/33 §2.3 orca 防噪）：同任务同结果 5 分钟窗内只发一条 */
+  private readonly recentNotifies = new Map<string, number>();
+  private notifyOnce(key: string, text: string): void {
+    const last = this.recentNotifies.get(key);
+    if (last !== undefined && Date.now() - last < 5 * 60_000) return;
+    if (this.recentNotifies.size > 200) {
+      // 有界：超 200 条时按时间清最老一半（避免重派风暴撑爆内存）
+      const sorted = [...this.recentNotifies.entries()].sort((a, b) => a[1] - b[1]);
+      for (const [k] of sorted.slice(0, Math.floor(sorted.length / 2))) this.recentNotifies.delete(k);
+    }
+    this.recentNotifies.set(key, Date.now());
+    void this.deps.notify(text);
   }
 
   /** index.ts 的 broadcast 回调调这里：会话终态回灌 */
@@ -959,8 +1096,7 @@ export class BacklogEngine {
     if (hit === undefined) return;
     this.runBySession.delete(sessionId);
     const failed = reason === "error" || reason === "executor_exited";
-    this.deps.store.finishBacklogRun(hit.runId, failed ? "failed" : "done", `ended: ${reason}`);
-    this.settleExecution(hit.itemId, failed ? "failed" : "done", `ended: ${reason}`);
+    this.settleExecution(hit.itemId, failed ? "failed" : "done", `ended: ${reason}`, { runId: hit.runId, sessionId });
   }
 
   /** index.ts 的终端 exit 帧回调调这里：TUI 模式运行记录与待办状态机收口 */
@@ -1150,6 +1286,10 @@ export class BacklogEngine {
       sortPos: row.sortPos,
       subscriptions: row.subscriptions,
       pendingInput: row.pendingInput,
+      mandate: mandateOf(row),
+      attention: row.attention,
+      assignment: assignmentOf(row),
+      precheck: row.precheck,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       lastRun: run === undefined
@@ -1163,6 +1303,12 @@ export class BacklogEngine {
             startedAt: run.startedAt,
             finishedAt: run.finishedAt,
             detail: run.detail,
+            outcome: run.outcome,
+            summary: run.summary,
+            model: run.model,
+            usageJson: run.usageJson,
+            deliverable: run.deliverable,
+            retryOf: run.retryOf,
           },
       runCount: this.deps.store.countBacklogRuns(row.id),
     };
@@ -1174,6 +1320,53 @@ export class BacklogEngine {
 }
 
 // ---- 工具 ---------------------------------------------------------------------
+
+/** precheck 条件门（docs/33 §5）：30s 超时，非 0 退出 = 不该跑（skip 不是失败） */
+function runPrecheck(command: string, cwd: string): Promise<{ ok: boolean; detail: string }> {
+  return new Promise((resolve) => {
+    try {
+      exec(command, { cwd, timeout: 30_000, windowsHide: true }, (err, _stdout, stderr) => {
+        if (err === null) resolve({ ok: true, detail: "exit 0" });
+        else {
+          const code = (err as { code?: unknown }).code;
+          const tail = stderr.toString().trim().slice(-120);
+          resolve({ ok: false, detail: `exit ${String(code)}${tail !== "" ? ` ${tail}` : ""}` });
+        }
+      });
+    } catch (err: unknown) {
+      resolve({ ok: false, detail: err instanceof Error ? err.message : String(err) });
+    }
+  });
+}
+
+/** row.mandate（宽松 JSON）→ 契约形态；坏数据按无 mandate 处理 */
+function mandateOf(row: BacklogRow): BacklogMandate | null {
+  const m = row.mandate;
+  if (m === null) return null;
+  const strength = m["strength"] === "explicit" || m["strength"] === "inferred" ? m["strength"] : null;
+  if (strength === null) return null;
+  return {
+    strength,
+    basis: typeof m["basis"] === "string" ? m["basis"] : "classifier",
+    acceptedAt: Number(m["acceptedAt"] ?? row.createdAt) || row.createdAt,
+    ...(m["wouldAutoRun"] === true ? { wouldAutoRun: true } : {}),
+  };
+}
+
+/** row.assignment（宽松 JSON）→ 契约形态 */
+function assignmentOf(row: BacklogRow): BacklogAssignment | null {
+  const a = row.assignment;
+  if (a === null) return null;
+  const memory = a["memory"];
+  const appendPrompt = typeof a["appendPrompt"] === "string" && a["appendPrompt"].trim() !== "" ? a["appendPrompt"] : undefined;
+  const skills = Array.isArray(a["skills"]) ? a["skills"].filter((s): s is string => typeof s === "string" && s.trim() !== "") : undefined;
+  if (memory === undefined && appendPrompt === undefined && (skills === undefined || skills.length === 0)) return null;
+  return {
+    ...(memory === "none" || memory === "minimal" || memory === "full" ? { memory } : {}),
+    ...(appendPrompt !== undefined ? { appendPrompt } : {}),
+    ...(skills !== undefined && skills.length > 0 ? { skills } : {}),
+  };
+}
 
 /**
  * autopilot 的执行器选择：item 指定了就看指定（percent 已知则须 ≥ 地板，未知放行

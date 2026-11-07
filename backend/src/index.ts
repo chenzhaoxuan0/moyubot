@@ -1028,6 +1028,15 @@ const telegramGateway = new TelegramGateway({
   host,
   vault: credentialVault,
   pollMs: 2000,
+  // IM 确认门（docs/33 §3.4）：「确认/拒绝 N」与飞书同口径 —— 提议通知文案里
+  // 引导的就是这组回复；点对点 bot 聊天无需 receiveId 白名单（关键词内正则即门）
+  inboundHook: async (text) => {
+    try {
+      return await (backlogEngine?.handleInboundText(text) ?? false);
+    } catch {
+      return false;
+    }
+  },
 });
 telegramGateway.start();
 
@@ -1037,6 +1046,13 @@ const weixinGateway = new WeixinGateway({
   host,
   vault: credentialVault,
   pollMs: 3000,
+  inboundHook: async (text) => {
+    try {
+      return await (backlogEngine?.handleInboundText(text) ?? false);
+    } catch {
+      return false;
+    }
+  },
 });
 weixinGateway.start();
 
@@ -1050,8 +1066,11 @@ const discordGateway = new DiscordGateway({
 discordGateway.start();
 
 // 飞书：每 bot 一个飞书机器人（一个飞书应用 = 一个账号 = 一个 bot 身份）。
-// 入站拦截器：配置的确认会话里发「确认/拒绝 <待办id>」直接落到待办引擎（v1 关键词口径），
-// 其余消息照常进 bot 轮次；引擎不在（启动早期）按未消费放行。
+// 入站拦截器（确认会话）：①「确认/拒绝 <待办id>」关键词直接落到待办引擎（v1 口径）；
+// ② docs/33 §1.4 渠道候选准入 —— 该会话整体是一个话题（thread_key=feishu:<chat>），
+//    同话题后续消息过 gate：命中订阅任务 → 直通投递（digest 消化，不进聊天）；
+//    重复 → 消化；配置 inboxCapture 开时未命中的也收进清单（候选条目），
+//    关时其余消息照常进 bot 轮次（默认，行为不变）。引擎不在（启动早期）按未消费放行。
 const feishuGateway = new FeishuGateway({
   registry: botRegistry,
   host,
@@ -1060,7 +1079,33 @@ const feishuGateway = new FeishuGateway({
     const cfg = getBacklogConfig(store);
     if (!cfg.feishu.enabled || cfg.feishu.receiveId === "" || chatId !== cfg.feishu.receiveId) return false;
     try {
-      return await (backlogEngine?.handleInboundText(text) ?? false);
+      if (await (backlogEngine?.handleInboundText(text) ?? false)) return true;
+    } catch {
+      /* 关键词拦截故障不拦消息 */
+    }
+    try {
+      const threadKey = `feishu:${chatId}`;
+      const verdict = gateAdmit(
+        {
+          store,
+          deliver: (itemId, t) => requireEngine().deliverFollowup(itemId, t),
+          broadcast: (signal) => broadcastInbox(wss, signal),
+        },
+        text.trim(),
+        threadKey,
+      );
+      if (verdict.kind === "fanout") {
+        void notifyUser(`【清单直通】已把这条追加送到任务 #${verdict.itemId}（下次执行自动带上）`);
+        return true;
+      }
+      if (verdict.kind === "duplicate") return true;
+      if (cfg.feishu.inboxCapture) {
+        const entryId = store.createInboxEntry({ text: text.trim(), threadKey, provenance: "pasted" });
+        if (getInboxConfig(store).autoClassify) inboxClassifier.schedule();
+        void notifyUser(`【已记入清单】#${entryId} —— routing 分类后按类别流转`);
+        return true;
+      }
+      return false;
     } catch {
       return false;
     }
@@ -2935,6 +2980,10 @@ registerMethod("backlog.update", (params) => {
     launchMode?: string;
     auto?: boolean;
     targetSessionId?: string | null;
+    /** 派发单增量（docs/33 §3.3）：memory 档/附加指令/技能白名单 */
+    assignment?: { memory?: string; appendPrompt?: string; skills?: unknown } | null;
+    /** 派发前条件门命令（docs/33 §5）：空串/null = 清除 */
+    precheck?: string | null;
   };
   if (typeof p.id !== "number") throw badBacklog("id is required");
   if (p.launchMode !== undefined && p.launchMode !== "terminal" && p.launchMode !== "chat" && p.launchMode !== "headless") {
@@ -2943,6 +2992,18 @@ registerMethod("backlog.update", (params) => {
   const hit = store.getBacklogItem(p.id);
   if (hit === undefined) throw Object.assign(new Error(`没有这个待办：${p.id}`), { code: "unknown_item" });
   if (hit.status === "executing") throw badBacklog("执行中的待办不能编辑 —— 等它跑完或打回后再改");
+  // 派发单归一（docs/33 §3.3）：宽松输入 → 白名单字段；全空 = 清除
+  const normalizeAssignment = (a: typeof p.assignment): Record<string, unknown> | null => {
+    if (a === null || a === undefined) return null;
+    const out: Record<string, unknown> = {};
+    if (a.memory === "none" || a.memory === "minimal" || a.memory === "full") out["memory"] = a.memory;
+    if (typeof a.appendPrompt === "string" && a.appendPrompt.trim() !== "") out["appendPrompt"] = a.appendPrompt.trim().slice(0, 4000);
+    if (Array.isArray(a.skills)) {
+      const skills = a.skills.filter((s): s is string => typeof s === "string" && s.trim() !== "").map((s) => s.trim().slice(0, 100)).slice(0, 16);
+      if (skills.length > 0) out["skills"] = skills;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  };
   // 打勾模型的「编辑即灭勾」：实质性字段（决定任务执行内容的）发生变更时，auto
   // 一律摘掉 —— 编辑过但没人重新确认的任务不能继续无人值守执行，回卡片重新
   // 打勾才会再进闲时队列。用户显式传的 auto（卡片上的勾）单独 toggling 不算实质变更。
@@ -2962,10 +3023,12 @@ registerMethod("backlog.update", (params) => {
     ...(p.targetSessionId !== undefined
       ? { targetSessionId: typeof p.targetSessionId === "string" && p.targetSessionId.trim() !== "" ? p.targetSessionId.trim() : null }
       : {}),
+    ...(p.assignment !== undefined ? { assignment: normalizeAssignment(p.assignment) } : {}),
+    ...(p.precheck !== undefined ? { precheck: typeof p.precheck === "string" && p.precheck.trim() !== "" ? p.precheck.trim().slice(0, 500) : null } : {}),
   };
   const SUBSTANTIVE_KEYS = [
     "title", "goal", "prompt", "unitId", "unitName", "rootPath",
-    "runtimeId", "model", "mode", "size", "launchMode", "targetSessionId",
+    "runtimeId", "model", "mode", "size", "launchMode", "targetSessionId", "assignment", "precheck",
   ] as const;
   const rowRec = hit as unknown as Record<string, unknown>;
   const patchRec = patch as unknown as Record<string, unknown>;

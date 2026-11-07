@@ -28,6 +28,8 @@ const STATUS_CHIPS: readonly { id: StatusFilter; label: string; cls: string }[] 
   { id: "executing", label: "执行中", cls: "bg-blue-500/10 text-blue-500" },
   { id: "awaiting_review", label: "待验收", cls: "bg-violet-500/10 text-violet-500" },
   { id: "awaiting_confirm", label: "待确认", cls: "bg-amber-500/10 text-amber-600" },
+  // blocked（docs/33 §2）：执行器带着一个具体问题停下等人 —— 比待确认更急
+  { id: "blocked", label: "受阻", cls: "bg-amber-500/20 text-amber-700" },
   { id: "backoff", label: "退避", cls: "bg-loss/10 text-loss" },
   { id: "sleeping", label: "休眠", cls: "bg-line-soft text-ash" },
 ];

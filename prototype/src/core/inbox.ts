@@ -126,12 +126,22 @@ export interface InboxConfig {
   readonly classifier: { readonly runtimeId: string; readonly model: string | null };
   /** 用户自定义分类（追加在内置五个之后，id 不可与内置冲突） */
   readonly categories: readonly InboxCategoryDef[];
+  /**
+   * 自动执行准入（docs/33 §3.1）：
+   * - auto（默认，现状行为）：explicit/inferred 沉淀任务按既有规则打 auto 旗
+   * - observe：inferred 任务只记 mandate.wouldAutoRun 不进闲时队列（先看后放）
+   * - off：一切新沉淀不自动执行（全手动）
+   * explicit（用户亲手键入）在 observe/off 下不受影响照旧打 auto —— 观察
+   * 期针对的是间接来源，不是用户本人。
+   */
+  readonly acceptMode: "auto" | "observe" | "off";
 }
 
 export const DEFAULT_INBOX_CONFIG: InboxConfig = {
   autoClassify: true,
   classifier: { runtimeId: "", model: null },
   categories: [],
+  acceptMode: "auto",
 };
 
 // ---------------------------------------------------------------------------

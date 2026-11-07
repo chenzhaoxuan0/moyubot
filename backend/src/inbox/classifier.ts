@@ -227,6 +227,20 @@ export class InboxClassifier {
       const knownRuntime = (id: string | undefined): string =>
         id !== undefined && id !== "" && adapters.some((a) => a.id === id) ? id : "";
       const runtimeId = knownRuntime(hints?.runtimeId) || knownRuntime(task.runtimeId);
+      // 授权准入（docs/33 §3.1）：mandate 记授权依据（typed=explicit，粘贴/GTD/
+      // 渠道=inferred）；acceptMode 管 auto 旗 —— auto（默认）= 现状公式不变；
+      // observe = inferred 只记 wouldAutoRun 不进闲时队列（先看后放），explicit
+      // 不受影响；off = 一切新沉淀不自动。紧急条目无论模式都不进闲时队列（docs/30：
+      // 闲时执行构造性来不及，迟到的执行 + autoReview 无人看见是最坏组合）；
+      // 粘贴的外部文本是间接提示注入的最大落点 —— 必须人工打勾才进无人值守队列。
+      const strength = entry.provenance === "typed" ? "explicit" : "inferred";
+      const tk = entry.threadKey;
+      const basis = tk !== null && tk.startsWith("gtd:") ? "gtd" : tk !== null && tk.startsWith("feishu:") ? "channel" : entry.provenance === "pasted" ? "pasted" : "typed";
+      const wouldAuto = !urgent && entry.provenance !== "pasted";
+      const mode = this.deps.getConfig().acceptMode;
+      const mandate: Record<string, unknown> = { strength, basis, acceptedAt: Date.now() };
+      if (mode === "observe" && strength === "inferred" && wouldAuto) mandate["wouldAutoRun"] = true;
+      const autoFlag = mode === "off" ? false : mode === "observe" ? strength === "explicit" && wouldAuto : wouldAuto;
       // 建任务与回写链接必须同生共死：中间被 kill 会留下孤儿 auto 任务（会被
       // 闲时执行）+ 待分类条目，sweep 再分类就是重复任务、双份烧额度
       const taskId = this.deps.store.transaction(() => {
@@ -240,11 +254,7 @@ export class InboxClassifier {
           runtimeId,
           model: hints?.model !== undefined ? hints.model : task.model,
           launchMode: hints?.launchMode ?? "headless",
-          // 打勾门的来源分级（docs/30）：紧急条目不进闲时队列（闲时执行构造性
-          // 来不及，迟到的执行 + autoReview 无人看见是最坏组合）；粘贴的外部
-          // 文本是间接提示注入的最大落点 —— 必须人工打勾才进无人值守队列。
-          // 用户亲手键入的（typed）才默认托付。
-          auto: !urgent && entry.provenance !== "pasted",
+          auto: autoFlag,
           // targetSessionId 只认用户亲手预置的 hints —— routing 的输出不收这个字段
           // （间接提示注入可以把任意已有会话 id 塞进来，把任务 prompt 灌进别人的对话）
           targetSessionId: hints?.targetSessionId ?? null,
@@ -252,6 +262,7 @@ export class InboxClassifier {
           subscriptions: entry.threadKey !== null ? [entry.threadKey] : undefined,
           source: "inbox",
         });
+        this.deps.store.updateBacklogItem(id, { mandate });
         this.deps.store.updateInboxEntry(entry.id, {
           category: finalCategory,
           categoryNote: note,

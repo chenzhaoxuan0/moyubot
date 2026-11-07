@@ -90,6 +90,17 @@ function parseThreadKeys(raw: unknown): string[] {
   }
 }
 
+/** mandate_json / assignment_json 的解析：非对象一律 null（调用方按缺省处理） */
+function parseJsonRecord(raw: unknown): Record<string, unknown> | null {
+  if (raw === null || raw === undefined) return null;
+  try {
+    const v = JSON.parse(String(raw));
+    return v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 export interface BacklogRow {
   id: number;
   title: string;
@@ -120,6 +131,14 @@ export interface BacklogRow {
   subscriptions: string[];
   /** 直通追加暂存的上下文：派发时拼进 prompt 前缀、消费即清；非空时 autoReview 不自动结案 */
   pendingInput: string | null;
+  /** 授权记录（docs/33 §3）：{strength, basis, acceptedAt, wouldAutoRun?} —— 只记录不重验 */
+  mandate: Record<string, unknown> | null;
+  /** blocked 时给人的问题文本（docs/33 §2 结构化问人） */
+  attention: string | null;
+  /** 派发单（docs/33 §3.3）：{memory, appendPrompt, skills} —— executor/model 等在已有列 */
+  assignment: Record<string, unknown> | null;
+  /** 派发前条件门命令（docs/33 §5）：非 0 退出即 skip（记 skipped run，任务留 ready） */
+  precheck: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -409,6 +428,26 @@ export class Store {
       `ALTER TABLE inbox_entries ADD COLUMN thread_key TEXT`,
       `ALTER TABLE backlog_items ADD COLUMN subscriptions_json TEXT`,
       `ALTER TABLE backlog_items ADD COLUMN pending_input TEXT`,
+      // docs/33 §2/§3：执行结果事实源与授权/派发单 ——
+      // mandate_json = 授权记录（strength/basis/acceptedAt，observe 模式的凭据）；
+      // attention = blocked 时给人的问题文本（结构化问人，替代自由文本推断）；
+      // assignment_json = 派发单（memory 档位/appendPrompt/skills；executor/model
+      //   等已有列是事实上的派发字段，这里只存增量）；
+      // precheck = 派发前的廉价条件门命令（非 0 即 skip 且进历史）
+      `ALTER TABLE backlog_items ADD COLUMN mandate_json TEXT`,
+      `ALTER TABLE backlog_items ADD COLUMN attention TEXT`,
+      `ALTER TABLE backlog_items ADD COLUMN assignment_json TEXT`,
+      `ALTER TABLE backlog_items ADD COLUMN precheck TEXT`,
+      // backlog_runs 升级为结果事实源（docs/33 §2.2）：outcome = 执行器 report 态
+      // 或 stopReason 推断（ready/blocked/failed/dropped/limit/refusal）；
+      // summary = 执行器一句话结果；model/usage_json/deliverable = 归因与产物；
+      // retry_of = 尝试身份（orca Dispatch：重试是新行，指向旧尝试）
+      `ALTER TABLE backlog_runs ADD COLUMN outcome TEXT`,
+      `ALTER TABLE backlog_runs ADD COLUMN summary TEXT`,
+      `ALTER TABLE backlog_runs ADD COLUMN model TEXT`,
+      `ALTER TABLE backlog_runs ADD COLUMN usage_json TEXT`,
+      `ALTER TABLE backlog_runs ADD COLUMN deliverable TEXT`,
+      `ALTER TABLE backlog_runs ADD COLUMN retry_of INTEGER`,
     ]) {
       try {
         this.db.exec(stmt);
@@ -978,6 +1017,10 @@ export class Store {
       sortPos: Number(r["sort_pos"] ?? 0),
       subscriptions: parseThreadKeys(r["subscriptions_json"]),
       pendingInput: r["pending_input"] === null || r["pending_input"] === undefined ? null : String(r["pending_input"]),
+      mandate: parseJsonRecord(r["mandate_json"]),
+      attention: r["attention"] === null || r["attention"] === undefined ? null : String(r["attention"]),
+      assignment: parseJsonRecord(r["assignment_json"]),
+      precheck: r["precheck"] === null || r["precheck"] === undefined ? null : String(r["precheck"]),
       createdAt: Number(r["created_at"]),
       updatedAt: Number(r["updated_at"]),
     };
@@ -1071,6 +1114,10 @@ export class Store {
       sortPos: number;
       subscriptions: string[];
       pendingInput: string | null;
+      mandate: Record<string, unknown> | null;
+      attention: string | null;
+      assignment: Record<string, unknown> | null;
+      precheck: string | null;
     }>,
   ): boolean {
     const sets: string[] = [];
@@ -1101,6 +1148,10 @@ export class Store {
     if (patch.sortPos !== undefined) put("sort_pos", patch.sortPos);
     if (patch.subscriptions !== undefined) put("subscriptions_json", patch.subscriptions.length > 0 ? JSON.stringify(patch.subscriptions) : null);
     if (patch.pendingInput !== undefined) put("pending_input", patch.pendingInput);
+    if (patch.mandate !== undefined) put("mandate_json", patch.mandate === null ? null : JSON.stringify(patch.mandate));
+    if (patch.attention !== undefined) put("attention", patch.attention);
+    if (patch.assignment !== undefined) put("assignment_json", patch.assignment === null ? null : JSON.stringify(patch.assignment));
+    if (patch.precheck !== undefined) put("precheck", patch.precheck);
     if (sets.length === 0) return true;
     sets.push("updated_at = ?");
     values.push(Date.now());
@@ -1123,10 +1174,16 @@ export class Store {
     });
   }
 
-  startBacklogRun(itemId: number, sessionId: string | null, runtimeId: string, trigger: "gtd" | "manual" | "autopilot" = "gtd"): number {
+  startBacklogRun(
+    itemId: number,
+    sessionId: string | null,
+    runtimeId: string,
+    trigger: "gtd" | "manual" | "autopilot" = "gtd",
+    retryOf?: number,
+  ): number {
     const result = this.db
-      .prepare(`INSERT INTO backlog_runs (item_id, session_id, runtime_id, status, trigger, started_at) VALUES (?, ?, ?, 'running', ?, ?)`)
-      .run(itemId, sessionId, runtimeId, trigger, Date.now());
+      .prepare(`INSERT INTO backlog_runs (item_id, session_id, runtime_id, status, trigger, retry_of, started_at) VALUES (?, ?, ?, 'running', ?, ?, ?)`)
+      .run(itemId, sessionId, runtimeId, trigger, retryOf ?? null, Date.now());
     this.claimedRunsVersion++;
     return Number(result.lastInsertRowid);
   }
@@ -1136,8 +1193,19 @@ export class Store {
     this.claimedRunsVersion++;
   }
 
-  finishBacklogRun(runId: number, status: "done" | "failed", detail: string | null): void {
-    this.db.prepare(`UPDATE backlog_runs SET status = ?, finished_at = ?, detail = ? WHERE id = ?`).run(status, Date.now(), detail, runId);
+  finishBacklogRun(
+    runId: number,
+    status: "done" | "failed" | "skipped",
+    detail: string | null,
+    extra?: { outcome?: string; summary?: string | null; model?: string | null; usageJson?: string | null; deliverable?: string | null },
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE backlog_runs SET status = ?, finished_at = ?, detail = ?, outcome = COALESCE(?, outcome), summary = COALESCE(?, summary),
+           model = COALESCE(?, model), usage_json = COALESCE(?, usage_json), deliverable = COALESCE(?, deliverable) WHERE id = ?`,
+      )
+      .run(status, Date.now(), detail, extra?.outcome ?? null, extra?.summary ?? null, extra?.model ?? null, extra?.usageJson ?? null, extra?.deliverable ?? null, runId);
+    this.claimedRunsVersion++;
   }
 
   listBacklogRuns(itemId: number, limit = 10): Array<{
@@ -1150,20 +1218,33 @@ export class Store {
     startedAt: number;
     finishedAt: number | null;
     detail: string | null;
+    outcome: string | null;
+    summary: string | null;
+    model: string | null;
+    usageJson: string | null;
+    deliverable: string | null;
+    retryOf: number | null;
   }> {
     const rows = this.db
       .prepare(`SELECT * FROM backlog_runs WHERE item_id = ? ORDER BY id DESC LIMIT ?`)
       .all(itemId, limit) as Array<Record<string, unknown>>;
+    const s = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
     return rows.map((r) => ({
       id: Number(r["id"]),
       itemId: Number(r["item_id"]),
-      sessionId: r["session_id"] === null || r["session_id"] === undefined ? null : String(r["session_id"]),
+      sessionId: s(r["session_id"]),
       runtimeId: String(r["runtime_id"]),
       status: String(r["status"]),
       trigger: String(r["trigger"] ?? "gtd"),
       startedAt: Number(r["started_at"]),
       finishedAt: r["finished_at"] === null || r["finished_at"] === undefined ? null : Number(r["finished_at"]),
-      detail: r["detail"] === null || r["detail"] === undefined ? null : String(r["detail"]),
+      detail: s(r["detail"]),
+      outcome: s(r["outcome"]),
+      summary: s(r["summary"]),
+      model: s(r["model"]),
+      usageJson: s(r["usage_json"]),
+      deliverable: s(r["deliverable"]),
+      retryOf: r["retry_of"] === null || r["retry_of"] === undefined ? null : Number(r["retry_of"]),
     }));
   }
 
@@ -1178,16 +1259,23 @@ export class Store {
     const rows = this.db
       .prepare(`SELECT * FROM backlog_runs WHERE started_at >= ? AND trigger = 'autopilot' ORDER BY started_at ASC`)
       .all(at) as Array<Record<string, unknown>>;
+    const s = (v: unknown): string | null => (v === null || v === undefined ? null : String(v));
     return rows.map((r) => ({
       id: Number(r["id"]),
       itemId: Number(r["item_id"]),
-      sessionId: r["session_id"] === null || r["session_id"] === undefined ? null : String(r["session_id"]),
+      sessionId: s(r["session_id"]),
       runtimeId: String(r["runtime_id"]),
       status: String(r["status"]),
       trigger: String(r["trigger"] ?? "gtd"),
       startedAt: Number(r["started_at"]),
       finishedAt: r["finished_at"] === null || r["finished_at"] === undefined ? null : Number(r["finished_at"]),
-      detail: r["detail"] === null || r["detail"] === undefined ? null : String(r["detail"]),
+      detail: s(r["detail"]),
+      outcome: s(r["outcome"]),
+      summary: s(r["summary"]),
+      model: s(r["model"]),
+      usageJson: s(r["usage_json"]),
+      deliverable: s(r["deliverable"]),
+      retryOf: r["retry_of"] === null || r["retry_of"] === undefined ? null : Number(r["retry_of"]),
     }));
   }
 

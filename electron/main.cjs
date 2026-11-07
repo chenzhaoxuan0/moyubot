@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, net, protocol, shell, ipcMain, Menu, nativeImage, nativeTheme, Notification, Tray } = require("electron");
+const { app, BrowserWindow, dialog, net, powerSaveBlocker, protocol, shell, ipcMain, Menu, nativeImage, nativeTheme, Notification, Tray } = require("electron");
 const path = require("path");
 const os = require("os");
 const { fork } = require("node:child_process");
@@ -631,6 +631,7 @@ app.whenReady().then(() => {
   }
   createWindow();
   createTray();
+  startIdleTaskKeepAwake();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -638,6 +639,61 @@ app.whenReady().then(() => {
     }
   });
 });
+
+/**
+ * 闲时执行防睡眠（docs/33 §4.3）：idleMinutes 等到深夜、电脑睡了，autopilot
+ * 就永远不会跑 —— 这是一切闲时机制的系统层前提。轮询 daemon 的待办列表，
+ * 有 executing 任务时持有 powerSaveBlocker（系统级请求，防 App 挂起即防睡眠），
+ * 全部收口即释放。dev 模式同样生效（daemon 端口固定 5281）。
+ * 系统唤醒广播补偿（orca 的 system-resume-broadcast）桌面壳做不了，留给
+ * daemon 的 20s 兜底 tick —— 唤醒后最多一拍内追上。
+ */
+function startIdleTaskKeepAwake() {
+  const daemonPort = process.env["AGENT_WORKBENCH_PORT"] || "5281";
+  let blockerId = null;
+  let cachedToken = null;
+  const poll = async () => {
+    try {
+      // token 开启时先从 /bootstrap（回环豁免）取，带上再调 /rpc；token 关闭时
+      // bootstrap 返回 null，裸调即放行
+      if (cachedToken === null) {
+        const bs = await net.fetch(`http://127.0.0.1:${daemonPort}/bootstrap`);
+        const bsFrame = await bs.json();
+        cachedToken = bsFrame && typeof bsFrame.token === "string" ? bsFrame.token : "";
+      }
+      const headers = { "content-type": "application/json" };
+      if (cachedToken !== "") headers["x-awb-token"] = cachedToken;
+      const res = await net.fetch(`http://127.0.0.1:${daemonPort}/rpc`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ v: 1, id: "keepawake", method: "backlog.list", params: null }),
+      });
+      const frame = await res.json();
+      if (frame && frame.ok === false && frame.error && frame.error.code === "unauthorized") {
+        cachedToken = null; // token 轮换了：下一拍重取
+        return;
+      }
+      const items = frame && frame.ok && frame.result && Array.isArray(frame.result.items) ? frame.result.items : [];
+      const executing = items.some((it) => it && it.status === "executing");
+      if (executing && blockerId === null) {
+        blockerId = powerSaveBlocker.start("prevent-app-suspension");
+        console.log("[electron] keep-awake on (backlog executing)");
+      } else if (!executing && blockerId !== null) {
+        powerSaveBlocker.stop(blockerId);
+        blockerId = null;
+        console.log("[electron] keep-awake off (backlog idle)");
+      }
+    } catch {
+      /* daemon 不在（dev 未起/退出中）：不持锁；下一拍再看 */
+      if (blockerId !== null) {
+        powerSaveBlocker.stop(blockerId);
+        blockerId = null;
+      }
+    }
+  };
+  setInterval(() => void poll(), 30_000);
+  void poll();
+}
 
 // 任何退出路径（托盘退出 / Cmd+Q / app.quit）都标记 quitting，
 // 让窗口 close 处理器放行 —— 否则藏托盘的 preventDefault 会拦住退出

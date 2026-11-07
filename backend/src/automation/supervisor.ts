@@ -71,11 +71,13 @@ export function setSupervisorConfig(store: Store, patch: unknown): SupervisorCon
 
 export interface SupervisorReport {
   readonly empty: boolean;
-  readonly summary: { done: number; failed: number; skipped: number; stopped: number };
-  /** ① 自动执行（一行一条） */
+  readonly summary: { done: number; failed: number; skipped: number; stopped: number; blocked: number; dropped: number };
+  /** ① 自动执行（一行一条，docs/33 §2.2：带 run.summary 一句话结果） */
   readonly executed: readonly string[];
   /** ② 该跑而没跑（一行一条） */
   readonly missed: readonly string[];
+  /** ③ 待回答（blocked，docs/33 §2：结构化问人后没人答的 —— 日报里追讨） */
+  readonly blocked: readonly string[];
   /** 报告窗口 */
   readonly windowStart: number;
   readonly windowEnd: number;
@@ -100,23 +102,47 @@ const fmtDate = (t: number): string => {
 export function buildSupervisorReport(store: Store, windowStart: number, now = Date.now()): SupervisorReport {
   const executed: string[] = [];
   const missed: string[] = [];
+  const blocked: string[] = [];
   let done = 0;
   let failed = 0;
   let skipped = 0;
   let stopped = 0;
+  let dropped = 0;
 
-  // ①a autopilot 待办运行（闲时托管 —— 未经过用户手的执行）
+  // ①a autopilot 待办运行（闲时托管 —— 未经过用户手的执行）。
+  // 结果事实源（docs/33 §2.2）：outcome/summary 是执行器 report 的自报 ——
+  // 例行完成只进日报（L1 静默）在这里补上「跑出了什么」；dropped 静默终态
+  // 不计 done 也不打扰，只进 summary 计数。
   for (const r of store.listBacklogRunsSince(windowStart)) {
     const item = store.getBacklogItem(r.itemId);
     const title = item?.title ?? `已删任务 #${r.itemId}`;
-    if (r.status === "done") {
+    const oneLine = r.summary !== null && r.summary !== "" ? ` — ${clip(r.summary, 90)}` : "";
+    if (r.status === "done" && (r.outcome === null || r.outcome === "ready")) {
       done += 1;
-      executed.push(`${fmtHM(r.startedAt)} ✓ ${title}（${item?.unitName ?? "—"} / ${r.runtimeId === "" ? "—" : r.runtimeId} · 闲时托管）`);
+      executed.push(`${fmtHM(r.startedAt)} ✓ ${title}${oneLine}（${item?.unitName ?? "—"} / ${r.runtimeId === "" ? "—" : r.runtimeId} · 闲时托管）`);
+    } else if (r.status === "done" && r.outcome === "dropped") {
+      dropped += 1;
+      executed.push(`${fmtHM(r.startedAt)} ⊘ ${title} — 执行器判定无需处理${oneLine}`);
+    } else if (r.status === "done" && r.outcome === "blocked") {
+      // 受阻已发过 L1；日报里若还挂着（没人答）在 ③ 追讨，这里不重复唱
+      blocked.push(`「${title}」${r.summary !== null && r.summary !== "" ? ` — ${clip(r.summary, 90)}` : ""}`);
+    } else if (r.status === "skipped") {
+      skipped += 1;
+      missed.push(`${fmtHM(r.startedAt)} ⊘ 「${title}」precheck 条件未过被跳过（${clip(r.detail, 60)}）`);
     } else if (r.status === "failed") {
       failed += 1;
-      executed.push(`${fmtHM(r.startedAt)} ✗ ${title} — ${clip(r.detail)}（已回就绪，退避后闲时重试）`);
+      executed.push(`${fmtHM(r.startedAt)} ✗ ${title} — ${clip(r.summary ?? r.detail)}（${r.outcome === "limit" ? "预算/轮数耗尽" : r.outcome === "refusal" ? "执行器拒绝" : "已回就绪，退避后闲时重试"}）`);
     }
     // running 里的不在日报里唱票 —— 没收口的活儿收口了再报
+  }
+
+  // ③ 待回答（docs/33 §2 blocked）：窗口结束时仍处于 blocked 的任务 ——
+  // 它们不在 ①（run 已收口）也不在 ②（不是没跑），单独追讨
+  for (const item of store.listBacklogItems()) {
+    if (item.status !== "blocked") continue;
+    if (!blocked.some((b) => b.includes(`「${item.title}」`))) {
+      blocked.push(`「${item.title}」${item.attention !== null ? ` —— ${clip(item.attention, 90)}` : "（无问题描述，请回工作台看会话）"}`);
+    }
   }
 
   // ①b 钟控自动化运行（含用量续跑 / 提醒送达，skipped 归 ②）
@@ -147,17 +173,18 @@ export function buildSupervisorReport(store: Store, windowStart: number, now = D
   }
 
   return {
-    empty: executed.length === 0 && missed.length === 0,
-    summary: { done, failed, skipped, stopped },
+    empty: executed.length === 0 && missed.length === 0 && blocked.length === 0,
+    summary: { done, failed, skipped, stopped, blocked: blocked.length, dropped },
     executed,
     missed,
+    blocked,
     windowStart,
     windowEnd: now,
   };
 }
 
 export function renderSupervisorReport(r: SupervisorReport): string {
-  const head = `【主管日报】${fmtDate(r.windowEnd)}（完成 ${r.summary.done} · 失败 ${r.summary.failed} · 跳过 ${r.summary.skipped} · 停用 ${r.summary.stopped}）`;
+  const head = `【主管日报】${fmtDate(r.windowEnd)}（完成 ${r.summary.done} · 失败 ${r.summary.failed} · 跳过 ${r.summary.skipped} · 停用 ${r.summary.stopped} · 待回答 ${r.summary.blocked}${r.summary.dropped > 0 ? ` · 无需处理 ${r.summary.dropped}` : ""}）`;
   if (r.empty) return head;
   const lines = [head, ""];
   if (r.executed.length > 0) {
@@ -165,9 +192,14 @@ export function renderSupervisorReport(r: SupervisorReport): string {
     lines.push(...r.executed);
   }
   if (r.missed.length > 0) {
-    if (r.executed.length > 0) lines.push("");
+    if (lines.length > 2) lines.push("");
     lines.push("二、该跑而没跑");
     lines.push(...r.missed);
+  }
+  if (r.blocked.length > 0) {
+    if (lines.length > 2) lines.push("");
+    lines.push("三、待你回答");
+    lines.push(...r.blocked);
   }
   lines.push("");
   lines.push("（只汇总无人值守的自动活动；你手动起的不在此列）");

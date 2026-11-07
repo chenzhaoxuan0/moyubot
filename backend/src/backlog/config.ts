@@ -82,6 +82,7 @@ export function normalizeBacklogConfig(raw: unknown): BacklogConfig {
       botId: str(fs["botId"], d.feishu.botId),
       accountId: str(fs["accountId"], d.feishu.accountId),
       receiveId: str(fs["receiveId"], ""),
+      inboxCapture: fs["inboxCapture"] === true,
     },
   };
 }

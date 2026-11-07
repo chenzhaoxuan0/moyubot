@@ -55,6 +55,8 @@ export class TelegramGateway {
       host: RuntimeHost;
       vault?: CredentialVault;
       pollMs?: number;
+      /** 入站拦截器（docs/33 §3.4）：daemon 级指令（确认/拒绝待办）直接消化（true），未消费进 bot 轮次 */
+      inboundHook?: (text: string) => Promise<boolean>;
     },
   ) {}
 
@@ -233,6 +235,16 @@ export class TelegramGateway {
     if (trimmed === "/status") {
       await this.sendTelegram(this.opts.apiBase, token, chatId, `🤖 Bot 状态: ${bot.name || bot.id}\n📁 根目录: ${bot.rootPath}\n⚡ 审批模式: ${acc.interactiveApproval ? "交互式按钮审批" : "yolo 自动放行"}`);
       return;
+    }
+
+    // 入站拦截器（docs/33 §3.4 IM 确认门）：「确认/拒绝 N」这类 daemon 级指令
+    // 直接消化，不进 bot 轮次 —— 挂钩故障按未消费放行（与飞书同款铁律）
+    if (this.opts.inboundHook !== undefined) {
+      try {
+        if (await this.opts.inboundHook(trimmed)) return;
+      } catch {
+        /* 拦截器故障不拦消息 */
+      }
     }
 
     // 发送打字状态

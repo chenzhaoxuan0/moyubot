@@ -329,6 +329,10 @@ export class CodexAdapter implements ExecutorAdapter {
   readonly id = "codex";
   readonly displayName = "Codex";
   readonly glyph = "C";
+  /** 无人值守已审计（docs/33 §4.2）：app-server JSON-RPC 的审批
+   * （approvalPolicy/sandboxPolicy 走 thread/start 参数）翻译成
+   * permission.requested 走统一权限闸，无终端交互路径 */
+  readonly unattendedVerified = true;
   // 原生读取 cwd 下的 AGENTS.md（官方文档明确；openclaw 的 codex 适配层也据此排除注入）
   readonly nativeContextFiles = ["AGENTS.md"];
   private _models: ExecutorModelInfo[] = [...DEFAULT_CODEX_MODELS];

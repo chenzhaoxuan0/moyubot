@@ -32,8 +32,12 @@ const STATUS_CHIP: Record<BacklogStatus, string> = {
   ready: "bg-teal-tint text-teal",
   awaiting_confirm: "bg-amber-500/10 text-amber-600",
   executing: "bg-blue-500/10 text-blue-500",
+  // blocked = 结构化问人（docs/33 §2）：与待确认同族的"等你"，amber 系但更醒
+  blocked: "bg-amber-500/20 text-amber-700",
   awaiting_review: "bg-violet-500/10 text-violet-500",
   done: "bg-gain/10 text-gain",
+  // dropped = 执行器判定无需处理的静默终态：中性灰
+  dropped: "bg-line-soft text-ash",
   sleeping: "bg-line-soft text-ash",
 };
 

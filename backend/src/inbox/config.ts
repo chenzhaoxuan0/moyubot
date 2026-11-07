@@ -49,6 +49,8 @@ export function normalizeInboxConfig(raw: unknown): InboxConfig {
       model: typeof cl["model"] === "string" && cl["model"].trim() !== "" ? cl["model"].trim() : null,
     },
     categories: normalizeCategories(r["categories"]),
+    // 自动执行准入（docs/33 §3.1）：默认 auto = 现状行为；observe/off 是收紧
+    acceptMode: r["acceptMode"] === "observe" || r["acceptMode"] === "off" ? r["acceptMode"] : "auto",
   };
 }
 

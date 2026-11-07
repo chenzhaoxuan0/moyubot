@@ -170,6 +170,8 @@ export class WeixinGateway {
       host: RuntimeHost;
       vault: CredentialVault;
       pollMs?: number;
+      /** 入站拦截器（docs/33 §3.4）：daemon 级指令（确认/拒绝待办）直接消化（true），未消费进 bot 轮次 */
+      inboundHook?: (text: string) => Promise<boolean>;
     },
   ) {}
 
@@ -310,6 +312,16 @@ export class WeixinGateway {
         await this.sendMessage(acc, userId, `❌ 裁决提交失败: ${err instanceof Error ? err.message : String(err)}`, contextToken);
       }
       return;
+    }
+
+    // 入站拦截器（docs/33 §3.4 IM 确认门）：「确认/拒绝 N」这类 daemon 级指令
+    // 直接消化，不进 bot 轮次 —— 挂钩故障按未消费放行（与飞书同款铁律）
+    if (this.opts.inboundHook !== undefined) {
+      try {
+        if (await this.opts.inboundHook(text.trim())) return;
+      } catch {
+        /* 拦截器故障不拦消息 */
+      }
     }
 
     const bot = await this.opts.registry.getBot(acc.botId);
