@@ -1976,6 +1976,10 @@ export interface BacklogWriteInput {
   readonly auto?: boolean;
   /** 指定在某个已有会话里执行（null = 新开会话） */
   readonly targetSessionId?: string | null;
+  /** 派发单增量（docs/33 §3.3）：memory 档位 / 附加指令 / 技能白名单；null = 清除 */
+  readonly assignment?: { memory?: "none" | "minimal" | "full"; appendPrompt?: string; skills?: readonly string[] } | null;
+  /** 派发前条件门命令（docs/33 §5）：非 0 退出即跳过；null/空 = 清除 */
+  readonly precheck?: string | null;
 }
 
 export async function fetchBacklog(endpoint: string = defaultDaemonEndpoint()): Promise<BacklogListResult> {
@@ -1994,6 +1998,17 @@ export interface BacklogRunRow {
   readonly startedAt: number;
   readonly finishedAt: number | null;
   readonly detail: string | null;
+  /** 结果事实源（docs/33 §2.2）：ready/blocked/failed/dropped/limit/refusal；null = 旧记录 */
+  readonly outcome?: string | null;
+  /** 执行器的一句话结果（report.summary） */
+  readonly summary?: string | null;
+  readonly model?: string | null;
+  /** 用量归因 JSON：{inputTokens,outputTokens,costUsd,durationMs} */
+  readonly usageJson?: string | null;
+  /** 产物深链 */
+  readonly deliverable?: string | null;
+  /** 重试指向的旧尝试 runId（docs/33 §5 尝试身份） */
+  readonly retryOf?: number | null;
 }
 
 export async function fetchBacklogRuns(
@@ -2003,6 +2018,16 @@ export async function fetchBacklogRuns(
 ): Promise<{ runs: readonly BacklogRunRow[] }> {
   const client = DaemonClient.get(endpoint);
   return client.rpc<{ runs: readonly BacklogRunRow[] }>("backlog.runs", { id, limit }, 15000);
+}
+
+/** 回答受阻任务（docs/33 §2）：答案暂存为追加，任务回 ready 重新入列 */
+export async function answerBacklogItem(
+  id: number,
+  text: string,
+  endpoint: string = defaultDaemonEndpoint(),
+): Promise<{ outcome: string; item: BacklogItem | null }> {
+  const client = DaemonClient.get(endpoint);
+  return client.rpc<{ outcome: string; item: BacklogItem | null }>("backlog.answer", { id, text }, 15000);
 }
 
 export async function createBacklogItem(

@@ -2900,8 +2900,20 @@ registerMethod("backlog.list", async () => {
 });
 
 // 推进面板的运行历史：单条待办的完整 run 列表（trigger 标记闲时/手动/心跳来源）
-registerMethod("backlog.runs", (params) => {
-  const p = (params ?? {}) as { id?: number; limit?: number };
+/** 派发单归一（docs/33 §3.3，create/update 共用）：宽松输入 → 白名单字段；全空 = 清除 */
+function normalizeAssignment(a: { memory?: string; appendPrompt?: string; skills?: unknown } | null | undefined): Record<string, unknown> | null {
+  if (a === null || a === undefined) return null;
+  const out: Record<string, unknown> = {};
+  if (a.memory === "none" || a.memory === "minimal" || a.memory === "full") out["memory"] = a.memory;
+  if (typeof a.appendPrompt === "string" && a.appendPrompt.trim() !== "") out["appendPrompt"] = a.appendPrompt.trim().slice(0, 4000);
+  if (Array.isArray(a.skills)) {
+    const skills = a.skills.filter((s): s is string => typeof s === "string" && s.trim() !== "").map((s) => s.trim().slice(0, 100)).slice(0, 16);
+    if (skills.length > 0) out["skills"] = skills;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+registerMethod("backlog.runs", (params) => {  const p = (params ?? {}) as { id?: number; limit?: number };
   if (typeof p.id !== "number" || !Number.isFinite(p.id)) throw badBacklog("id is required");
   const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? Math.min(Math.max(1, Math.trunc(p.limit)), 50) : 10;
   return {
@@ -2914,8 +2926,30 @@ registerMethod("backlog.runs", (params) => {
       startedAt: r.startedAt,
       finishedAt: r.finishedAt,
       detail: r.detail,
+      // 结果事实源（docs/33 §2.2）：运行历史的呈现面
+      outcome: r.outcome,
+      summary: r.summary,
+      model: r.model,
+      usageJson: r.usageJson,
+      deliverable: r.deliverable,
+      retryOf: r.retryOf,
     })),
   };
+});
+
+/** 回答受阻任务（docs/33 §2 blocked 的页面最短路径）：答案作为追加暂存，任务回
+ *  ready 带着答案重新入列 —— 与飞书同话题回答同一条通路（deliverFollowup） */
+registerMethod("backlog.answer", (params) => {
+  const p = (params ?? {}) as { id?: number; text?: string };
+  if (typeof p.id !== "number") throw badBacklog("id is required");
+  if (typeof p.text !== "string" || p.text.trim() === "") throw badBacklog("text is required");
+  if (p.text.length > 8000) throw badBacklog("text 超过 8000 字符上限");
+  const hit = store.getBacklogItem(p.id);
+  if (hit === undefined) throw Object.assign(new Error(`没有这个待办：${p.id}`), { code: "unknown_item" });
+  if (hit.status !== "blocked") throw badBacklog("只有受阻状态可以回答 —— 其他状态请用追加/编辑");
+  const outcome = requireEngine().deliverFollowup(p.id, p.text.trim());
+  const item = store.getBacklogItem(p.id);
+  return { outcome, item: item === undefined ? null : requireEngine().toItem(item) };
 });
 
 registerMethod("backlog.create", (params) => {
@@ -2926,6 +2960,10 @@ registerMethod("backlog.create", (params) => {
     launchMode?: string;
     auto?: boolean;
     targetSessionId?: string | null;
+    /** 派发单增量（docs/33 §3.3）：memory 档/附加指令/技能白名单 */
+    assignment?: { memory?: string; appendPrompt?: string; skills?: unknown } | null;
+    /** 派发前条件门命令（docs/33 §5） */
+    precheck?: string | null;
   };
   if (typeof p.goal !== "string" || p.goal.trim() === "") throw badBacklog("goal is required");
   if (typeof p.unitId !== "string" || typeof p.rootPath !== "string" || p.rootPath === "") {
@@ -2958,6 +2996,12 @@ registerMethod("backlog.create", (params) => {
       targetSessionId: typeof p.targetSessionId === "string" && p.targetSessionId.trim() !== "" ? p.targetSessionId.trim() : null,
       source: "manual",
     });
+    // 派发单与条件门（docs/33）：createBacklogItem 不认这三样，事务内补写
+    const assignment = normalizeAssignment(p.assignment);
+    const precheck = typeof p.precheck === "string" && p.precheck.trim() !== "" ? p.precheck.trim().slice(0, 500) : null;
+    if (assignment !== null || precheck !== null) {
+      store.updateBacklogItem(taskId, { ...(assignment !== null ? { assignment } : {}), ...(precheck !== null ? { precheck } : {}) });
+    }
     const shellId = store.createInboxEntry({
       text: goal.slice(0, 8000),
       category: "todo",
@@ -2992,18 +3036,6 @@ registerMethod("backlog.update", (params) => {
   const hit = store.getBacklogItem(p.id);
   if (hit === undefined) throw Object.assign(new Error(`没有这个待办：${p.id}`), { code: "unknown_item" });
   if (hit.status === "executing") throw badBacklog("执行中的待办不能编辑 —— 等它跑完或打回后再改");
-  // 派发单归一（docs/33 §3.3）：宽松输入 → 白名单字段；全空 = 清除
-  const normalizeAssignment = (a: typeof p.assignment): Record<string, unknown> | null => {
-    if (a === null || a === undefined) return null;
-    const out: Record<string, unknown> = {};
-    if (a.memory === "none" || a.memory === "minimal" || a.memory === "full") out["memory"] = a.memory;
-    if (typeof a.appendPrompt === "string" && a.appendPrompt.trim() !== "") out["appendPrompt"] = a.appendPrompt.trim().slice(0, 4000);
-    if (Array.isArray(a.skills)) {
-      const skills = a.skills.filter((s): s is string => typeof s === "string" && s.trim() !== "").map((s) => s.trim().slice(0, 100)).slice(0, 16);
-      if (skills.length > 0) out["skills"] = skills;
-    }
-    return Object.keys(out).length > 0 ? out : null;
-  };
   // 打勾模型的「编辑即灭勾」：实质性字段（决定任务执行内容的）发生变更时，auto
   // 一律摘掉 —— 编辑过但没人重新确认的任务不能继续无人值守执行，回卡片重新
   // 打勾才会再进闲时队列。用户显式传的 auto（卡片上的勾）单独 toggling 不算实质变更。

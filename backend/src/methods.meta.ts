@@ -135,7 +135,8 @@ export const METHOD_META: Record<string, MethodMeta> = {
 
   // ---- 待办（GTD）与自动化 ------------------------------------------------------
   "backlog.list": { description: "拉待办全量视图：条目（含 runCount/lastRun）、提议、状态、配置、配额", paramsHint: "null" },
-  "backlog.runs": { description: "查单条待办的运行历史（含 trigger 来源：autopilot/manual/gtd）", paramsHint: "{id, limit?}" },
+  "backlog.runs": { description: "查单条待办的运行历史（含 trigger 来源与结果事实源：outcome/summary/model/usageJson/deliverable/retryOf）", paramsHint: "{id, limit?}" },
+  "backlog.answer": { description: "回答受阻（blocked）任务：答案作为追加暂存，任务回就绪带着答案重新入列（与 IM 同话题回答同一条通路）", paramsHint: "{id, text}" },
   "backlog.create": {
     description: "新建待办项并落库（launchMode：terminal=TUI / chat=对话页前台 / headless=纯后台；auto=true 闲时自动执行免确认门；targetSessionId 指定已有会话执行；prompt 无人值守口径同 automation.create）",
     paramsHint: "{goal, unitId, rootPath, title?, prompt?, unitName?, runtimeId?, model?, mode?, size?, launchMode?, auto?, targetSessionId?}",

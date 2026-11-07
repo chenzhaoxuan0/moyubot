@@ -4,6 +4,7 @@ import type { InboxCategoryDef } from "../core/inbox.ts";
 import { useInbox } from "../store/useInbox.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { inputCls } from "./WorklistBits.tsx";
+import { cn } from "./cn.ts";
 
 /**
  * 清单设置弹窗（原 InboxPage 内嵌弹窗独立成文件）。
@@ -93,6 +94,38 @@ export function InboxSettings({ onClose }: { onClose: () => void }): ReactElemen
             </div>
             <p className="text-[10px] leading-relaxed text-ash">
               routing 是常驻 bot（侧栏「Routing」），它的主绑定在 bot 设置页改 —— 这里显式指定时优先。
+            </p>
+          </section>
+
+          {/* 自动执行准入（docs/33 §3.1 observe 模式）：渐进信任的用户入口 */}
+          <section className="space-y-2.5">
+            <h3 className="text-body-sm font-medium text-ink">自动执行准入</h3>
+            <p className="text-[10px] leading-relaxed text-ash">
+              管的是「分类沉淀出的任务要不要自动进闲时队列」。你亲手键入的不受影响。
+            </p>
+            <div className="flex gap-1">
+              {([
+                ["auto", "直接放行（默认）", "分类判为可执行的任务照旧打勾进闲时队列"],
+                ["observe", "观察期", "间接来源（粘贴/GTD/渠道）的任务先只记「本会自动跑」，不进队列 —— 看过清单里这类记录靠谱了再切回放行。卡片上带「观察期」徽标，勾上闲时执行即单独放行"],
+                ["off", "全部手动", "新沉淀的任务一律不自动执行，全走心跳提议 + 确认门"],
+              ] as const).map(([id, label, hint]) => (
+                <button
+                  key={id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void save({ acceptMode: id })}
+                  title={hint}
+                  className={cn(
+                    "flex-1 rounded-btn px-2 py-1.5 text-caption transition",
+                    (config.acceptMode ?? "auto") === id ? "bg-ink text-canvas" : "bg-rail text-graphite hover:bg-line-soft hover:text-ink",
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] leading-relaxed text-ash">
+              当前：{(config.acceptMode ?? "auto") === "auto" ? "放行（现状行为）" : (config.acceptMode ?? "auto") === "observe" ? "观察期 —— 间接来源只记录不执行" : "全部手动"}
             </p>
           </section>
 

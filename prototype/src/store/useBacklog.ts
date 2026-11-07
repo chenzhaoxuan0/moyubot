@@ -8,6 +8,7 @@ import type {
   QuotaResumeConfig,
 } from "../core/backlog.ts";
 import {
+  answerBacklogItem,
   confirmBacklogProposal,
   createBacklogItem,
   deleteBacklogItem,
@@ -66,6 +67,8 @@ interface BacklogState {
   rejectProposal: () => Promise<void>;
   review: (id: number, pass: boolean, note?: string) => Promise<void>;
   runNow: (id: number) => Promise<void>;
+  /** 回答受阻任务（docs/33 §2）：答案暂存为追加，任务回就绪重新入列 */
+  answer: (id: number, text: string) => Promise<void>;
   saveConfig: (patch: Record<string, unknown>) => Promise<boolean>;
   refreshQuotas: () => Promise<void>;
   setForceBusy: (on: boolean) => Promise<void>;
@@ -226,6 +229,16 @@ export const useBacklog = create<BacklogState>((set, get) => ({
       setTimeout(() => void get().refresh(), 1500);
     } catch (err: unknown) {
       set({ notice: { kind: "error", text: `立即执行失败：${err instanceof Error ? err.message : String(err)}` } });
+    }
+  },
+
+  answer: async (id, text) => {
+    try {
+      await answerBacklogItem(id, text, defaultDaemonEndpoint());
+      set({ notice: { kind: "success", text: "已回答 —— 任务带着答案回到就绪队列" } });
+      await get().refresh();
+    } catch (err: unknown) {
+      set({ notice: { kind: "error", text: `回答失败：${err instanceof Error ? err.message : String(err)}` } });
     }
   },
 

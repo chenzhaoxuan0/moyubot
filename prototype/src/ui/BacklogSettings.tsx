@@ -288,6 +288,21 @@ export function BacklogSettings({ onClose }: { onClose: () => void }): ReactElem
                   onBlur={(e) => void save({ feishu: { ...config.feishu, receiveId: e.target.value.trim() } })}
                   className={railInputCls}
                 />
+                <label className="flex cursor-pointer items-start gap-1.5 text-caption text-graphite">
+                  <input
+                    type="checkbox"
+                    checked={config.feishu.inboxCapture === true}
+                    disabled={busy}
+                    onChange={(e) => void save({ feishu: { ...config.feishu, inboxCapture: e.target.checked } })}
+                    className="mt-0.5 accent-teal"
+                  />
+                  <span>
+                    确认会话消息收进清单（docs/33 渠道准入）
+                    <span className="ml-1 text-ash">
+                      开 = 该会话的消息成为清单条目交 routing 分类（同话题追加仍直通任务）；关 = 仅话题直通生效，其余消息照常进 bot 聊天。
+                    </span>
+                  </span>
+                </label>
               </div>
             </div>
           </section>

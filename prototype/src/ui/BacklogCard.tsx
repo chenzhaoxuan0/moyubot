@@ -8,6 +8,7 @@ import {
   CircleCheck,
   CircleDot,
   History,
+  MessageCircleQuestion,
   MoreHorizontal,
   Pencil,
   Play,
@@ -47,6 +48,31 @@ const TRIGGER_LABEL: Readonly<Record<string, string>> = {
   gtd: "心跳",
 };
 
+/** 运行结果的细分徽标（docs/33 §2 结果事实源）：outcome null = 旧记录按 status 二分 */
+const OUTCOME_MARK: Readonly<Record<string, { label: string; cls: string }>> = {
+  ready: { label: "完成", cls: "bg-gain/10 text-gain" },
+  blocked: { label: "受阻", cls: "bg-amber-500/20 text-amber-700" },
+  failed: { label: "失败", cls: "bg-loss/10 text-loss" },
+  dropped: { label: "无需处理", cls: "bg-line-soft text-ash" },
+  limit: { label: "预算耗尽", cls: "bg-amber-500/10 text-amber-600" },
+  refusal: { label: "拒绝执行", cls: "bg-loss/10 text-loss" },
+};
+
+/** usageJson（{inputTokens,outputTokens,costUsd,durationMs}）→ 一行摘要 */
+function usageSummary(usageJson: string | null | undefined): string | null {
+  if (usageJson == null || usageJson === "") return null;
+  try {
+    const u = JSON.parse(usageJson) as { inputTokens?: number; outputTokens?: number; costUsd?: number };
+    const tok = (u.inputTokens ?? 0) + (u.outputTokens ?? 0);
+    const parts: string[] = [];
+    if (tok > 0) parts.push(tok >= 1000 ? `${(tok / 1000).toFixed(1)}k tok` : `${tok} tok`);
+    if (typeof u.costUsd === "number" && u.costUsd > 0) parts.push(`$${u.costUsd < 0.01 ? u.costUsd.toFixed(3) : u.costUsd.toFixed(2)}`);
+    return parts.length > 0 ? parts.join(" · ") : null;
+  } catch {
+    return null;
+  }
+}
+
 function fmtDuration(ms: number): string {
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s} 秒`;
@@ -73,6 +99,7 @@ export function BacklogCard({
   isQueueHead?: boolean;
 }): ReactElement {
   const runNow = useBacklog((s) => s.runNow);
+  const answer = useBacklog((s) => s.answer);
   const wake = useBacklog((s) => s.wake);
   const sleep = useBacklog((s) => s.sleep);
   const review = useBacklog((s) => s.review);
@@ -82,6 +109,7 @@ export function BacklogCard({
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [rejectNote, setRejectNote] = useState<string | null>(null);
+  const [answerText, setAnswerText] = useState("");
   const [runsOpen, setRunsOpen] = useState(false);
   const [runs, setRuns] = useState<readonly BacklogRunRow[] | null>(null);
 
@@ -203,8 +231,70 @@ export function BacklogCard({
         {item.status === "sleeping" && item.ignoreCount > 0 && (
           <span className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash">忽略 {item.ignoreCount} 次</span>
         )}
+        {/* 订阅直通暂存（docs/33 §1）：追加已挂到任务，下次执行自动拼入 */}
+        {item.pendingInput !== null && (
+          <span
+            className="shrink-0 whitespace-nowrap rounded-chip bg-teal-tint px-2 py-0.5 text-caption text-teal"
+            title="同话题的后续输入已直通本任务，派发时自动拼进任务提示词 —— 无需再复制一遍"
+          >
+            ⇠ 追加待送达
+          </span>
+        )}
+        {/* 观察期（docs/33 §3.1）：observe 模式拦下的 would-auto —— 勾上闲时执行即放行 */}
+        {item.mandate?.wouldAutoRun === true && !item.auto && (
+          <span
+            className="shrink-0 whitespace-nowrap rounded-chip bg-amber-500/10 px-2 py-0.5 text-caption text-amber-600"
+            title="观察期：分类器判断本可自动执行，被 acceptMode=observe 拦下记录 —— 勾选「闲时执行」即放行这类任务"
+          >
+            观察期 · 本会自动跑
+          </span>
+        )}
+        {/* 授权来源徽章（docs/33 §3 mandate）：悬停看完整语义 */}
+        {item.mandate !== null && (
+          <span
+            className="shrink-0 whitespace-nowrap rounded-chip bg-line-soft px-2 py-0.5 text-caption text-ash"
+            title={`授权记录：${item.mandate.strength === "explicit" ? "用户亲手键入（显式）" : "间接来源（推断）"} · 依据 ${item.mandate.basis} · ${formatBacklogRelative(item.mandate.acceptedAt)}沉淀`}
+          >
+            {item.mandate.strength === "explicit" ? "显式" : "推断"}
+          </span>
+        )}
       </div>
 
+      {/* blocked 内联回答卡（docs/33 §2 结构化问人）：问题不点开就可见，
+          回答 = 答案暂存为追加 + 任务回就绪重新入列（与 IM 同话题同一条通路） */}
+      {item.status === "blocked" && item.attention !== null && (
+        <div className="flex flex-col gap-1.5 rounded-btn border border-amber-500/30 bg-amber-500/5 px-2.5 py-2">
+          <p className="flex items-start gap-1.5 text-caption leading-relaxed text-amber-700">
+            <MessageCircleQuestion size={12} className="mt-px shrink-0" />
+            <span className="min-w-0 break-words">{item.attention}</span>
+          </p>
+          <div className="flex items-center gap-1.5">
+            <input
+              value={answerText}
+              onChange={(e) => setAnswerText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && answerText.trim() !== "") {
+                  void answer(item.id, answerText.trim());
+                  setAnswerText("");
+                }
+              }}
+              placeholder="回答后回车 —— 任务带着答案重新入列"
+              className="min-w-0 flex-1 rounded-input border border-transparent bg-card px-2 py-1 text-caption text-ink outline-none focus:border-amber-500/50"
+            />
+            <button
+              onClick={() => {
+                if (answerText.trim() === "") return;
+                void answer(item.id, answerText.trim());
+                setAnswerText("");
+              }}
+              disabled={answerText.trim() === ""}
+              className="shrink-0 rounded-btn bg-amber-600 px-2 py-1 text-caption text-white transition hover:bg-amber-700 disabled:opacity-40"
+            >
+              回答
+            </button>
+          </div>
+        </div>
+      )}
       {item.lastError !== null && (
         <p className="flex items-start gap-1.5 rounded-btn bg-loss/5 px-2 py-1.5 text-caption text-loss">
           <CircleAlert size={12} className="mt-px shrink-0" />
@@ -265,22 +355,41 @@ export function BacklogCard({
           ) : runs.length === 0 ? (
             <p className="text-caption text-ash">还没有运行记录</p>
           ) : (
-            runs.map((r) => (
+            runs.map((r) => {
+              // 结果徽标（docs/33 §2.2）：outcome 优先（report 自报/stopReason 推断），
+              // null = 旧记录按 status 二分；skipped = precheck 条件门拦下
+              const mark = OUTCOME_MARK[r.outcome ?? ""] ?? (r.status === "skipped" ? OUTCOME_MARK["dropped"]! : null);
+              const label =
+                r.status === "running" ? "运行中" : mark !== null ? mark.label : r.status === "done" ? "完成" : r.status === "skipped" ? "条件未过" : "失败";
+              const usage = usageSummary(r.usageJson);
+              return (
               <div key={r.runId} className="flex items-center gap-2 text-caption">
-                {r.status === "done" ? (
-                  <CircleCheck size={11} className="shrink-0 text-gain" />
-                ) : r.status === "failed" ? (
-                  <CircleAlert size={11} className="shrink-0 text-loss" />
-                ) : (
+                {r.status === "running" ? (
                   <CircleDot size={11} className="shrink-0 animate-pulse text-blue-500" />
+                ) : (
+                  <span
+                    className={cn(
+                      "shrink-0 whitespace-nowrap rounded-chip px-1.5 py-px text-[10px]",
+                      mark !== null ? mark.cls : r.status === "done" ? "bg-gain/10 text-gain" : "bg-loss/10 text-loss",
+                    )}
+                  >
+                    {label}
+                  </span>
                 )}
-                <span className="shrink-0 text-graphite">{r.status === "done" ? "完成" : r.status === "failed" ? "失败" : "运行中"}</span>
                 <span className="shrink-0 rounded-chip bg-line-soft px-1.5 py-px text-[10px] text-ash">{TRIGGER_LABEL[r.trigger] ?? r.trigger}</span>
                 <span className="shrink-0 text-ash">{formatBacklogRelative(r.startedAt)}</span>
                 {r.finishedAt !== null && <span className="shrink-0 text-ash">· {fmtDuration(r.finishedAt - r.startedAt)}</span>}
-                {r.detail !== null && (
-                  <span className="min-w-0 truncate text-ash" title={r.detail}>
-                    {r.detail}
+                {r.model != null && r.model !== "" && <span className="shrink-0 font-mono text-[10px] text-ash">{r.model}</span>}
+                {usage !== null && <span className="shrink-0 text-[10px] text-ash">{usage}</span>}
+                {r.retryOf != null && (
+                  <span className="shrink-0 text-[10px] text-ash" title="重试身份：本次运行接替的那次失败尝试">
+                    ↻ #{r.retryOf}
+                  </span>
+                )}
+                {/* summary（执行器一句话结果）优先于进程级 detail */}
+                {((r.summary ?? null) !== null || r.detail !== null) && (
+                  <span className="min-w-0 truncate text-graphite" title={r.summary ?? r.detail ?? ""}>
+                    {r.summary ?? r.detail}
                   </span>
                 )}
                 {/* headless/chat run 有事件账本可回放；autoterm_ 前缀是终端 id 没有事件流 */}
@@ -316,7 +425,8 @@ export function BacklogCard({
                   </span>
                 )}
               </div>
-            ))
+              );
+            })
           )}
         </div>
       )}
@@ -358,26 +468,34 @@ export function BacklogCard({
           </button>
         )}
         {item.status === "awaiting_review" && (
-          <div className="flex w-full items-center gap-1.5">
-            {rejectNote !== null ? (
-              <>
-                <input
-                  value={rejectNote}
-                  onChange={(e) => setRejectNote(e.target.value)}
-                  placeholder="打回原因（可选）"
-                  className="min-w-0 flex-1 rounded-input border border-transparent bg-rail px-2 py-1 text-caption text-ink outline-none focus:border-teal"
-                />
-                <button
-                  onClick={() => {
-                    void review(item.id, false, rejectNote.trim() === "" ? undefined : rejectNote.trim());
-                    setRejectNote(null);
-                  }}
-                  className="shrink-0 rounded-btn bg-ink px-2 py-1 text-caption text-canvas hover:opacity-90"
-                >
-                  确认打回
-                </button>
-              </>
-            ) : (
+          <div className="flex w-full flex-col gap-1.5">
+            {/* 验收依据（docs/33 §2.2）：执行器自报的一句话结果 —— 有 summary 才算有得验 */}
+            {item.lastRun?.summary != null && item.lastRun.summary !== "" && (
+              <p className="text-caption leading-relaxed text-graphite">
+                <span className="text-ash">产出：</span>
+                {item.lastRun.summary}
+              </p>
+            )}
+            <div className="flex w-full items-center gap-1.5">
+              {rejectNote !== null ? (
+                <>
+                  <input
+                    value={rejectNote}
+                    onChange={(e) => setRejectNote(e.target.value)}
+                    placeholder="打回原因（可选）"
+                    className="min-w-0 flex-1 rounded-input border border-transparent bg-rail px-2 py-1 text-caption text-ink outline-none focus:border-teal"
+                  />
+                  <button
+                    onClick={() => {
+                      void review(item.id, false, rejectNote.trim() === "" ? undefined : rejectNote.trim());
+                      setRejectNote(null);
+                    }}
+                    className="shrink-0 rounded-btn bg-ink px-2 py-1 text-caption text-canvas hover:opacity-90"
+                  >
+                    确认打回
+                  </button>
+                </>
+              ) : (
               <>
                 <button
                   onClick={() => void review(item.id, true)}
@@ -394,7 +512,8 @@ export function BacklogCard({
                   打回重跑
                 </button>
               </>
-            )}
+              )}
+            </div>
           </div>
         )}
         {item.status === "executing" && (

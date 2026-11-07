@@ -46,6 +46,12 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
   // 清单升级的两个可选项：闲时自动执行（免确认门）/ 指定已有会话执行
   const [auto, setAuto] = useState(initial?.auto ?? false);
   const [targetSessionId, setTargetSessionId] = useState(initial?.targetSessionId ?? "");
+  // 派发单增量（docs/33 §3.3）：memory 档（full = 缺省注入计划）/ 附加指令 / 技能白名单；
+  // precheck 条件门（docs/33 §5）
+  const [memory, setMemory] = useState<"full" | "minimal" | "none">(initial?.assignment?.memory ?? "full");
+  const [appendPrompt, setAppendPrompt] = useState(initial?.assignment?.appendPrompt ?? "");
+  const [skillsText, setSkillsText] = useState(initial?.assignment?.skills?.join("、") ?? "");
+  const [precheck, setPrecheck] = useState(initial?.precheck ?? "");
   const [err, setErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -71,6 +77,15 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
     }
     setSubmitting(true);
     setErr(null);
+    // 派发单：memory 回到 full 且无附加内容 = 不写（保持缺省）；显式清空三项 = 传 null 清除
+    const skills = skillsText.split(/[,，、\s]+/).map((s) => s.trim()).filter((s) => s !== "");
+    const hasAssignment = memory !== "full" || appendPrompt.trim() !== "" || skills.length > 0;
+    const assignmentPayload = hasAssignment
+      ? { ...(memory !== "full" ? { memory } : {}), ...(appendPrompt.trim() !== "" ? { appendPrompt: appendPrompt.trim() } : {}), ...(skills.length > 0 ? { skills } : {}) }
+      : initial?.assignment != null
+        ? null // 原有派发单、这次全清空 → 显式清除
+        : undefined; // 本来就没有 → 不动
+    const precheckPayload = precheck.trim() !== "" ? precheck.trim() : initial?.precheck != null ? null : undefined;
     const ok =
       initial === null
         ? await createItem({
@@ -87,6 +102,8 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
             launchMode,
             auto,
             targetSessionId: targetSessionId.trim() === "" ? null : targetSessionId.trim(),
+            ...(assignmentPayload !== undefined ? { assignment: assignmentPayload } : {}),
+            ...(precheckPayload !== undefined ? { precheck: precheckPayload } : {}),
           })
         : await updateItem(initial.id, {
             title: title.trim(),
@@ -102,6 +119,8 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
             launchMode,
             auto,
             targetSessionId: targetSessionId.trim() === "" ? null : targetSessionId.trim(),
+            assignment: assignmentPayload,
+            precheck: precheckPayload,
           });
     setSubmitting(false);
     if (ok) onClose();
@@ -263,6 +282,54 @@ export function BacklogDialog({ initial, onClose }: { initial: BacklogItem | nul
                 value={targetSessionId}
                 onChange={(e) => setTargetSessionId(e.target.value)}
                 placeholder="（留空 = 新开会话）"
+                className={cn(inputCls, "font-mono")}
+              />
+            </Field>
+          </div>
+
+          {/* 派发单（docs/33 §3.3/§5）：memory 档 + 附加指令 + 技能白名单 + precheck 条件门。
+              全部缺省即不写 —— 表单空态 = 引擎默认行为，不为设置而设置 */}
+          <div className="space-y-2.5 rounded-btn bg-rail px-3 py-3">
+            <p className="text-body-sm font-medium text-ink">派发单（可选）</p>
+            <Field label="记忆注入" hint="full = 该单元默认注入计划（AGENTS/MEMORY 等，缺省）；minimal = 仅长期记忆（MEMORY.md 语义柱）；none = 不注入任何记忆文件">
+              <div className="flex gap-1">
+                {([["full", "完整（默认）"], ["minimal", "仅记忆"], ["none", "不注入"]] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setMemory(id)}
+                    className={cn(
+                      "flex-1 rounded-btn px-2 py-1.5 text-caption transition",
+                      memory === id ? "bg-ink text-canvas" : "bg-canvas text-graphite hover:bg-line-soft hover:text-ink",
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+            <Field label="附加指令" hint="拼在启动 prompt 之后、执行器输出约定之前 —— 任务级的约束补充（如「只用中文」「先跑测试再改」）">
+              <textarea
+                value={appendPrompt}
+                onChange={(e) => setAppendPrompt(e.target.value)}
+                rows={2}
+                placeholder="（可选）本条任务的额外要求"
+                className={cn(inputCls, "resize-y leading-relaxed")}
+              />
+            </Field>
+            <Field label="技能白名单" hint="逗号/顿号分隔的技能名 —— 拼进任务提示词引导执行器调用；留空 = 不限">
+              <input
+                value={skillsText}
+                onChange={(e) => setSkillsText(e.target.value)}
+                placeholder="（可选）如：pdf、websearch"
+                className={inputCls}
+              />
+            </Field>
+            <Field label="条件门（precheck）" hint="派发前先跑这条命令（cwd = 工作目录，30 秒超时）：非 0 退出 = 这次不跑（记一条「条件未过」，任务留在队列等条件变化）。适合「只有仓库有新提交才跑」这类条件">
+              <input
+                value={precheck}
+                onChange={(e) => setPrecheck(e.target.value)}
+                placeholder="（可选）如：git log -1 --since=6h --quiet || exit 1"
                 className={cn(inputCls, "font-mono")}
               />
             </Field>

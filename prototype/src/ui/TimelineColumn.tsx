@@ -675,6 +675,8 @@ const CATEGORY_CHIP: Record<string, string> = {
   idea: "bg-teal-tint text-teal",
   note: "bg-line-soft text-graphite",
   later: "bg-violet-500/10 text-violet-500",
+  // 追加（docs/33 §1 订阅直通回执）：不是分类产物，是投递凭据 —— teal 系与直通语义同色
+  followup: "bg-teal-tint text-teal",
 };
 
 function EntryBlock({
@@ -815,6 +817,12 @@ function EntryBlock({
               </button>
             )}
             {taskStatusChip !== null && <span className="shrink-0 text-graphite">任务 · {taskStatusChip}</span>}
+            {/* 订阅直通回执（docs/33 §1）：这条没走分类器，直接挂到了任务上 */}
+            {entry.category === "followup" && entry.task !== null && (
+              <span className="shrink-0 text-teal" title="同话题的后续输入 —— 未经分类，直接投递给已订阅的任务，下次执行自动拼入">
+                ⇢ 已直通任务 #{entry.task.id}
+              </span>
+            )}
             {entry.categoryNote !== null && entry.categoryNote !== "" && <span className="max-w-md truncate" title={entry.categoryNote}>routing：{entry.categoryNote}</span>}
             {entry.provenance === "pasted" && (
               <span className="shrink-0 rounded-chip bg-amber-500/10 px-1.5 py-px text-[10px] text-amber-600" title="粘贴的外部文本 —— 沉淀任务不默认进闲时执行，需人工打勾">
