@@ -41,6 +41,7 @@ import {
   queueHeadOf,
   queuePrecondition,
   startOfToday,
+  STATUS_FILTERS,
   statusCounts,
   todayDoneCountOf,
   type SortMode,
@@ -76,10 +77,7 @@ function loadViewPrefs(): ViewPrefs {
     const p = JSON.parse(raw) as Partial<ViewPrefs>;
     return {
       sortMode: p.sortMode === "queue" ? "queue" : "time",
-      statusFilter:
-        p.statusFilter === "executing" || p.statusFilter === "awaiting_review" || p.statusFilter === "awaiting_confirm" || p.statusFilter === "blocked" || p.statusFilter === "backoff" || p.statusFilter === "sleeping"
-          ? p.statusFilter
-          : null,
+      statusFilter: (STATUS_FILTERS as readonly string[]).includes(p.statusFilter as string) ? (p.statusFilter as StatusFilter) : null,
       tagFilter: typeof p.tagFilter === "string" && p.tagFilter !== "" ? p.tagFilter : null,
     };
   } catch {

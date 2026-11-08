@@ -16,6 +16,7 @@
  */
 
 import type { Store } from "../store/db.ts";
+import { isFailedRun } from "../../../prototype/src/core/backlog.ts";
 import { log } from "../log.ts";
 
 const TICK_MS = 60_000;
@@ -71,7 +72,7 @@ export function setSupervisorConfig(store: Store, patch: unknown): SupervisorCon
 
 export interface SupervisorReport {
   readonly empty: boolean;
-  readonly summary: { done: number; failed: number; skipped: number; stopped: number; blocked: number; dropped: number };
+  readonly summary: { done: number; failed: number; skipped: number; stopped: number; blocked: number; dropped: number; handback: number };
   /** ① 自动执行（一行一条，docs/33 §2.2：带 run.summary 一句话结果） */
   readonly executed: readonly string[];
   /** ② 该跑而没跑（一行一条） */
@@ -108,6 +109,7 @@ export function buildSupervisorReport(store: Store, windowStart: number, now = D
   let skipped = 0;
   let stopped = 0;
   let dropped = 0;
+  let handback = 0;
 
   // ①a autopilot 待办运行（闲时托管 —— 未经过用户手的执行）。
   // 结果事实源（docs/33 §2.2）：outcome/summary 是执行器 report 的自报 ——
@@ -126,12 +128,20 @@ export function buildSupervisorReport(store: Store, windowStart: number, now = D
     } else if (r.status === "done" && r.outcome === "blocked") {
       // 受阻已发过 L1；日报里若还挂着（没人答）在 ③ 追讨，这里不重复唱
       blocked.push(`「${title}」${r.summary !== null && r.summary !== "" ? ` — ${clip(r.summary, 90)}` : ""}`);
+    } else if (r.status === "done" && isFailedRun(r.status, r.outcome)) {
+      // 自报失败但进程正常结束（done + failed/limit/refusal）：同算失败 ——
+      // 引擎退避 / retryOf 都吃 outcome（isFailedRun 单源），日报漏报会与台账对不上
+      failed += 1;
+      executed.push(`${fmtHM(r.startedAt)} ✗ ${title} — ${clip(r.summary ?? r.detail)}（执行器自报${r.outcome === "limit" ? "预算/轮数耗尽" : r.outcome === "refusal" ? "拒绝执行" : "失败"}，已回就绪，退避后闲时重试）`);
+    } else if (r.status === "done" && r.outcome === "handback") {
+      handback += 1;
+      executed.push(`${fmtHM(r.startedAt)} ↩ ${title} — 执行器判定超出任务范围，已交回（摘除自动执行）${oneLine}`);
     } else if (r.status === "skipped") {
       skipped += 1;
       missed.push(`${fmtHM(r.startedAt)} ⊘ 「${title}」precheck 条件未过被跳过（${clip(r.detail, 60)}）`);
     } else if (r.status === "failed") {
       failed += 1;
-      executed.push(`${fmtHM(r.startedAt)} ✗ ${title} — ${clip(r.summary ?? r.detail)}（${r.outcome === "limit" ? "预算/轮数耗尽" : r.outcome === "refusal" ? "执行器拒绝" : "已回就绪，退避后闲时重试"}）`);
+      executed.push(`${fmtHM(r.startedAt)} ✗ ${title} — ${clip(r.summary ?? r.detail)}（${r.outcome === "limit" ? "预算/轮数耗尽" : r.outcome === "refusal" ? "执行器拒绝" : r.outcome === "ready" ? "report 判 ready 但进程异常退出" : "已回就绪，退避后闲时重试"}）`);
     }
     // running 里的不在日报里唱票 —— 没收口的活儿收口了再报
   }
@@ -174,7 +184,7 @@ export function buildSupervisorReport(store: Store, windowStart: number, now = D
 
   return {
     empty: executed.length === 0 && missed.length === 0 && blocked.length === 0,
-    summary: { done, failed, skipped, stopped, blocked: blocked.length, dropped },
+    summary: { done, failed, skipped, stopped, blocked: blocked.length, dropped, handback },
     executed,
     missed,
     blocked,
@@ -184,7 +194,7 @@ export function buildSupervisorReport(store: Store, windowStart: number, now = D
 }
 
 export function renderSupervisorReport(r: SupervisorReport): string {
-  const head = `【主管日报】${fmtDate(r.windowEnd)}（完成 ${r.summary.done} · 失败 ${r.summary.failed} · 跳过 ${r.summary.skipped} · 停用 ${r.summary.stopped} · 待回答 ${r.summary.blocked}${r.summary.dropped > 0 ? ` · 无需处理 ${r.summary.dropped}` : ""}）`;
+  const head = `【主管日报】${fmtDate(r.windowEnd)}（完成 ${r.summary.done} · 失败 ${r.summary.failed} · 跳过 ${r.summary.skipped} · 停用 ${r.summary.stopped} · 待回答 ${r.summary.blocked}${r.summary.dropped > 0 ? ` · 无需处理 ${r.summary.dropped}` : ""}${r.summary.handback > 0 ? ` · 交回 ${r.summary.handback}` : ""}）`;
   if (r.empty) return head;
   const lines = [head, ""];
   if (r.executed.length > 0) {

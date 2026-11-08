@@ -14,7 +14,7 @@ import {
   Play,
   Trash2,
 } from "lucide-react";
-import { BACKLOG_STATUS_LABEL, formatBacklogRelative, type BacklogItem, type BacklogStatus } from "../core/backlog.ts";
+import { BACKLOG_OUTCOME_LABEL, BACKLOG_STATUS_LABEL, formatBacklogRelative, type BacklogItem, type BacklogRunRef, type BacklogStatus, type RunOutcome } from "../core/backlog.ts";
 import { fetchBacklogRuns, defaultDaemonEndpoint, type BacklogRunRow } from "../adapters/daemon/client.ts";
 import { useBacklog } from "../store/useBacklog.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
@@ -48,15 +48,34 @@ const TRIGGER_LABEL: Readonly<Record<string, string>> = {
   gtd: "心跳",
 };
 
-/** 运行结果的细分徽标（docs/33 §2 结果事实源）：outcome null = 旧记录按 status 二分 */
-const OUTCOME_MARK: Readonly<Record<string, { label: string; cls: string }>> = {
-  ready: { label: "完成", cls: "bg-gain/10 text-gain" },
-  blocked: { label: "受阻", cls: "bg-amber-500/20 text-amber-700" },
-  failed: { label: "失败", cls: "bg-loss/10 text-loss" },
-  dropped: { label: "无需处理", cls: "bg-line-soft text-ash" },
-  limit: { label: "预算耗尽", cls: "bg-amber-500/10 text-amber-600" },
-  refusal: { label: "拒绝执行", cls: "bg-loss/10 text-loss" },
+/** 运行结果徽标的样式（docs/33 §2 结果事实源）；文案单源在 core 的 BACKLOG_OUTCOME_LABEL */
+const OUTCOME_CLS: Readonly<Record<RunOutcome, string>> = {
+  ready: "bg-gain/10 text-gain",
+  blocked: "bg-amber-500/20 text-amber-700",
+  failed: "bg-loss/10 text-loss",
+  dropped: "bg-line-soft text-ash",
+  limit: "bg-amber-500/10 text-amber-600",
+  refusal: "bg-loss/10 text-loss",
+  // 交回 = 超范围摘 auto 待重新分类：要人看一眼，与 limit 同族
+  handback: "bg-amber-500/10 text-amber-600",
 };
+
+/** precheck 条件门拦下（status=skipped，无 outcome）：自有标记，不借 dropped 的「无需处理」 */
+const SKIPPED_MARK = { label: "条件未过", cls: "bg-line-soft text-ash" } as const;
+
+/** run 行 → 结果徽标：outcome 优先（自报/推断），skipped 自有标记；null = 旧记录（调用方按 status 二分） */
+function outcomeMarkOf(r: { readonly status: string; readonly outcome?: RunOutcome | null }): { label: string; cls: string } | null {
+  const o = r.outcome;
+  if (o !== null && o !== undefined && o in OUTCOME_CLS) return { label: BACKLOG_OUTCOME_LABEL[o], cls: OUTCOME_CLS[o] };
+  return r.status === "skipped" ? SKIPPED_MARK : null;
+}
+
+/** 「最近运行」一行的结果文案：与运行史徽标同口径（之前只看 status 三分 ——
+ *  skipped 显示成「运行中」、自报 dropped/blocked/failed 一律显示「完成」） */
+function lastRunLabel(r: BacklogRunRef): string {
+  if (r.status === "running") return "运行中";
+  return outcomeMarkOf(r)?.label ?? (r.status === "done" ? "完成" : "失败");
+}
 
 /** usageJson（{inputTokens,outputTokens,costUsd,durationMs}）→ 一行摘要 */
 function usageSummary(usageJson: string | null | undefined): string | null {
@@ -336,7 +355,7 @@ export function BacklogCard({
           <dd className="truncate text-graphite">
             {lastRun === undefined || lastRun === null
               ? "从未"
-              : `${lastRun.status === "done" ? "完成" : lastRun.status === "failed" ? "失败" : "运行中"} · ${formatBacklogRelative(lastRun.startedAt)}`}
+              : `${lastRunLabel(lastRun)} · ${formatBacklogRelative(lastRun.startedAt)}`}
           </dd>
         </div>
         <div className="min-w-0">
@@ -357,10 +376,9 @@ export function BacklogCard({
           ) : (
             runs.map((r) => {
               // 结果徽标（docs/33 §2.2）：outcome 优先（report 自报/stopReason 推断），
-              // null = 旧记录按 status 二分；skipped = precheck 条件门拦下
-              const mark = OUTCOME_MARK[r.outcome ?? ""] ?? (r.status === "skipped" ? OUTCOME_MARK["dropped"]! : null);
-              const label =
-                r.status === "running" ? "运行中" : mark !== null ? mark.label : r.status === "done" ? "完成" : r.status === "skipped" ? "条件未过" : "失败";
+              // skipped = precheck 条件门拦下（自有标记）；null = 旧记录按 status 二分
+              const mark = outcomeMarkOf(r);
+              const label = r.status === "running" ? "运行中" : mark !== null ? mark.label : r.status === "done" ? "完成" : "失败";
               const usage = usageSummary(r.usageJson);
               return (
               <div key={r.runId} className="flex items-center gap-2 text-caption">

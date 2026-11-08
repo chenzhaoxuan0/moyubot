@@ -28,6 +28,7 @@ import type {
   QuotaHeadroom,
   WorkPhase,
 } from "../../../prototype/src/core/backlog.ts";
+import { isFailedRun, isMemoryTier, MANDATE_BASES } from "../../../prototype/src/core/backlog.ts";
 import type { BacklogRow, Store } from "../store/db.ts";
 import type { RuntimeHost } from "../runtime/host.ts";
 import type { SessionId } from "../../../prototype/src/core/units.ts";
@@ -336,7 +337,7 @@ export class BacklogEngine {
       const next = this.deps.store.listBacklogItems().find((i) => {
         if (i.status !== "ready" || !i.auto) return false;
         const last = this.deps.store.latestBacklogRun(i.id);
-        return !(last !== undefined && (last.status === "failed" || last.status === "skipped") && Date.now() - last.startedAt < AUTOPILOT_FAILURE_BACKOFF_MS);
+        return !(last !== undefined && (last.status === "skipped" || isFailedRun(last.status, last.outcome)) && Date.now() - last.startedAt < AUTOPILOT_FAILURE_BACKOFF_MS);
       });
       if (next === undefined) return;
       // 余量门：指定了执行器就看它，没指定就在订阅执行器里挑剩余最多的
@@ -742,9 +743,9 @@ export class BacklogEngine {
     if (assignment?.skills !== undefined && assignment.skills.length > 0) parts.push("", `【可用技能】${assignment.skills.join("、")}`);
     parts.push(REPORT_PROMPT_SUFFIX);
     const effectivePrompt = parts.join("\n");
-    // 重试身份（docs/33 §5 Dispatch）：上次失败 → 本次 run 指向旧尝试
+    // 重试身份（docs/33 §5 Dispatch）：上次失败（含自报失败但进程 done 的一路）→ 本次 run 指向旧尝试
     const lastRun = this.deps.store.latestBacklogRun(item.id);
-    const retryOf = lastRun !== undefined && lastRun.status === "failed" ? lastRun.id : undefined;
+    const retryOf = lastRun !== undefined && isFailedRun(lastRun.status, lastRun.outcome) ? lastRun.id : undefined;
     if (item.launchMode === "terminal" && this.deps.launchTerminal !== undefined) {
       const runId = this.deps.store.startBacklogRun(item.id, null, runtimeId, trigger, retryOf);
       this.deps.store.updateBacklogItem(item.id, { status: "executing", runtimeId, model, lastError: null, lastRunAt: Date.now() });
@@ -873,7 +874,7 @@ export class BacklogEngine {
    */
   private resumeTargetFor(itemId: number, runtimeId: string): string | null {
     const last = this.deps.store.latestBacklogRun(itemId);
-    if (last === undefined || last.status !== "failed") return null;
+    if (last === undefined || !isFailedRun(last.status, last.outcome)) return null;
     const sid = last.sessionId;
     if (sid === null || sid.startsWith("autoterm_")) return null;
     const row = this.deps.store.getSession(sid);
@@ -995,9 +996,10 @@ export class BacklogEngine {
   }
 
   /**
-   * 执行终态收口（docs/33 §2 结算链）：run 行结果事实源 + report 六态 + 两级通知
-   * + 结算即唤醒。report（会话末条 assistant 的自报）优先于进程级 done/failed；
-   * dropped 静默终态、blocked 带结构化问题回人、handback 摘 auto 交回路由。
+   * 执行终态收口（docs/33 §2 结算链）：run 行结果事实源 + report 五终态（自报）
+   * / limit·refusal（stopReason 推断）+ 两级通知 + 结算即唤醒。report（会话末条
+   * assistant 的自报）优先于进程级 done/failed；dropped 静默终态、blocked 带结构化
+   * 问题回人、handback 摘 auto 交回路由。
    */
   private settleExecution(itemId: number, status: "done" | "failed", detail: string, ctx?: { runId?: number; sessionId?: string }): void {
     const item = this.deps.store.getBacklogItem(itemId);
@@ -1351,7 +1353,7 @@ function mandateOf(row: BacklogRow): BacklogMandate | null {
   if (strength === null) return null;
   return {
     strength,
-    basis: typeof m["basis"] === "string" ? m["basis"] : "classifier",
+    basis: MANDATE_BASES.find((b) => b === m["basis"]) ?? "classifier",
     acceptedAt: Number(m["acceptedAt"] ?? row.createdAt) || row.createdAt,
     ...(m["wouldAutoRun"] === true ? { wouldAutoRun: true } : {}),
   };
@@ -1366,7 +1368,9 @@ function assignmentOf(row: BacklogRow): BacklogAssignment | null {
   const skills = Array.isArray(a["skills"]) ? a["skills"].filter((s): s is string => typeof s === "string" && s.trim() !== "") : undefined;
   if (memory === undefined && appendPrompt === undefined && (skills === undefined || skills.length === 0)) return null;
   return {
-    ...(memory === "none" || memory === "minimal" || memory === "full" ? { memory } : {}),
+    // 注：归一强度弱于 RPC 侧 normalizeAssignment（不 trim 不截断）—— 这里读的是
+    // 引擎自己落库的数据，入库前已过 normalize；口径差异是有意的
+    ...(isMemoryTier(memory) ? { memory } : {}),
     ...(appendPrompt !== undefined ? { appendPrompt } : {}),
     ...(skills !== undefined && skills.length > 0 ? { skills } : {}),
   };

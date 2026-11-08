@@ -34,7 +34,7 @@ import type {
 import type { RuntimeEvent } from "../../core/events.ts";
 import type { WorkspacePathsResult } from "../../core/workspacePaths.ts";
 import { ruleFromCron, type Automation, type AutomationRun, type ScheduleRule } from "../../core/automation.ts";
-import type { BacklogConfig, BacklogItem, BacklogProposal, BacklogSignal, BacklogStateSnapshot, QuotaHeadroom, QuotaResumeConfig } from "../../core/backlog.ts";
+import type { BacklogConfig, BacklogItem, BacklogProposal, BacklogSignal, BacklogStateSnapshot, MemoryTier, QuotaHeadroom, QuotaResumeConfig, RunOutcome } from "../../core/backlog.ts";
 import type { InboxConfig, InboxEntry, InboxHints, InboxSignal } from "../../core/inbox.ts";
 import type { WorkUnit } from "../../core/units.ts";
 import type { SkillsInventory } from "../../core/skills.ts";
@@ -1977,7 +1977,7 @@ export interface BacklogWriteInput {
   /** 指定在某个已有会话里执行（null = 新开会话） */
   readonly targetSessionId?: string | null;
   /** 派发单增量（docs/33 §3.3）：memory 档位 / 附加指令 / 技能白名单；null = 清除 */
-  readonly assignment?: { memory?: "none" | "minimal" | "full"; appendPrompt?: string; skills?: readonly string[] } | null;
+  readonly assignment?: { memory?: MemoryTier; appendPrompt?: string; skills?: readonly string[] } | null;
   /** 派发前条件门命令（docs/33 §5）：非 0 退出即跳过；null/空 = 清除 */
   readonly precheck?: string | null;
 }
@@ -1998,8 +1998,8 @@ export interface BacklogRunRow {
   readonly startedAt: number;
   readonly finishedAt: number | null;
   readonly detail: string | null;
-  /** 结果事实源（docs/33 §2.2）：ready/blocked/failed/dropped/limit/refusal；null = 旧记录 */
-  readonly outcome?: string | null;
+  /** 结果事实源（docs/33 §2.2）：ready/blocked/failed/dropped/limit/refusal/handback；null = 旧记录 */
+  readonly outcome?: RunOutcome | null;
   /** 执行器的一句话结果（report.summary） */
   readonly summary?: string | null;
   readonly model?: string | null;

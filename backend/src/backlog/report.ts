@@ -2,14 +2,20 @@
  * 执行器 Report 协议（docs/33 §2.1）—— 结算时从会话末条 assistant 消息解析
  * 结构化自报，对齐 dsh-superagent 原型 orchestrator_report 工具的 schema：
  *
- *   {"report":{"state":"ready|blocked|failed|dropped","summary":"…","human_action":null|"给用户的一个具体问题"}}
+ *   {"report":{"state":"ready|blocked|failed|dropped|handback","summary":"…","human_action":null|"给用户的一个具体问题"}}
  *
  * moyubot 走**注入约定**而非工具注入（13 家执行器零适配）：dispatch 把约定拼在
  * prompt 尾部，执行器在末条回复里以 JSON 代码块输出，结算时解析。解析失败 =
  * 没有 report，按现状路径结算（不惩罚不重试）。
  */
 
-/** report 六态（state 枚举 + handback 变体） */
+import type { RunOutcome } from "../../../prototype/src/core/backlog.ts";
+
+/**
+ * report 终态枚举（五个）：docs/33 §2.1 原设计的 progress 瞬态未启用（report 只在
+ * 结算时解析一次，没有过程态）；limit / refusal 不在自报里 —— 无 report 时由
+ * inferOutcome 从 stopReason 推断，与这五值同落 run 行的 outcome 列（RunOutcome）。
+ */
 export type ReportState = "ready" | "blocked" | "failed" | "dropped" | "handback";
 
 export interface ExecutionReport {
@@ -63,7 +69,7 @@ function tryParse(chunk: string): ExecutionReport | null {
  * stopReason 保守推断（docs/33 §2.1：limit/refusal 不再混入 failed）——
  * 无 report 时从结算 detail 文本里识别两类预算型终态，其余维持 done/failed 二分。
  */
-export function inferOutcome(status: "done" | "failed", detail: string | null): string {
+export function inferOutcome(status: "done" | "failed", detail: string | null): RunOutcome {
   if (status === "done") return "ready";
   const d = (detail ?? "").toLowerCase();
   if (d.includes("max_turns") || d.includes("max turns") || d.includes("max_budget") || d.includes("max budget") || d.includes("context window") || d.includes("contextwindow")) {

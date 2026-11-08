@@ -15,7 +15,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { AutomationLink, DispatchTarget, LaunchMode, ScheduleRule } from "../../../prototype/src/core/automation.ts";
-import type { BacklogStatus } from "../../../prototype/src/core/backlog.ts";
+import type { BacklogStatus, RunOutcome } from "../../../prototype/src/core/backlog.ts";
 import type { InboxEntry, InboxHints, InboxStatus } from "../../../prototype/src/core/inbox.ts";
 import { normalizeInboxHints } from "../../../prototype/src/core/inbox.ts";
 import { log } from "../log.ts";
@@ -119,7 +119,8 @@ export interface BacklogRow {
   auto: boolean;
   /** 指定在某个已有会话里执行；null = 新开会话 */
   targetSessionId: string | null;
-  status: string;
+  /** 生命周期态（单源 BacklogStatus；SQL 读出侧收口为窄类型） */
+  status: BacklogStatus;
   ignoreCount: number;
   lastProposedAt: number | null;
   lastRunAt: number | null;
@@ -155,7 +156,8 @@ export class Store {
 
   constructor(homeDir: string) {
     mkdirSync(homeDir, { recursive: true });
-    this.db = new DatabaseSync(path.join(homeDir, "state.db"));    this.db.exec(`
+    this.db = new DatabaseSync(path.join(homeDir, "state.db"));
+    this.db.exec(`
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
@@ -439,7 +441,7 @@ export class Store {
       `ALTER TABLE backlog_items ADD COLUMN assignment_json TEXT`,
       `ALTER TABLE backlog_items ADD COLUMN precheck TEXT`,
       // backlog_runs 升级为结果事实源（docs/33 §2.2）：outcome = 执行器 report 态
-      // 或 stopReason 推断（ready/blocked/failed/dropped/limit/refusal）；
+      // 或 stopReason 推断（ready/blocked/failed/dropped/limit/refusal/handback）；
       // summary = 执行器一句话结果；model/usage_json/deliverable = 归因与产物；
       // retry_of = 尝试身份（orca Dispatch：重试是新行，指向旧尝试）
       `ALTER TABLE backlog_runs ADD COLUMN outcome TEXT`,
@@ -1007,7 +1009,7 @@ export class Store {
       launchMode: r["launch_mode"] === "headless" || r["launch_mode"] === "chat" ? r["launch_mode"] : "terminal",
       auto: Number(r["auto"] ?? 0) === 1,
       targetSessionId: r["target_session_id"] === null || r["target_session_id"] === undefined ? null : String(r["target_session_id"]),
-      status: String(r["status"]),
+      status: String(r["status"]) as BacklogStatus,
       ignoreCount: Number(r["ignore_count"] ?? 0),
       lastProposedAt: nOrNull(r["last_proposed_at"]),
       lastRunAt: nOrNull(r["last_run_at"]),
@@ -1105,7 +1107,7 @@ export class Store {
       launchMode: LaunchMode;
       auto: boolean;
       targetSessionId: string | null;
-      status: string;
+      status: BacklogStatus;
       ignoreCount: number;
       lastProposedAt: number | null;
       lastRunAt: number | null;
@@ -1197,7 +1199,7 @@ export class Store {
     runId: number,
     status: "done" | "failed" | "skipped",
     detail: string | null,
-    extra?: { outcome?: string; summary?: string | null; model?: string | null; usageJson?: string | null; deliverable?: string | null },
+    extra?: { outcome?: RunOutcome; summary?: string | null; model?: string | null; usageJson?: string | null; deliverable?: string | null },
   ): void {
     this.db
       .prepare(
@@ -1218,7 +1220,7 @@ export class Store {
     startedAt: number;
     finishedAt: number | null;
     detail: string | null;
-    outcome: string | null;
+    outcome: RunOutcome | null;
     summary: string | null;
     model: string | null;
     usageJson: string | null;
@@ -1239,7 +1241,7 @@ export class Store {
       startedAt: Number(r["started_at"]),
       finishedAt: r["finished_at"] === null || r["finished_at"] === undefined ? null : Number(r["finished_at"]),
       detail: s(r["detail"]),
-      outcome: s(r["outcome"]),
+      outcome: s(r["outcome"]) as RunOutcome | null,
       summary: s(r["summary"]),
       model: s(r["model"]),
       usageJson: s(r["usage_json"]),
@@ -1270,7 +1272,7 @@ export class Store {
       startedAt: Number(r["started_at"]),
       finishedAt: r["finished_at"] === null || r["finished_at"] === undefined ? null : Number(r["finished_at"]),
       detail: s(r["detail"]),
-      outcome: s(r["outcome"]),
+      outcome: s(r["outcome"]) as RunOutcome | null,
       summary: s(r["summary"]),
       model: s(r["model"]),
       usageJson: s(r["usage_json"]),

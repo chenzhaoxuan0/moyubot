@@ -135,7 +135,7 @@ import {
   HEARTBEAT_BOT_ID,
   HEARTBEAT_DEFAULT_RUNTIME_ID,
 } from "./backlog/heartbeatBot.ts";
-import { draftPromptOf, type BacklogConfig, type BacklogSignal } from "../../prototype/src/core/backlog.ts";
+import { draftPromptOf, isMemoryTier, type BacklogConfig, type BacklogSignal } from "../../prototype/src/core/backlog.ts";
 import { InboxClassifier } from "./inbox/classifier.ts";
 import { gateAdmit } from "./inbox/gate.ts";
 import { getInboxConfig, setInboxConfig } from "./inbox/config.ts";
@@ -1022,21 +1022,17 @@ const credentialVault = new CredentialVault(config.homeDir);
 // 旧写法的问题是渠道状态与 bot.json 无关——用户在设置页改完渠道保存，daemon 里的
 // 连接纹丝不动，必须重启才生效。现在各网关都定期比对盘上定义与在跑实例。
 // apiBase 可指向 mock（冒烟）。
+// IM 确认门（docs/33 §3.4）：「确认/拒绝 N」与飞书同口径 —— 提议通知文案里
+// 引导的就是这组回复；点对点 bot 聊天无需 receiveId 白名单（关键词内正则即门）。
+// Telegram/微信共用同一条接线；拦截器故障由网关侧兜底（按未消费放行）
+const backlogInboundHook = (text: string): Promise<boolean> => backlogEngine?.handleInboundText(text) ?? Promise.resolve(false);
 const telegramGateway = new TelegramGateway({
   apiBase: process.env["AGENT_WORKBENCH_TELEGRAM_API"] ?? "https://api.telegram.org",
   registry: botRegistry,
   host,
   vault: credentialVault,
   pollMs: 2000,
-  // IM 确认门（docs/33 §3.4）：「确认/拒绝 N」与飞书同口径 —— 提议通知文案里
-  // 引导的就是这组回复；点对点 bot 聊天无需 receiveId 白名单（关键词内正则即门）
-  inboundHook: async (text) => {
-    try {
-      return await (backlogEngine?.handleInboundText(text) ?? false);
-    } catch {
-      return false;
-    }
-  },
+  inboundHook: backlogInboundHook,
 });
 telegramGateway.start();
 
@@ -1046,13 +1042,7 @@ const weixinGateway = new WeixinGateway({
   host,
   vault: credentialVault,
   pollMs: 3000,
-  inboundHook: async (text) => {
-    try {
-      return await (backlogEngine?.handleInboundText(text) ?? false);
-    } catch {
-      return false;
-    }
-  },
+  inboundHook: backlogInboundHook,
 });
 weixinGateway.start();
 
@@ -2899,12 +2889,11 @@ registerMethod("backlog.list", async () => {
   };
 });
 
-// 推进面板的运行历史：单条待办的完整 run 列表（trigger 标记闲时/手动/心跳来源）
 /** 派发单归一（docs/33 §3.3，create/update 共用）：宽松输入 → 白名单字段；全空 = 清除 */
 function normalizeAssignment(a: { memory?: string; appendPrompt?: string; skills?: unknown } | null | undefined): Record<string, unknown> | null {
   if (a === null || a === undefined) return null;
   const out: Record<string, unknown> = {};
-  if (a.memory === "none" || a.memory === "minimal" || a.memory === "full") out["memory"] = a.memory;
+  if (isMemoryTier(a.memory)) out["memory"] = a.memory;
   if (typeof a.appendPrompt === "string" && a.appendPrompt.trim() !== "") out["appendPrompt"] = a.appendPrompt.trim().slice(0, 4000);
   if (Array.isArray(a.skills)) {
     const skills = a.skills.filter((s): s is string => typeof s === "string" && s.trim() !== "").map((s) => s.trim().slice(0, 100)).slice(0, 16);
@@ -2913,7 +2902,9 @@ function normalizeAssignment(a: { memory?: string; appendPrompt?: string; skills
   return Object.keys(out).length > 0 ? out : null;
 }
 
-registerMethod("backlog.runs", (params) => {  const p = (params ?? {}) as { id?: number; limit?: number };
+// 推进面板的运行历史：单条待办的完整 run 列表（trigger 标记闲时/手动/心跳来源）
+registerMethod("backlog.runs", (params) => {
+  const p = (params ?? {}) as { id?: number; limit?: number };
   if (typeof p.id !== "number" || !Number.isFinite(p.id)) throw badBacklog("id is required");
   const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? Math.min(Math.max(1, Math.trunc(p.limit)), 50) : 10;
   return {

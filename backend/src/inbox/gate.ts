@@ -12,6 +12,7 @@
  */
 
 import type { InboxSignal } from "../../../prototype/src/core/inbox.ts";
+import { isActiveStatus } from "../../../prototype/src/core/backlog.ts";
 import type { Store } from "../store/db.ts";
 import { log } from "../log.ts";
 
@@ -54,11 +55,12 @@ export function gateAdmit(deps: GateDeps, text: string, threadKey: string | null
   }
 
   // 2. 订阅直通：找订阅了该话题的任务 —— 活跃态优先（多命中取最新更新的）；
-  //    没有活跃的再看 done（追加唤醒，deliverFollowup 内处理 sleeping 不唤醒）
+  //    没有活跃的再看 done（追加唤醒，deliverFollowup 内处理 sleeping 不唤醒）。
+  //    活跃口径 = isActiveStatus 单源（done/dropped 静默终态不直通）且非休眠
   const items = deps.store.listBacklogItems();
   const subscribed = items.filter((i) => i.subscriptions.includes(threadKey));
   const active = subscribed
-    .filter((i) => i.status !== "done" && i.status !== "sleeping")
+    .filter((i) => isActiveStatus(i.status) && i.status !== "sleeping")
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const target = active[0] ?? subscribed.find((i) => i.status === "done");
   if (target === undefined) return { kind: "new" };

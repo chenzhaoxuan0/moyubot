@@ -54,6 +54,40 @@ export function isActiveStatus(s: BacklogStatus): boolean {
   return s !== "done" && s !== "dropped";
 }
 
+/**
+ * run 行的执行结果态（docs/33 §2.2 结果事实源）：report 自报五终态 + stopReason
+ * 推断的 limit/refusal。progress 瞬态未启用（落地口径：report 只在结算时解析一次，
+ * 没有过程态）；handback = 超范围交回（run 记事实，条目回 ready 摘 auto）。
+ */
+export type RunOutcome =
+  | "ready"
+  | "blocked"
+  | "failed"
+  | "dropped"
+  | "limit"
+  | "refusal"
+  | "handback";
+
+export const BACKLOG_OUTCOME_LABEL: Record<RunOutcome, string> = {
+  ready: "完成",
+  blocked: "受阻",
+  failed: "失败",
+  dropped: "无需处理",
+  limit: "预算耗尽",
+  refusal: "拒绝执行",
+  handback: "交回",
+};
+
+/**
+ * 失败语义单源（引擎退避 / retryOf / 续跑判定与前端 backoff 计数共用）：
+ * 进程 failed，**或**结果态是失败型（自报 failed，或推断的 limit/refusal）。
+ * 自报失败但进程正常结束（run.status=done + outcome=failed）也算 —— 退避与
+ * retryOf 只看 status 会漏掉这一路，曾致 autopilot 无退避立即重派的热循环。
+ */
+export function isFailedRun(status: string, outcome: string | null | undefined): boolean {
+  return status === "failed" || outcome === "failed" || outcome === "limit" || outcome === "refusal";
+}
+
 // ---------------------------------------------------------------------------
 // 待办条目
 // ---------------------------------------------------------------------------
@@ -72,8 +106,8 @@ export interface BacklogRunRef {
   readonly startedAt: number;
   readonly finishedAt: number | null;
   readonly detail: string | null;
-  /** 执行结果态（docs/33 §2）：report 态或 stopReason 推断 —— ready/blocked/failed/dropped/limit/refusal */
-  readonly outcome?: string | null;
+  /** 执行结果态（docs/33 §2）：report 态或 stopReason 推断 —— ready/blocked/failed/dropped/limit/refusal/handback */
+  readonly outcome?: RunOutcome | null;
   /** 执行器的一句话结果（report.summary；日报与 L1 通知的数据面） */
   readonly summary?: string | null;
   readonly model?: string | null;
@@ -85,21 +119,33 @@ export interface BacklogRunRef {
   readonly retryOf?: number | null;
 }
 
+/** 授权依据（实际值域；docs/33 §3.1 原设计的 rulesMatched 未落地，classifier 是读取侧回落值） */
+export const MANDATE_BASES = ["typed", "pasted", "gtd", "channel", "classifier"] as const;
+export type MandateBasis = (typeof MANDATE_BASES)[number];
+
 /** 授权记录（docs/33 §3）：任务为什么可以被（自动）执行的凭据 */
 export interface BacklogMandate {
   /** explicit = 用户亲手键入；inferred = 粘贴/渠道/GTD 等间接来源 */
   readonly strength: "explicit" | "inferred";
   /** 授权依据：typed = 键入 / pasted = 粘贴 / gtd = GTD 收录 / channel = 渠道捕获 / classifier = 分类沉淀 */
-  readonly basis: string;
+  readonly basis: MandateBasis;
   readonly acceptedAt: number;
   /** observe 模式（docs/33 §3.1）：true = 本会自动跑但被观察期拦下（回看后可放行） */
   readonly wouldAutoRun?: boolean;
 }
 
+/** 派发单记忆档位白名单（前后端共用的单源；默认口径见 docs/33 修订记录：UI 缺省 full） */
+export const MEMORY_TIERS = ["none", "minimal", "full"] as const;
+export type MemoryTier = (typeof MEMORY_TIERS)[number];
+
+export function isMemoryTier(v: unknown): v is MemoryTier {
+  return v === "none" || v === "minimal" || v === "full";
+}
+
 /** 派发单增量（docs/33 §3.3）：executor/model/launchMode/targetSessionId 是顶层字段 */
 export interface BacklogAssignment {
-  /** 记忆注入档位：minimal = MEMORY.md 语义柱（默认）；full = bot 上下文清单整套；none = 不注入记忆 */
-  readonly memory?: "none" | "minimal" | "full";
+  /** 记忆注入档位：minimal = MEMORY.md 语义柱；full = bot 上下文清单整套；none = 不注入记忆 */
+  readonly memory?: MemoryTier;
   /** 附加指令：拼在任务 prompt 之后、report 约定之前 */
   readonly appendPrompt?: string;
   /** 技能白名单（bot 绑定技能时过滤注入目录；自由技能则拼进 prompt 引导） */
