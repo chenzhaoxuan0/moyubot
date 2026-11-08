@@ -215,20 +215,22 @@ export function ChatViewport({
   );
 
   return (
-    <div className="chat-viewport-root relative flex min-h-0 flex-1 flex-col overflow-hidden">
+    // 列根 @container：滚动容器外的轨道件（TurnNavigator 的 @min-[768px]）也按本列宽
+    // 求值 —— 只挂滚动容器时它们是兄弟不是后代，会落到画布层（全画布宽）求值，
+    // PopoutShell 里更是无容器祖先、永不命中。列根在滚动容器外的子元素全是 absolute，
+    // fixed 后代全在滚动容器内（最近容器仍是滚动容器），containment 不改变任何锚点。
+    <div className="chat-viewport-root @container relative flex min-h-0 flex-1 flex-col overflow-hidden">
       <div
         ref={containerRef}
         // @container（inline-size）：正文阅读列的 @min-[560/720px] 以**本列实际宽度**
         // 求值 —— 此前最近的容器祖先是画布层（WorkspaceShell），左右分屏后小格子
-        // 仍按画布全宽命中大宽形态而挤不下。挂滚动容器：消费者就在其内；内部唯一
-        // 的 fixed（InChatFindBar）顺带锚到本列（贴列右上，贴合「这一列的查找」语义）。
-        // **不要**上移到窗格根：container-type 隐含 contain:layout，根会成为全部
-        // fixed 后代的锚点并新建 stacking context，弹层层叠会被打乱。
+        // 仍按画布全宽命中大宽形态而挤不下。挂滚动容器：消费者就在其内。
+        // 滚动容器内**不放 fixed/悬浮件**：containment 让它成为 fixed 的包含块，
+        // 而包含块是滚动容器时悬浮件会随内容滚走（查找栏因此挂在列根，见下）。
+        // **不要**上移到窗格根（含 Composer 的那层）：container-type 隐含 contain:layout，
+        // 根会成为全部 fixed 后代的锚点并新建 stacking context，弹层层叠会被打乱。
         className="@container relative min-h-0 flex-1 overflow-y-auto overflow-x-hidden selection:bg-teal-tint selection:text-ink"
       >
-        {/* 顶部悬浮查找栏（Ctrl+F） */}
-        <InChatFindBar containerRef={containerRef} />
-
         {/* 选中文本微型交互 Tooltip（引用追问、复制） */}
         <SelectionTooltip containerRef={containerRef} />
 
@@ -316,6 +318,10 @@ export function ChatViewport({
       </div>
 
       </div>
+
+      {/* 顶部悬浮查找栏（Ctrl+F）：挂列根（absolute 贴本列右上）—— 放在滚动容器内
+          会以滚动容器为包含块随内容滚走（停在底部时按 Ctrl+F 查找栏在可视区外） */}
+      <InChatFindBar containerRef={containerRef} />
 
       {/* 轮次导航大纲条（左轨）：挂在列根（relative）而非滚动容器内 ——
           absolute 定位才不会随内容滚动；此前 fixed 是贴窗口右缘，现改贴

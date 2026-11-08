@@ -421,11 +421,15 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
   }, [activeSessionId]);
 
   if (detectedQuestionnaire && dismissedFor !== detectedQuestionnaire.rawText) {
+    // 问卷形态同样包 @container 外壳：QuestionnaireCard 的 @min-[560px] 要按本列宽
+    // 求值（此前提前 return 绕过外壳，落到画布层全宽，Popout 里更是永不命中）
     return (
-      <QuestionnaireComposer
-        questionnaire={detectedQuestionnaire}
-        onDismiss={() => setDismissedFor(detectedQuestionnaire.rawText)}
-      />
+      <div className="@container shrink-0">
+        <QuestionnaireComposer
+          questionnaire={detectedQuestionnaire}
+          onDismiss={() => setDismissedFor(detectedQuestionnaire.rawText)}
+        />
+      </div>
     );
   }
 
@@ -440,9 +444,11 @@ export function Composer({ onOpenDrawer }: { onOpenDrawer?: () => void } = {}) {
   return (
     // @container（inline-size）：工具钮尺寸与内边距的 @min-[480/560px] 以 Composer
     // 自身实际宽度求值 —— 此前最近的容器祖先是画布层（WorkspaceShell），左右分屏
-    // 后小格仍按全宽排工具条。挂外壳而非带 @min- 的列自身（容器查询不查自己）；
-    // 内部无 fixed 定位，contain 副作用为零。**不要**上移到窗格根（ChatPaneSlot）：
-    // contain:layout 会把它变成 fixed 锚点 + 新 stacking context，打乱弹层层叠。
+    // 后小格仍按全宽排工具条。挂外壳而非带 @min- 的列自身（容器查询不查自己）。
+    // 外壳内的浮层约定：fixed 一律 createPortal 到 body（Runtime/PermissionMode/
+    // Attachments），点外关闭走文档级监听（ContextUsageBadge）—— 外壳的 contain:layout
+    // 会困住留在内部的 fixed。**不要**上移到窗格根（ChatPaneSlot）：会把它变成 fixed
+    // 锚点 + 新 stacking context，打乱弹层层叠。
     <div className="@container shrink-0">
       {/* 内边距与列宽联动：面板/侧栏任何一列占宽时 Composer 按自己的实际宽度收紧。
           列宽与时间线阅读列共用 useShell.chatColumnWidth —— 输入框和对话永远等宽 */}

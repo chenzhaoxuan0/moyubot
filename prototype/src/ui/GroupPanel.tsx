@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { createPortal } from "react-dom";
 import { X, Plus, MessageSquarePlus, Maximize2, ExternalLink, ChevronDown, Zap, Columns2, Rows2, RotateCw, Trash2, History, Combine } from "lucide-react";
 import { useTerminalStore, SUPPORTED_TERMINAL_PROFILES, type DropZone, type CanvasPane } from "../store/useTerminalStore.ts";
 import { useChatPanes } from "../store/useChatPanes.ts";
@@ -373,18 +374,20 @@ function GroupTailActions({ groupId }: { groupId: string }) {
 
   return (
     <div className="ml-auto flex shrink-0 items-center gap-0.5 pr-0.5">
-      {/* chat 动作：本格激活标签是对话且已选 bot */}
+      {/* chat 动作：本格激活标签是对话且已选 bot（新对话在移动端隐藏：画布内不开对话窗格） */}
       {isChat && activePane !== undefined && chatUnit !== undefined && (
         <>
-          <button
-            type="button"
-            onClick={() => useChatPanes.getState().openChatPane({ unitId: chatUnit.id, sessionId: null })}
-            title={`给 ${chatUnit.name} 新开一个对话标签（草稿）`}
-            aria-label="新对话"
-            className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
-          >
-            <MessageSquarePlus size={11} />
-          </button>
+          {!isMobile && (
+            <button
+              type="button"
+              onClick={() => useChatPanes.getState().openChatPane({ unitId: chatUnit.id, sessionId: null })}
+              title={`给 ${chatUnit.name} 新开一个对话标签（草稿）`}
+              aria-label="新对话"
+              className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
+            >
+              <MessageSquarePlus size={11} />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => useSidePane.getState().openTab({ unitId: chatUnit.id, unitName: chatUnit.name })}
@@ -445,19 +448,21 @@ function GroupTailActions({ groupId }: { groupId: string }) {
         </>
       )}
 
-      {/* 窗格级最大化（双 kind 通用）：本格激活标签整幅显示（还原入口在最大化态浮动钮） */}
-      <button
-        type="button"
-        onClick={() => {
-          const paneId = group.activePaneId;
-          if (paneId !== null) useTerminalStore.getState().toggleMaximize(paneId);
-        }}
-        title="最大化当前标签（整格全幅显示）"
-        aria-label="最大化当前标签"
-        className="rounded p-0.5 text-ash hover:bg-line-soft hover:text-ink transition"
-      >
-        <Maximize2 size={11} />
-      </button>
+      {/* 窗格级最大化（双 kind 通用，桌面端）：本格激活标签整幅显示（还原入口在最大化态浮动钮） */}
+      {!isMobile && (
+        <button
+          type="button"
+          onClick={() => {
+            const paneId = group.activePaneId;
+            if (paneId !== null) useTerminalStore.getState().toggleMaximize(paneId);
+          }}
+          title="最大化当前标签（整格全幅显示）"
+          aria-label="最大化当前标签"
+          className="rounded p-0.5 text-ash hover:bg-line-soft hover:text-ink transition"
+        >
+          <Maximize2 size={11} />
+        </button>
+      )}
     </div>
   );
 }
@@ -484,13 +489,38 @@ function ChatTabLight({ paneId }: { paneId: string }) {
 
 /* ------------------------------------------------------------- 组内新建 */
 
+/** 选择▾ 下拉的尺寸（定位夹逼用） */
+const CREATE_MENU_W = 260;
+const CREATE_MENU_MAX_H = 480;
+
+/**
+ * 选择▾ 下拉的 fixed 坐标：菜单 portal 到 body —— 格子根 overflow-hidden 会裁切、
+ * 画布层的 @container（container-type 附带 layout containment）会把 fixed 遮罩困在
+ * 画布内，留在格子里两头都错。下方放不下且上方更宽裕时向上翻；左缘夹在视口内。
+ */
+function createMenuPosOf(trigger: HTMLElement): { left: number; top?: number; bottom?: number; maxHeight: number } {
+  const r = trigger.getBoundingClientRect();
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - CREATE_MENU_W - 8));
+  const below = window.innerHeight - r.bottom - 12;
+  const above = r.top - 12;
+  if (below >= Math.min(CREATE_MENU_MAX_H, 240) || below >= above) {
+    return { left, top: r.bottom + 4, maxHeight: Math.min(CREATE_MENU_MAX_H, below) };
+  }
+  return { left, bottom: window.innerHeight - r.top + 4, maxHeight: Math.min(CREATE_MENU_MAX_H, above) };
+}
+
 /**
  * 条尾新建组：新建对话 | 新建终端 | 选择▾（对话 / Agent CLI 派发 / 系统 Shell / 拆分本格）。
  * 顶栏左侧新建区退役后的唯一新建入口 —— 标签在哪，＋就在哪（每格一份，组内直开、
  * 不跨格）。三个都是图标钮（h-6 w-6），下拉沿用原顶栏菜单结构。
+ * 移动端（docs/31 §九）：画布内不开对话窗格（会与移动端对话页双头）、不拆分 ——
+ * 「对话」快捷钮与菜单的对话组、拆分组整体隐藏，只留终端与派发。
  */
 function GroupCreateBar({ groupId }: { groupId: string }) {
   const [open, setOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState<ReturnType<typeof createMenuPosOf> | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const { isMobile } = useIsMobile();
   const unit = useWorkbench((s) => s.units.find((u) => u.id === s.activeUnitId));
   const activeRuntimeId = useWorkbench((s) => s.activeRuntimeId);
   const runtimes = useWorkbench((s) => s.runtimes);
@@ -535,17 +565,34 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
   /** 拆本格（组栈语义：本格一分为二，新格承载新标签）—— 模块级实现，条尾按钮共用 */
   const splitGroup = (direction: "horizontal" | "vertical"): void => splitGroupPane(groupId, direction);
 
+  // 下拉打开期间：窗口缩放（坐标失效）或 Esc 即关
+  useEffect(() => {
+    if (!open) return;
+    const close = (): void => setOpen(false);
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") close();
+    };
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
   return (
     <div className="relative flex shrink-0 items-center gap-0.5 pl-0.5">
-      <button
-        type="button"
-        onClick={newChat}
-        title={unit ? `新建对话（${unit.name}，新草稿）` : "新建对话（先选 bot）"}
-        aria-label="新建对话"
-        className="flex h-6 w-6 items-center justify-center rounded text-ash hover:bg-line-soft hover:text-teal transition"
-      >
-        <MessageSquarePlus size={12} />
-      </button>
+      {!isMobile && (
+        <button
+          type="button"
+          onClick={newChat}
+          title={unit ? `新建对话（${unit.name}，新草稿）` : "新建对话（先选 bot）"}
+          aria-label="新建对话"
+          className="flex h-6 w-6 items-center justify-center rounded text-ash hover:bg-line-soft hover:text-teal transition"
+        >
+          <MessageSquarePlus size={12} />
+        </button>
+      )}
       <button
         type="button"
         onClick={newTerminal}
@@ -556,38 +603,53 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
         <Plus size={12} />
       </button>
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen((o) => !o)}
-        title="选择要打开的：对话 / Agent CLI（派发）/ 系统 Shell / 拆分本格"
+        onClick={() => {
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          if (triggerRef.current !== null) setMenuPos(createMenuPosOf(triggerRef.current));
+          setOpen(true);
+        }}
+        title={isMobile ? "选择要打开的：Agent CLI（派发）/ 系统 Shell" : "选择要打开的：对话 / Agent CLI（派发）/ 系统 Shell / 拆分本格"}
         aria-label="选择对话或终端"
         aria-expanded={open}
         className="flex h-6 w-6 items-center justify-center rounded text-ash/80 hover:bg-line-soft hover:text-ink transition"
       >
         <ChevronDown size={12} />
       </button>
-      {open && (
+      {open && menuPos !== null && createPortal(
         <>
-          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full z-40 mt-1 max-h-[480px] min-w-[260px] overflow-y-auto rounded-panel border border-line bg-card p-1.5 shadow-2xl scrollbar-thin">
-            {/* 分组 0：对话 */}
-            <div className="flex shrink-0 items-center gap-1 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-teal/80">
-              <MessageSquarePlus size={11} />
-              <span>对话</span>
-            </div>
-            <button
-              onClick={() => {
-                setOpen(false);
-                newChat();
-              }}
-              className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal active:bg-teal-tint"
-            >
-              <MessageSquarePlus size={13} className="shrink-0 text-teal" />
-              <span className="flex-1 truncate font-mono text-caption font-medium">
-                {unit ? `与 ${unit.name} 对话` : "新对话（先选 bot）"}
-              </span>
-              <span className="shrink-0 rounded bg-line-soft px-1 py-0.2 font-sans text-[9px] text-ash">结构化时间线</span>
-            </button>
-            <div className="my-1.5 h-px shrink-0 bg-line/50" />
+          <div className="fixed inset-0 z-[89]" onClick={() => setOpen(false)} />
+          <div
+            style={{ left: menuPos.left, top: menuPos.top, bottom: menuPos.bottom, maxHeight: menuPos.maxHeight }}
+            className="titlebar-no-drag fixed z-[90] min-w-[260px] overflow-y-auto rounded-panel border border-line bg-card p-1.5 shadow-2xl scrollbar-thin"
+          >
+            {/* 分组 0：对话（移动端不在画布内开对话窗格） */}
+            {!isMobile && (
+              <>
+                <div className="flex shrink-0 items-center gap-1 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-teal/80">
+                  <MessageSquarePlus size={11} />
+                  <span>对话</span>
+                </div>
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    newChat();
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal active:bg-teal-tint"
+                >
+                  <MessageSquarePlus size={13} className="shrink-0 text-teal" />
+                  <span className="flex-1 truncate font-mono text-caption font-medium">
+                    {unit ? `与 ${unit.name} 对话` : "新对话（先选 bot）"}
+                  </span>
+                  <span className="shrink-0 rounded bg-line-soft px-1 py-0.2 font-sans text-[9px] text-ash">结构化时间线</span>
+                </button>
+                <div className="my-1.5 h-px shrink-0 bg-line/50" />
+              </>
+            )}
 
             {/* 分组 1：Agent 执行器（全部经派发系统打开） */}
             <div className="flex shrink-0 items-center gap-1 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-teal/80">
@@ -641,28 +703,32 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
               ))}
             </div>
 
-            {/* 分组 3：拆分本格 */}
-            <div className="my-1.5 h-px shrink-0 bg-line/50" />
-            <button
-              onClick={() => {
-                setOpen(false);
-                splitGroup("horizontal");
-              }}
-              className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal"
-            >
-              <Columns2 size={13} className="text-teal" />
-              <span className="font-mono text-caption">向右拆分当前格 (Split Right)</span>
-            </button>
-            <button
-              onClick={() => {
-                setOpen(false);
-                splitGroup("vertical");
-              }}
-              className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal"
-            >
-              <Rows2 size={13} className="text-teal" />
-              <span className="font-mono text-caption">向下拆分当前格 (Split Down)</span>
-            </button>
+            {/* 分组 3：拆分本格（桌面端） */}
+            {!isMobile && (
+              <>
+                <div className="my-1.5 h-px shrink-0 bg-line/50" />
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    splitGroup("horizontal");
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal"
+                >
+                  <Columns2 size={13} className="text-teal" />
+                  <span className="font-mono text-caption">向右拆分当前格 (Split Right)</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    splitGroup("vertical");
+                  }}
+                  className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal"
+                >
+                  <Rows2 size={13} className="text-teal" />
+                  <span className="font-mono text-caption">向下拆分当前格 (Split Down)</span>
+                </button>
+              </>
+            )}
 
             {/* 归拢弹出窗口（全局动作；原顶栏按钮退役后收进菜单 —— 罕见动作不占条内空间） */}
             {popoutCount > 0 && (
@@ -681,7 +747,8 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
               </>
             )}
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   );

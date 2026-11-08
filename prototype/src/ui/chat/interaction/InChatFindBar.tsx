@@ -210,7 +210,7 @@ export function InChatFindBar({
   return (
     <div
       data-find-ignore="true"
-      className="fixed top-14 right-6 z-30 flex items-center gap-1.5 rounded-card bg-card/95 backdrop-blur-md border border-line shadow-lg px-2.5 py-1.5 animate-in fade-in slide-in-from-top-2 duration-150"
+      className="absolute top-3 right-4 z-30 flex items-center gap-1.5 rounded-card bg-card/95 backdrop-blur-md border border-line shadow-lg px-2.5 py-1.5 animate-in fade-in slide-in-from-top-2 duration-150"
     >
       <Search size={14} className="shrink-0 text-ash" />
       <input

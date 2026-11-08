@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { modelSpecFor, useWorkbench } from "../store/useWorkbench.ts";
 import { daemonModelId } from "../adapters/daemon/adapter.ts";
@@ -21,6 +21,7 @@ const RING_C = 2 * Math.PI * RING_R;
  */
 export function ContextUsageBadge() {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
   const usage = useWorkbench((s) =>
     s.activeSessionId === null ? undefined : s.usageBySession[String(s.activeSessionId)],
   );
@@ -41,6 +42,26 @@ export function ContextUsageBadge() {
     void useBacklog.getState().refreshQuotas();
   }, [bareRuntime]);
 
+  // 点外关闭走文档级 mousedown 捕获（QuickContextMenu 同款），不用 fixed 遮罩：
+  // 徽标住在 Composer 的 @container 外壳里，container-type 附带 layout containment，
+  // fixed 遮罩会被困在外壳范围内 —— 点时间线关不掉弹层
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent): void => {
+      if (rootRef.current !== null && rootRef.current.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
   const contextWindow = spec?.contextWindow;
   if (usage === undefined || contextWindow === undefined || contextWindow <= 0) return null;
 
@@ -57,7 +78,7 @@ export function ContextUsageBadge() {
     usage.cacheReadTokens !== undefined ? `，缓存读 ${formatContext(usage.cacheReadTokens)}` : "";
 
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative">
       <button
         type="button"
         onClick={() => {
@@ -74,44 +95,41 @@ export function ContextUsageBadge() {
       </button>
 
       {open && (
-        <>
-          <span className="fixed inset-0 z-30" onClick={() => setOpen(false)} aria-hidden />
-          <div className="absolute bottom-full right-0 z-40 mb-1.5 w-76 max-w-[calc(100cqw-32px)] rounded-card border border-line bg-canvas p-3 shadow-subtle text-caption leading-relaxed">
-            <div className="flex items-center gap-2 border-b border-line-soft pb-1.5 text-body-sm font-medium text-ink">
-              <UsageRing pct={pct} tone={tone} className="h-4 w-4" />
-              上下文窗口 · {pct}%
-            </div>
-            <div className="mt-2 space-y-1 text-graphite">
-              <p>
-                占用 ≈ {formatContext(used)} / {formatContext(contextWindow)}
-              </p>
-              <p className="text-ash">口径：最近一轮输入{cacheLine} + 输出 —— 近似值，非服务端权威计数</p>
-              <p className="text-ash">模型：{spec?.displayName ?? usage.model}</p>
-            </div>
-
-            <div className="mt-2.5 border-t border-line-soft pt-2">
-              <div className="flex items-center justify-between text-body-sm font-medium text-ink">
-                <span>订阅执行器余量</span>
-                <button
-                  type="button"
-                  onClick={() => void refreshQuotas()}
-                  aria-label="重新探测余量"
-                  title="重新探测当前执行器的订阅余量"
-                  className="rounded p-1 text-ash transition hover:bg-line-soft hover:text-ink"
-                >
-                  <RefreshCw size={11} />
-                </button>
-              </div>
-              {quota !== null && quota.percent !== null ? (
-                <p className="mt-1 text-graphite">
-                  剩余 {quota.percent}%{quota.summary !== null ? ` —— ${quota.summary}` : ""}
-                </p>
-              ) : (
-                <p className="mt-1 text-ash">未探测到余量数据（执行器可能未订阅或不支持探测）</p>
-              )}
-            </div>
+        <div className="absolute bottom-full right-0 z-40 mb-1.5 w-76 max-w-[calc(100cqw-32px)] rounded-card border border-line bg-canvas p-3 shadow-subtle text-caption leading-relaxed">
+          <div className="flex items-center gap-2 border-b border-line-soft pb-1.5 text-body-sm font-medium text-ink">
+            <UsageRing pct={pct} tone={tone} className="h-4 w-4" />
+            上下文窗口 · {pct}%
           </div>
-        </>
+          <div className="mt-2 space-y-1 text-graphite">
+            <p>
+              占用 ≈ {formatContext(used)} / {formatContext(contextWindow)}
+            </p>
+            <p className="text-ash">口径：最近一轮输入{cacheLine} + 输出 —— 近似值，非服务端权威计数</p>
+            <p className="text-ash">模型：{spec?.displayName ?? usage.model}</p>
+          </div>
+
+          <div className="mt-2.5 border-t border-line-soft pt-2">
+            <div className="flex items-center justify-between text-body-sm font-medium text-ink">
+              <span>订阅执行器余量</span>
+              <button
+                type="button"
+                onClick={() => void refreshQuotas()}
+                aria-label="重新探测余量"
+                title="重新探测当前执行器的订阅余量"
+                className="rounded p-1 text-ash transition hover:bg-line-soft hover:text-ink"
+              >
+                <RefreshCw size={11} />
+              </button>
+            </div>
+            {quota !== null && quota.percent !== null ? (
+              <p className="mt-1 text-graphite">
+                剩余 {quota.percent}%{quota.summary !== null ? ` —— ${quota.summary}` : ""}
+              </p>
+            ) : (
+              <p className="mt-1 text-ash">未探测到余量数据（执行器可能未订阅或不支持探测）</p>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
