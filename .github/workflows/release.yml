@@ -60,16 +60,23 @@ jobs:
           pnpm -C backend install --frozen-lockfile
 
       # electron-builder 打包时另下一份 electron zip（与 node_modules 里的运行时分开），
-      # 缓存它三平台各省 ~100MB/次下载
+      # 缓存它三平台各省 ~100MB/次下载。restore-keys 前缀回退：精确 key（含
+      # package.json 哈希，版本号一 bump 就换）未命中时复用最近一次成功的同平台缓存
+      # —— electron 与配套二进制钉在 lockfile 版本上，跨小版本依然全部可用，
+      # 下载端（GitHub 资产 CDN / 镜像）故障时打包完全不受影响（2026-11-08 实测）
       - name: Cache electron-builder downloads
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/AppData/Local/electron/Cache
             ~/AppData/Local/electron-builder/Cache
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
             ~/.cache/electron
             ~/.cache/electron-builder
           key: electron-dl-${{ runner.os }}-${{ hashFiles('package.json') }}
+          restore-keys: |
+            electron-dl-${{ runner.os }}-
 
       - name: Build frontend + daemon bundle
         run: pnpm dist:prepare
