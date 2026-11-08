@@ -75,7 +75,21 @@ jobs:
         run: pnpm dist:prepare
 
       - name: Package installers
-        run: pnpm exec electron-builder ${{ matrix.builder-args }} --publish never
+        env:
+          # electron-builder 配套二进制（winCodeSign / nsis / appimage…）默认从
+          # github.com 的 release 资产下载 —— 该 CDN 故障时打包全军覆没（2026-11-08
+          # 实测全局 504 持续半小时以上，三平台同时挂，重跑无用）。npmmirror 同步了
+          # 官方资产全量镜像，走它绕开；资产落 electron-builder Cache 后正常时期
+          # 零额外开销（见上方 cache 步骤）
+          ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+        # 下载类失败做退避重试（已完成的下载在 Cache 里，重试从断点资产继续）
+        run: |
+          for i in 1 2 3; do
+            pnpm exec electron-builder ${{ matrix.builder-args }} --publish never && exit 0
+            echo "第 $i 次打包失败，$((i * 60))s 后重试"
+            sleep $((i * 60))
+          done
+          exit 1
 
       - name: Upload installers
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
