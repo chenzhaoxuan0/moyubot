@@ -1,7 +1,7 @@
 {
   "name": "agent-workbench-backend",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "Runtime Host daemon —— 把 prototype 里「UI 完整、执行是模拟」的插槽换成真实执行",
   "engines": {
