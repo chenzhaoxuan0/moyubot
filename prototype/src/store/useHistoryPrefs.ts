@@ -161,6 +161,16 @@ function notifyHistoryRefresh(unitId?: string): void {
   }
 }
 
+/**
+ * 一条历史行的灯 / 已读键集（双键约定单源）：行键 + 有会话时的 `session-<id>` 别名 ——
+ * 同一会话在侧栏历史行（entry key）与会话链路（session key）两处记账，任一处写
+ * 已读 / 消灯 / 覆盖都要两键同写，读侧任一键命中即算。归档走自己的双向转换（见
+ * unarchiveKey / unarchiveKeysBatch），不用这里。
+ */
+export function entryKeys(e: { readonly key: string; readonly sessionId: string | null }): string[] {
+  return e.sessionId !== null ? [e.key, `session-${e.sessionId}`] : [e.key];
+}
+
 export interface HistoryPrefsStore {
   prefs: HistoryPrefs;
   setPrefs: (patch: Partial<HistoryPrefs>) => void;
@@ -383,7 +393,7 @@ export const useHistoryPrefs = create<HistoryPrefsStore>((set, get) => ({
       const overrides = { ...state.prefs.lightOverrides };
       let changed = false;
       for (const p of pairs) {
-        for (const k of p.sessionId !== null ? [p.key, `session-${p.sessionId}`] : [p.key]) {
+        for (const k of entryKeys(p)) {
           if (k !== "" && !viewed.has(k)) {
             viewed.add(k);
             changed = true;

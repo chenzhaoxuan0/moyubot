@@ -33,6 +33,9 @@ import { create } from "zustand";
 export const REPLAY: Record<string, object[]> = {
   s1: [{ type: "message.delta", role: "assistant", text: "m1" }, { type: "message.delta", role: "assistant", text: "m2" }],
 };
+/** 桩开关：adoptOk=false 模拟快照直通门禁不过（单元已删 / 执行器下线）→ 回落 openSession */
+export const STUB = { adoptOk: true };
+export function invalidateSessionViews(): void {}
 export const useWorkbench = create<Record<string, unknown>>((set, get) => ({
   units: [{ id: "u1", name: "BotA", rootPath: "C:/x" }, { id: "u2", name: "BotB", rootPath: "C:/y" }],
   sessions: [
@@ -49,6 +52,13 @@ export const useWorkbench = create<Record<string, unknown>>((set, get) => ({
     await new Promise((r) => setTimeout(r, 10));
     set({ activeSessionId: input.sessionId, timeline: [...((REPLAY[input.sessionId] as object[]) ?? [])], busy: false });
   },
+  // 快照直通（94e1c05，orca「缓存直用」）：同步把窗格快照提升为全局视图
+  adoptPaneSnapshot: (input: { unitId: string; sessionId: string; timeline: object[]; busy: boolean }): boolean => {
+    if (!STUB.adoptOk) return false;
+    set({ activeUnitId: input.unitId, activeSessionId: input.sessionId, timeline: [...input.timeline], busy: input.busy });
+    return true;
+  },
+  refreshSessionMetadata: (): void => {},
   pushNotice: (): void => {},
 }));
 export const useShell = create<Record<string, unknown>>((set) => ({
@@ -65,22 +75,35 @@ export const useShell = create<Record<string, unknown>>((set) => ({
   );
   writeFileSync(join(workDir, "types-dummy.ts"), `export interface TimelineItem { readonly id: number; readonly event: { type: string }; readonly at: number; }\n`, "utf-8");
 
+  /** 替换漏网守卫：源码 import 行一改，字符串替换就静默失配（94e1c05 给 useChatPanes
+   *  加了 invalidateSessionViews 导入，本脚本因此整体挂掉而无人察觉）—— 副本里残留
+   *  同目录相对导入即提前报错，并指明要同步的替换串 */
+  const assertNoStrayImports = (src: string, file: string): void => {
+    const stray = src.match(/^import [^;]*from "\.\/[^"]+";$/gm);
+    if (stray !== null) throw new Error(`${file} 有未替换的同目录导入（源码 import 行变了，请同步本脚本的替换串）：\n${stray.join("\n")}`);
+  };
+
   const chatPanesSrc = readFileSync(join(here, "..", "src", "store", "useChatPanes.ts"), "utf-8")
-    .replace('import { useWorkbench, type TimelineItem } from "./useWorkbench.ts";', `import { useWorkbench } from ${url("wb-stub.ts")};\nimport type { TimelineItem } from ${url("types-dummy.ts")};`)
+    .replace(
+      'import { invalidateSessionViews, useWorkbench, type TimelineItem } from "./useWorkbench.ts";',
+      `import { invalidateSessionViews, useWorkbench } from ${url("wb-stub.ts")};\nimport type { TimelineItem } from ${url("types-dummy.ts")};`,
+    )
     .replace('import { useShell } from "./useShell.ts";', `import { useShell } from ${url("wb-stub.ts")};`)
     .replace('import { terminalSessionRegistry, CHAT_DOCK_UNIT_ID } from "./TerminalSessionManager.ts";', "")
     .replaceAll('import("./useTerminalStore.ts")', `import(${url("store-copy.ts")})`)
     .replace('from "../core/units.ts"', 'from "../../src/core/units.ts"')
     .replace('from "../adapters/daemon/client.ts"', 'from "../../src/adapters/daemon/client.ts"');
+  assertNoStrayImports(chatPanesSrc, "useChatPanes.ts");
   writeFileSync(join(workDir, "chatpanes-copy.ts"), chatPanesSrc, "utf-8");
 
   const storeSrc = readFileSync(join(here, "..", "src", "store", "useTerminalStore.ts"), "utf-8")
     .replace('import { terminalSessionRegistry, CHAT_DOCK_UNIT_ID } from "./TerminalSessionManager.ts";', `import { terminalSessionRegistry, CHAT_DOCK_UNIT_ID } from ${url("ts-stub.ts")};`)
     .replace('import { useChatPanes } from "./useChatPanes.ts";', `import { useChatPanes } from ${url("chatpanes-copy.ts")};`);
+  assertNoStrayImports(storeSrc, "useTerminalStore.ts");
   writeFileSync(join(workDir, "store-copy.ts"), storeSrc, "utf-8");
 
   const { useTerminalStore } = await import(pathToFileURL(join(workDir, "store-copy.ts")).href);
-  const { useWorkbench } = await import(pathToFileURL(join(workDir, "wb-stub.ts")).href);
+  const { useWorkbench, STUB } = await import(pathToFileURL(join(workDir, "wb-stub.ts")).href);
   const { useChatPanes, installChatPaneSync } = await import(pathToFileURL(join(workDir, "chatpanes-copy.ts")).href);
 
   /* ---- 断言 ---- */
@@ -127,10 +150,19 @@ export const useShell = create<Record<string, unknown>>((set) => ({
   await sleep(80);
   ok("⑤ 切到 B：A 快照封存内容", paneOf("u1").timeline.length === 3 && globalSid() === "s2");
 
-  // ⑥ 点回 A：openSession 权威重建，内容回来（本次用户缺陷的验收点）
+  // ⑥ 点回 A：快照直通（94e1c05 起的主路径）—— 封存的 3 条（含泵入的 m3）当帧提升为
+  //    全局视图，不重放（本次用户缺陷的验收点：不被重置成初始态）
   useTerminalStore.getState().activatePane(paneOf("u1").paneKey);
   await sleep(80);
-  ok("⑥ 往返后 A 内容完整恢复", globalLen() === 2 && globalSid() === "s1" && paneOf("u1").sessionId === "s1");
+  ok("⑥ 往返后 A 内容完整恢复（快照直通）", globalLen() === 3 && globalSid() === "s1" && paneOf("u1").sessionId === "s1");
+
+  // ⑦ 直通门禁不过（单元已删 / 执行器下线）：回落 openSession 权威重建
+  useTerminalStore.getState().activatePane(paneOf("u2").paneKey);
+  await sleep(80);
+  STUB.adoptOk = false;
+  useTerminalStore.getState().activatePane(paneOf("u1").paneKey);
+  await sleep(80);
+  ok("⑦ 门禁不过回落 openSession 重建", globalLen() === 2 && globalSid() === "s1" && paneOf("u1").sessionId === "s1");
 
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exitCode = fail > 0 ? 1 : 0;

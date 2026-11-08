@@ -1,6 +1,6 @@
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Info, ShieldAlert, X } from "lucide-react";
-import { useWorkbench } from "../store/useWorkbench.ts";
+import { selectActiveUnit, useWorkbench } from "../store/useWorkbench.ts";
 import { CanvasVisibleContext } from "./canvasVisibility.ts";
 import { getMode, needsDialog } from "../core/permission.ts";
 import type { PermissionDecision } from "../core/adapter.ts";
@@ -61,7 +61,7 @@ export function PermissionDialog() {
   const decisions = useWorkbench((s) => s.permissionDecisions);
   const resolve = useWorkbench((s) => s.resolvePermission);
   const mode = useWorkbench((s) => s.permissionMode);
-  const unit = useWorkbench((s) => s.units.find((u) => u.id === s.activeUnitId));
+  const unit = useWorkbench(selectActiveUnit);
 
   // 权限模式决定「哪些请求还会弹框」：
   // bypass 全自动；plan 全部拦下；acceptEdits 只对文件写入放行。

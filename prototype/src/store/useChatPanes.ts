@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { RuntimeEvent } from "../core/events.ts";
-import { asSessionId, asUnitId } from "../core/units.ts";
+import { appendInputHistory, asSessionId, asUnitId } from "../core/units.ts";
 import { invalidateSessionViews, useWorkbench, type TimelineItem } from "./useWorkbench.ts";
 import { useShell } from "./useShell.ts";
 
@@ -114,9 +114,6 @@ function makeRecord(unitId: string, sessionId: string | null, runtimeId?: string
 
 /** 快照时间线的本地序号（负数段，与全局 seq 空间天然隔离不撞 key） */
 let routeSeq = 0;
-
-/** 输入历史上限 —— 与 useWorkbench 的 INPUT_HISTORY_CAP 同口径（终端 HISTSIZE 同位） */
-const INPUT_HISTORY_CAP = 200;
 
 /**
  * 每窗格的冷启动回放代次：同一窗格回放在途时又被聚焦（不耐烦再点一次），旧回放
@@ -242,16 +239,9 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
       if (event.type === "message.completed") busy = false;
       // 输入历史同步补一笔（review P2）：后台期间的队列自动投递 / 渠道发起的用户轮
       // 只进时间线不进 inputHistory 的话，快照直通归还的 ↑ 召回会缺这几句
-      //（openSession 路径从账本重建不缺）。口径对齐 useWorkbench 的 pushInputHistory：
-      // 空串不入史、连续重复去重、上限 200
-      let inputHistory = p.inputHistory;
-      if (event.type === "message.delta" && event.role === "user") {
-        const t = event.text.trim();
-        if (t !== "" && inputHistory[inputHistory.length - 1] !== t) {
-          inputHistory = [...inputHistory, t];
-          if (inputHistory.length > INPUT_HISTORY_CAP) inputHistory = inputHistory.slice(-INPUT_HISTORY_CAP);
-        }
-      }
+      //（openSession 路径从账本重建不缺）。规则单源：core 的 appendInputHistory
+      const inputHistory =
+        event.type === "message.delta" && event.role === "user" ? appendInputHistory(p.inputHistory, event.text) : p.inputHistory;
       return {
         panes: {
           ...s.panes,
@@ -304,6 +294,9 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
     });
     const pane = get().panes[paneKey];
     if (pane === undefined) return;
+    /** 置本窗格回放标记（窗格已被关掉则不动）—— 下面四个落位分支共用 */
+    const setRestoring = (restoring: boolean): void =>
+      set((s) => (s.panes[paneKey] ? { panes: { ...s.panes, [paneKey]: { ...s.panes[paneKey]!, restoring } } } : {}));
 
     // ② 草稿窗格：selectUnit 落位（执行器绑定 / turnContext 跟随），草稿归还输入框。
     //    unitId 为空 = 拆分出的「未选 bot」窗格：只聚焦不切单元，窗格内渲染选择器
@@ -316,11 +309,7 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
     if (targetSid === null || targetSid === "") {
       if (pane.unitId !== "") useWorkbench.getState().selectUnit(asUnitId(pane.unitId));
       if (pane.unitId !== "" && pane.draft !== "") useWorkbench.setState({ draft: pane.draft });
-      set((s) =>
-        s.panes[paneKey]
-          ? { panes: { ...s.panes, [paneKey]: { ...s.panes[paneKey]!, restoring: false } } }
-          : {},
-      );
+      setRestoring(false);
       return;
     }
     // ②' 有段窗格的草稿同样随窗格归还（review P2）：此前切窗格不清不还，A 的未发送
@@ -332,11 +321,7 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
     // ③ 有段：全局已指向它（路由回放/重复点击）就不重放
     const wb = useWorkbench.getState();
     if (String(wb.activeSessionId ?? "") === targetSid) {
-      set((s) =>
-        s.panes[paneKey]
-          ? { panes: { ...s.panes, [paneKey]: { ...s.panes[paneKey]!, restoring: false } } }
-          : {},
-      );
+      setRestoring(false);
       return;
     }
     // ③' 快照直通（orca「缓存直用」）：快照对应的正是目标段且非空 —— 失焦拍照
@@ -353,23 +338,13 @@ export const useChatPanes = create<ChatPanesState>((set, get) => ({
         inputHistory: pane.inputHistory,
       });
       if (adopted) {
-        if (pane.restoring) {
-          set((s) =>
-            s.panes[paneKey]
-              ? { panes: { ...s.panes, [paneKey]: { ...s.panes[paneKey]!, restoring: false } } }
-              : {},
-          );
-        }
+        if (pane.restoring) setRestoring(false);
         wb.refreshSessionMetadata(targetSid, pane.unitId);
         return;
       }
     }
     // ④ 冷启动回放（F5 后未聚焦过 / 直通门禁不过）：openSession 权威重建
-    set((s) =>
-      s.panes[paneKey]
-        ? { panes: { ...s.panes, [paneKey]: { ...s.panes[paneKey]!, restoring: true } } }
-        : {},
-    );
+    setRestoring(true);
     // runtimeId 提示只在目标段就是窗格自己的段时可信（窗格内切段时提示属于别段）；
     // 有提示就省掉 runtimeIdOfSession 兜底的那次全量台账往返
     const runtimeHint = targetSid === pane.sessionId ? pane.runtimeId : undefined;

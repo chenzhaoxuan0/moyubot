@@ -6,7 +6,6 @@ import {
   BellOff,
   CircleAlert,
   CircleCheck,
-  CircleDot,
   History,
   MessageCircleQuestion,
   MoreHorizontal,
@@ -21,6 +20,7 @@ import { useWorkbench } from "../store/useWorkbench.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { asUnitId } from "../core/units.ts";
 import { MenuRow } from "./WorklistBits.tsx";
+import { SessionLightDot } from "./SessionLightDot.tsx";
 import { cn } from "./cn.ts";
 
 /**
@@ -383,7 +383,7 @@ export function BacklogCard({
               return (
               <div key={r.runId} className="flex items-center gap-2 text-caption">
                 {r.status === "running" ? (
-                  <CircleDot size={11} className="shrink-0 animate-pulse text-blue-500" />
+                  <SessionLightDot kind="running" />
                 ) : (
                   <span
                     className={cn(
@@ -536,7 +536,7 @@ export function BacklogCard({
         )}
         {item.status === "executing" && (
           <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-caption text-blue-500">
-            <CircleDot size={12} className="animate-pulse" />
+            <SessionLightDot kind="running" size="md" />
             长任务执行中（{lastRun?.runtimeId ?? item.runtimeId}）
             {lastRun?.sessionId != null && (
               <button

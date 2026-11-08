@@ -1,16 +1,16 @@
 import { asUnitId } from "../core/units.ts";
 import { dispatchTerminal } from "../adapters/daemon/client.ts";
 import { useShell } from "./useShell.ts";
-import { useTerminalStore } from "./useTerminalStore.ts";
 import { useWorkbench } from "./useWorkbench.ts";
 
 /**
  * 会话打开入口（docs/31 迁移收口）—— 侧栏 / 新建会话页 / 历史弹窗共用的
- * 「给 bot 开新 TUI」单源。派发前登记 pending（useTerminalStore），防止
- * created 帧在途期间被重复派发（双进程竞态）。
+ * 「给 bot 开新 TUI」单源：执行器按 bot 主绑定解析、切到该 bot、派发后回聊天主视图。
+ * 画布格内「选择▾」菜单的派发不走这里（用户显式选执行器、失败回退手开终端、不切
+ * bot —— 语义不同，见 GroupPanel 的 launchExecutor）。
  */
 
-/** bot 主绑定执行器（bindings.primary 优先，回落全局当前）—— TerminalPanel boundExecutor 同款口径 */
+/** bot 主绑定执行器（bindings.primary 优先，回落全局当前） */
 export function boundExecutorOf(unit: { bindings: ReadonlyArray<{ primary?: boolean; runtimeId: string }> }): string {
   const wb = useWorkbench.getState();
   const binding = unit.bindings.find((b) => b.primary) ?? unit.bindings[0];
@@ -34,7 +34,6 @@ export function openNewTuiForUnit(unit: {
   if (bare === "") return;
   const wb = useWorkbench.getState();
   if (String(wb.activeUnitId) !== String(unit.id)) wb.selectUnit(asUnitId(unit.id));
-  useTerminalStore.getState().notePendingUnitDispatch(unit.id);
   void dispatchTerminal({ unitId: unit.id, unitName: unit.name, rootPath: unit.rootPath, runtimeId: bare })
     .then(() => {
       useShell.getState().setMainView("chat");

@@ -56,6 +56,7 @@ import {
   isSyntheticUnit,
   normalizeContextManifest,
   orderUnitsLikeSidebar,
+  reorderUnitIds,
   SESSION_SOURCE_LABEL,
   type SessionSource,
 } from "../core/units.ts";
@@ -67,7 +68,7 @@ import { ChannelMark, channelIdentityLabel } from "./ChannelMark.tsx";
 import { resumeArgsFor } from "./HistoryPane.tsx";
 import { collapseForkVersions } from "./forkHistory.ts";
 import { executorIconSrc } from "./executorIcon.ts";
-import { useHistoryPrefs } from "../store/useHistoryPrefs.ts";
+import { entryKeys, useHistoryPrefs } from "../store/useHistoryPrefs.ts";
 import { useSidebarSelection } from "../store/useSidebarSelection.ts";
 import { useTerminalStore } from "../store/useTerminalStore.ts";
 import { useChatPanes } from "../store/useChatPanes.ts";
@@ -509,14 +510,15 @@ export function Sidebar() {
                     if (dragUnit && dragUnit !== unitId) {
                       const dragged = allUnits.find((x) => x.id === dragUnit);
                       if (dragged !== undefined && isResidentUnit(dragged)) {
-                        // 常驻行落到常驻行 = 区内排序（与普通节同款 splice 口径）
-                        const order = residentUnits.map((x) => x.id as string);
-                        const from = order.indexOf(dragUnit);
-                        const to = order.indexOf(unitId);
-                        if (from >= 0 && to >= 0) {
-                          order.splice(to, 0, ...order.splice(from, 1));
-                          setResidentOrder(order);
-                        }
+                        // 常驻行落到常驻行 = 区内排序（reorderUnitIds 单源，与普通节同口径）
+                        const next = reorderUnitIds(
+                          residentUnits.map((x) => String(x.id)),
+                          residentOrder,
+                          dragUnit,
+                          unitId,
+                          new Set(allUnits.map((x) => String(x.id))),
+                        );
+                        if (next !== null) setResidentOrder(next);
                       } else {
                         // 普通 bot 落到常驻行上 = 升为常驻（落空白区走 section 的 onDropZone）
                         onDropZone("resident");
@@ -606,16 +608,15 @@ export function Sidebar() {
                   e.preventDefault();
                   e.stopPropagation();
                   if (dragUnit && dragUnit !== unitId) {
-                    const order = normalUnits.map((x) => x.id as string);
-                    const from = order.indexOf(dragUnit);
-                    if (from < 0) {
+                    const visible = normalUnits.map((x) => String(x.id));
+                    if (!visible.includes(dragUnit)) {
                       // 拖的是常驻 bot：落到普通区某行上，降级为普通 bot
                       onDropZone("normal");
                       return;
                     }
-                    const to = order.indexOf(unitId);
-                    order.splice(to, 0, ...order.splice(from, 1));
-                    setUnitOrder(order);
+                    // 区内排序：写回全量序（只写可见子集会清掉另一视图的自定义序）
+                    const next = reorderUnitIds(visible, unitOrder, dragUnit, unitId, new Set(allUnits.map((x) => String(x.id))));
+                    if (next !== null) setUnitOrder(next);
                   }
                   setDragUnit(null);
                   setZoneHover(null);
@@ -672,21 +673,18 @@ function openEntryInChat(e: UnitHistoryEntry, ownerUnitId: string): void {
   if (e.sessionId === null) return;
   const sid = e.sessionId;
   // 只要用户点开该会话，立即标为已读消除完成未读灯
-  useHistoryPrefs.getState().markViewed([e.key, `session-${sid}`]);
+  useHistoryPrefs.getState().markViewed(entryKeys(e));
   useChatPanes.getState().openChatPane({ unitId: ownerUnitId, sessionId: sid, runtimeId: e.runtimeId });
 }
 
 /**
  * 在 TUI 中重现一条历史会话（各家 --resume 口径见 HistoryPane 的 RESUME_ARGS）。
- * 派发前登记 pending（useTerminalStore），防止标签落地前的重复派发（双进程竞态）。
  * TUI 本身还开着（前端有它的标签）时**不发 resume** —— 直接切到那个标签；
  * 此时 resume 会双开同一原生会话（存储锁冲突），且切标签才是用户要的「回到它」。
  */
 function openEntryInTui(e: UnitHistoryEntry, unit: WorkUnit): void {
   const markOpened = (): void => {
-    useHistoryPrefs
-      .getState()
-      .markViewed([e.key, ...(e.sessionId !== null ? [`session-${e.sessionId}`] : [])]);
+    useHistoryPrefs.getState().markViewed(entryKeys(e));
   };
   const st = useTerminalStore.getState();
   if (e.terminalId != null && e.terminalId !== "") {
@@ -705,7 +703,6 @@ function openEntryInTui(e: UnitHistoryEntry, unit: WorkUnit): void {
   // 仅在切 bot 时才 selectUnit —— 对当前 bot 点 TUI 行不该顺手清掉正在看的
   // 聊天时间线（selectUnit 会清空 timeline / activeSessionId）。
   if (String(wb.activeUnitId) !== String(unit.id)) wb.selectUnit(asUnitId(unit.id));
-  useTerminalStore.getState().notePendingUnitDispatch(unit.id);
   void dispatchTerminal({
     unitId: unit.id,
     unitName: unit.name,
@@ -1250,9 +1247,9 @@ function UnitRow({
                         : canTui
                           ? "tui"
                           : originMode;
-            const lightOverride =
-              historyPrefs.lightOverrides[e.key] ??
-              (e.sessionId !== null ? historyPrefs.lightOverrides[`session-${e.sessionId}`] : undefined);
+            const lightOverride = entryKeys(e)
+              .map((k) => historyPrefs.lightOverrides[k])
+              .find((v) => v !== undefined && v !== null);
             const rowActive = mainView === "chat" && e.sessionId !== null && highlightedSessionId === e.sessionId;
             // 灯的本地兜底只认「全局链路此刻就是这一行」：timeline/busy 是全局活跃
             // 会话的镜像，冷启动回放在途时高亮已先翻到新行、全局还属于旧会话 ——
@@ -1273,19 +1270,14 @@ function UnitRow({
               e,
               sessionStatusById,
               // entry key 与 session key 任一打开过即算已读（自动化行与 session 行共享）
-              isEntryUnread(
-                e.sessionId !== null ? [e.key, `session-${e.sessionId}`] : [e.key],
-                e.endedAt,
-              ),
+              isEntryUnread(entryKeys(e), e.endedAt),
               lightOverride,
               isRowAwaitingDecision,
               isRowActiveRunning,
             );
             const openDefault = (): void => {
               // 1. 符合直觉：只要点击该会话，立即消除完成未读灯（标为已查看）
-              useHistoryPrefs
-                .getState()
-                .markViewed(e.sessionId !== null ? [e.key, `session-${e.sessionId}`] : [e.key]);
+              useHistoryPrefs.getState().markViewed(entryKeys(e));
 
               if (effective === "chat" && canChat) openEntryInChat(e, String(unit.id));
               else if (effective === "tui" && canTui) openEntryInTui(e, unit);
@@ -1515,13 +1507,8 @@ function UnitRow({
                               icon: EyeOff,
                               onSelect: () => {
                                 const hp = useHistoryPrefs.getState();
-                                hp.clearLight(e.key);
-                                if (e.sessionId !== null) {
-                                  hp.clearLight(`session-${e.sessionId}`);
-                                  hp.markViewed([e.key, `session-${e.sessionId}`]);
-                                } else {
-                                  hp.markViewed([e.key]);
-                                }
+                                for (const k of entryKeys(e)) hp.clearLight(k);
+                                hp.markViewed(entryKeys(e));
                               },
                             },
                           ]
@@ -1533,9 +1520,8 @@ function UnitRow({
                               icon: CheckCircle2,
                               onSelect: () => {
                                 const hp = useHistoryPrefs.getState();
-                                hp.markViewed(e.sessionId !== null ? [e.key, `session-${e.sessionId}`] : [e.key]);
-                                hp.setLightOverride(e.key, "none");
-                                if (e.sessionId !== null) hp.setLightOverride(`session-${e.sessionId}`, "none");
+                                hp.markViewed(entryKeys(e));
+                                for (const k of entryKeys(e)) hp.setLightOverride(k, "none");
                               },
                             },
                           ]
@@ -1545,8 +1531,7 @@ function UnitRow({
                               icon: CircleDot,
                               onSelect: () => {
                                 const hp = useHistoryPrefs.getState();
-                                hp.setLightOverride(e.key, "unreadDone");
-                                if (e.sessionId !== null) hp.setLightOverride(`session-${e.sessionId}`, "unreadDone");
+                                for (const k of entryKeys(e)) hp.setLightOverride(k, "unreadDone");
                               },
                             },
                           ]),
@@ -1557,8 +1542,7 @@ function UnitRow({
                               icon: Check,
                               onSelect: () => {
                                 const hp = useHistoryPrefs.getState();
-                                hp.clearLight(e.key);
-                                if (e.sessionId !== null) hp.clearLight(`session-${e.sessionId}`);
+                                for (const k of entryKeys(e)) hp.clearLight(k);
                               },
                             },
                           ]
@@ -1570,8 +1554,7 @@ function UnitRow({
                               icon: RotateCcw,
                               onSelect: () => {
                                 const hp = useHistoryPrefs.getState();
-                                hp.setLightOverride(e.key, null);
-                                if (e.sessionId !== null) hp.setLightOverride(`session-${e.sessionId}`, null);
+                                for (const k of entryKeys(e)) hp.setLightOverride(k, null);
                               },
                             },
                           ]

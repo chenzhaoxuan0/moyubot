@@ -23,6 +23,8 @@
  * 本文件只定义色板与默认值，渲染唯一入口在 ui/SessionLightDot.tsx。
  */
 
+import { isFailedSessionStatus } from "./units.ts";
+
 /** 灯的五种形态；none = 不渲染 */
 export type SessionLightKind = "running" | "attention" | "unreadDone" | "error" | "none";
 
@@ -83,9 +85,7 @@ export function lightFlagsFromStatus(status: string | undefined): {
   running: boolean;
 } {
   return {
-    // failed 用前缀匹配：台账/适配器层存在 failed_executor 这类变体
-    // （backend 真实产生），严格相等会漏红
-    failed: status !== undefined && status.startsWith("failed"),
+    failed: isFailedSessionStatus(status),
     awaiting: status === "awaiting_permission" || status === "awaiting_input",
     running: status === "running",
   };

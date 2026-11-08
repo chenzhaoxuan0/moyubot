@@ -195,7 +195,6 @@ export function ArchivedTasksSettingsSection(): ReactElement {
     const unit = units.find((u) => u.id === entry.unitId) ?? units[0];
     if (!unit) return;
 
-    useTerminalStore.getState().notePendingUnitDispatch(unit.id);
     void dispatchTerminal({
       unitId: unit.id,
       unitName: unit.name,

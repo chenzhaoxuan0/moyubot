@@ -11,7 +11,7 @@ import {
   useChatTerminal,
   type ChatTerminalTab,
 } from "../store/useChatTerminal.ts";
-import { useWorkbench } from "../store/useWorkbench.ts";
+import { selectActiveUnit, useWorkbench } from "../store/useWorkbench.ts";
 import { useAppearance } from "../store/useAppearance.ts";
 import { useChatAccentStyle } from "./useChatAccentStyle.ts";
 import { useIsMobile } from "./mobile/useIsMobile.ts";
@@ -63,8 +63,7 @@ export function ChatTerminalDock() {
 
   /** 当前工作区目录名（新标签标题主体） */
   const cwdLeaf = useCallback((): string => {
-    const { units, activeUnitId } = useWorkbench.getState();
-    const root = units.find((u) => u.id === activeUnitId)?.rootPath ?? "";
+    const root = selectActiveUnit(useWorkbench.getState())?.rootPath ?? "";
     const leaf = root.split(/[\\/]+/).filter(Boolean).pop();
     return leaf || "终端";
   }, []);
@@ -77,7 +76,7 @@ export function ChatTerminalDock() {
         terminalId: tab.id,
         shell: chatTerminalProfile(useChatTerminal.getState().profileId).shell,
         // cwd 只在「新建 PTY」那一刻有意义；getState 直取，换 bot 不重建已活着的终端
-        cwd: useWorkbench.getState().units.find((u) => u.id === useWorkbench.getState().activeUnitId)?.rootPath ?? "",
+        cwd: selectActiveUnit(useWorkbench.getState())?.rootPath ?? "",
         unitId: CHAT_DOCK_UNIT_ID,
         attachScrollback: opts?.attachScrollback,
         onExit: () => {

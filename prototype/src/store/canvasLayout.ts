@@ -1,12 +1,22 @@
 import {
   useTerminalStore,
+  allPaneIds,
   collectGroupIds,
+  newBranchId,
+  newGroupId,
   type GroupLayoutNode,
   type PaneGroup,
   type CanvasPane,
 } from "./useTerminalStore.ts";
 import { useChatPanes } from "./useChatPanes.ts";
 import { useCanvasPopouts, type PopoutEntry } from "./useCanvasPopouts.ts";
+
+/** 布局尾部追加一个组叶子（无布局则以它为根）—— 文档外的组与重挂找回的终端共用 */
+function appendGroupLeaf(layout: GroupLayoutNode | null, gid: string): GroupLayoutNode {
+  return layout === null
+    ? { type: "group", groupId: gid }
+    : { type: "split", id: newBranchId(), direction: "horizontal", first: layout, second: { type: "group", groupId: gid }, ratio: 0.5 };
+}
 
 /**
  * 画布布局持久化（docs/32 组栈模型，v2 文档）——「哪些格、格怎么分、格内
@@ -103,7 +113,7 @@ function snapshot(): CanvasLayoutDoc {
     const r = node.ratio ?? 0.5;
     return { t: "split", d: node.direction === "horizontal" ? "h" : "v", ...(Math.abs(r - 0.5) > RATIO_TOLERANCE ? { r } : {}), f, s };
   };
-  const ids = new Set(Object.values(st.groups).flatMap((g) => [...g.tabOrder]));
+  const ids = new Set(allPaneIds(st.groups));
   const panes = Object.values(st.panes)
     .filter((p) => ids.has(p.id))
     .map((p) => ({ ...p }) as Record<string, unknown> & { id: string; kind: "terminal" | "chat" });
@@ -209,7 +219,7 @@ export function restoreCanvasLayout(): boolean {
       if (f === null || s === null) return null;
       return {
         type: "split",
-        id: `br_${Math.random().toString(36).slice(2, 8)}`,
+        id: newBranchId(),
         direction: snap.d === "h" ? "horizontal" : "vertical",
         first: f,
         second: s,
@@ -220,26 +230,20 @@ export function restoreCanvasLayout(): boolean {
     const docGroups = layout !== null ? collectGroupIds(layout) : [];
     for (const gid of Object.keys(groups)) {
       if (docGroups.includes(gid)) continue;
-      layout =
-        layout === null
-          ? { type: "group", groupId: gid }
-          : { type: "split", id: `br_${Math.random().toString(36).slice(2, 8)}`, direction: "horizontal", first: layout, second: { type: "group", groupId: gid }, ratio: 0.5 };
+      layout = appendGroupLeaf(layout, gid);
     }
     if (layout !== null && layout.type === "group") layout = null;
 
     // ④ 重挂找回但不在文档里的终端（持久化之后新造的）：追加平铺组，不丢；
     //    例外：正弹在独立窗口里的终端不认领（防两处 xterm 抢同一 PTY）
-    const covered = new Set(Object.values(groups).flatMap((g) => [...g.tabOrder]));
+    const covered = new Set(allPaneIds(groups));
     const poppedTerminals = new Set((doc.popouts ?? []).filter((p) => p.kind === "terminal").map((p) => p.terminalId ?? ""));
     const extra = [...liveTerminals].filter((id) => !covered.has(id) && !poppedTerminals.has(id));
     if (extra.length > 0) {
-      const gid = `grp_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`;
+      const gid = newGroupId();
       groups[gid] = { id: gid, tabOrder: extra, activePaneId: extra[extra.length - 1] ?? null, recentPaneIds: [...extra] };
       for (const id of extra) panes[id] = term.panes[id]!;
-      layout =
-        layout === null
-          ? { type: "group", groupId: gid }
-          : { type: "split", id: `br_${Math.random().toString(36).slice(2, 8)}`, direction: "horizontal", first: layout, second: { type: "group", groupId: gid }, ratio: 0.5 };
+      layout = appendGroupLeaf(layout, gid);
     }
     if ((doc.popouts ?? []).length > 0) {
       useCanvasPopouts.setState({

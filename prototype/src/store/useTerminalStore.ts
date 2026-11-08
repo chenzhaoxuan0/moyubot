@@ -100,7 +100,8 @@ export type DropZone = "center" | "left" | "right" | "top" | "bottom";
 
 /* --------------------------------------------------------------- 树纯函数 */
 
-function newBranchId(): string {
+/** 分支节点 id（canvasLayout 的布局恢复/归一同源复用） */
+export function newBranchId(): string {
   return `br_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`;
 }
 
@@ -180,9 +181,6 @@ interface TerminalStoreState {
   defaultProfileId: string;
   /** 首载重挂是否已尝试过（无论找没找到）—— 空态自动建标签必须等它，否则抢占重挂 */
   reattachDone: boolean;
-  /** 派发在途登记（unitId → 过期时刻）：防「标签还没落地又派发一个全新的」双进程竞态 */
-  pendingUnitDispatch: Record<string, number>;
-  notePendingUnitDispatch: (unitId: string) => void;
   /** created 帧推送认领是否已装（幂等闸） */
   claimInstalled: boolean;
   /** 终端启动 Antigravity 时是否默认携带 --dangerously-skip-permissions 免审批 */
@@ -202,8 +200,6 @@ interface TerminalStoreState {
 
   /** 焦点主入口：激活某标签（置组内 activePaneId + activeGroupId） */
   activatePane: (paneId: string) => void;
-  /** 旧名兼容（docs/31 遗留调用面）：chat 窗格激活 */
-  focusChatPaneTab: (paneKey: string) => void;
   /** 激活某个分组格（焦点 = 组内激活标签） */
   setActiveGroup: (groupId: string) => void;
 
@@ -351,8 +347,49 @@ export function adoptTermRow(
   };
 }
 
-function newGroupId(): string {
+/** 组 id（canvasLayout 的布局恢复/归一同源复用） */
+export function newGroupId(): string {
   return `grp_${Math.random().toString(36).slice(2, 8)}_${Date.now().toString(36)}`;
+}
+
+/**
+ * 终端标签构造单源（createTab / splitPane 共用）：profile 解析 + agy 默认 yolo 升级
+ * + 标题规则。splitPane 此前内联了一份走样的副本（缺 yolo 升级与 (YOLO) 标题、
+ * 计数按原始 profileId 而非解析后的 profile.id）。
+ */
+function buildTerminalPane(
+  opts: { profileId?: string; cwd?: string; executorId?: string; title?: string; unitId?: string },
+  ctx: { readonly defaultProfileId: string; readonly agyDefaultYolo: boolean; readonly panes: Readonly<Record<string, CanvasPane>> },
+): CanvasPane {
+  const profileId = opts.profileId ?? ctx.defaultProfileId;
+  const profile: TerminalProfile = SUPPORTED_TERMINAL_PROFILES.find((p) => p.id === profileId) ?? SUPPORTED_TERMINAL_PROFILES[0]!;
+  let executorId = opts.executorId;
+  let title = opts.title;
+  // 当用户未显式指定 yolo 且全局偏好配置了 agy 默认走 yolo 时，直启 agy:yolo
+  const bareExec = executorId ? executorId.replace(/^daemon:/, "").toLowerCase() : "";
+  if ((bareExec === "agy" || bareExec === "antigravity") && ctx.agyDefaultYolo) {
+    executorId = "agy:yolo";
+    if (!title) title = "Antigravity (YOLO)";
+  }
+  const count = Object.values(ctx.panes).filter((p) => p.kind === "terminal" && p.profileId === profile.id).length + 1;
+  return {
+    id: `term_${Math.random().toString(36).slice(2, 9)}_${Date.now().toString(36)}`,
+    kind: "terminal",
+    title:
+      title ??
+      (executorId
+        ? executorId.endsWith(":yolo")
+          ? `${executorId.replace(/:yolo$/, "")} (YOLO)`
+          : `${executorId} (pwsh)`
+        : `${profile.name} #${count}`),
+    shell: profile.shell,
+    profileId: profile.id,
+    icon: executorId ? executorId : profile.icon,
+    cwd: opts.cwd ?? "",
+    executorId,
+    unitId: opts.unitId,
+    createdAt: Date.now(),
+  };
 }
 
 /** 焦点跟随用的辅助：组内下一个激活标签（关标签后按 MRU 恢复） */
@@ -497,12 +534,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => {
     defaultProfileId: "pwsh",
     reattachDone: false,
     claimInstalled: false,
-    pendingUnitDispatch: {},
     agyDefaultYolo: initialTerminalPrefs.agyDefaultYolo,
-
-    notePendingUnitDispatch: (unitId) => {
-      set((s) => ({ pendingUnitDispatch: { ...s.pendingUnitDispatch, [unitId]: Date.now() + 5000 } }));
-    },
 
     setAgyDefaultYolo: (val) => {
       set({ agyDefaultYolo: val });
@@ -510,45 +542,9 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => {
     },
 
     createTab: (opts = {}) => {
-      const profileId = opts.profileId ?? get().defaultProfileId;
-      const fallbackProfile: TerminalProfile = SUPPORTED_TERMINAL_PROFILES[0]!;
-      const profile: TerminalProfile =
-        SUPPORTED_TERMINAL_PROFILES.find((p) => p.id === profileId) ?? fallbackProfile;
-
-      let finalExecutorId = opts.executorId;
-      let finalTitle = opts.title;
-
-      // 当用户未显式指定 yolo 且全局偏好配置了 agy 默认走 yolo 时，直启 agy:yolo
-      const bareExec = finalExecutorId ? finalExecutorId.replace(/^daemon:/, "").toLowerCase() : "";
-      if ((bareExec === "agy" || bareExec === "antigravity") && get().agyDefaultYolo) {
-        finalExecutorId = "agy:yolo";
-        if (!finalTitle) finalTitle = "Antigravity (YOLO)";
-      }
-
-      const id = `term_${Math.random().toString(36).slice(2, 9)}_${Date.now().toString(36)}`;
-      const count = Object.values(get().panes).filter((p) => p.kind === "terminal" && p.profileId === profile.id).length + 1;
-      const title =
-        finalTitle ??
-        (finalExecutorId
-          ? finalExecutorId.endsWith(":yolo")
-            ? `${finalExecutorId.replace(/:yolo$/, "")} (YOLO)`
-            : `${finalExecutorId} (pwsh)`
-          : `${profile.name} #${count}`);
-
-      const pane: CanvasPane = {
-        id,
-        kind: "terminal",
-        title,
-        shell: profile.shell,
-        profileId: profile.id,
-        icon: finalExecutorId ? finalExecutorId : profile.icon,
-        cwd: opts.cwd ?? "",
-        executorId: finalExecutorId,
-        unitId: opts.unitId,
-        createdAt: Date.now(),
-      };
+      const pane = buildTerminalPane(opts, get());
       addPaneToGroup(pane);
-      return id;
+      return pane.id;
     },
 
     createChatTab: (paneKey) => {
@@ -569,8 +565,6 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => {
         return;
       }
     },
-
-    focusChatPaneTab: (paneKey) => get().activatePane(paneKey),
 
     setActiveGroup: (groupId) => {
       const group = get().groups[groupId];
@@ -610,23 +604,9 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => {
         );
         return gid;
       }
-      // 终端新标签直接构造后入组（createTab 的字段逻辑内联，避免二次 set 抖动）
-      const profileId = opts.profileId ?? state.defaultProfileId;
-      const profile = SUPPORTED_TERMINAL_PROFILES.find((p) => p.id === profileId) ?? SUPPORTED_TERMINAL_PROFILES[0]!;
-      const id = `term_${Math.random().toString(36).slice(2, 9)}_${Date.now().toString(36)}`;
-      const count = Object.values(state.panes).filter((p) => p.kind === "terminal" && p.profileId === profileId).length + 1;
-      const pane: CanvasPane = {
-        id,
-        kind: "terminal",
-        title: opts.title ?? (opts.executorId ? `${opts.executorId} (pwsh)` : `${profile.name} #${count}`),
-        shell: profile.shell,
-        profileId: profile.id,
-        icon: opts.executorId ? opts.executorId : profile.icon,
-        cwd: opts.cwd ?? "",
-        executorId: opts.executorId,
-        unitId: opts.unitId,
-        createdAt: Date.now(),
-      };
+      // 终端新标签直接构造后入组（构造与 createTab 同源；不走 createTab 是为了
+      // 入「新组」而非激活组，且布局 set 与入组一次落定）
+      const pane = buildTerminalPane(opts, state);
       set((s) => ({
         groups,
         layout:
@@ -703,7 +683,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => {
     movePaneToGroup: (paneId, toGroupId, index) => {
       const state = get();
       if (state.panes[paneId] === undefined || state.groups[toGroupId] === undefined) return;
-      const fromGroup = Object.values(state.groups).find((g) => g.tabOrder.includes(paneId));
+      const fromGroup = findGroupOfPane(state.groups, paneId);
       if (fromGroup === undefined) return;
       if (fromGroup.id === toGroupId) {
         // 组内重排
@@ -757,8 +737,7 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => {
     },
 
     isSplitDropNoOp: (paneId, targetGroupId) => {
-      const state = get();
-      const fromGroup = Object.values(state.groups).find((g) => g.tabOrder.includes(paneId));
+      const fromGroup = findGroupOfPane(get().groups, paneId);
       if (fromGroup === undefined) return false;
       // 拖自己组里最后一个标签到自身四边：分出来的新组还是它，等于没动
       return fromGroup.id === targetGroupId && fromGroup.tabOrder.length === 1;
@@ -907,9 +886,9 @@ export const useTerminalStore = create<TerminalStoreState>((set, get) => {
   };
 });
 
-/* ------------------------------------------------------- 兼容别名（docs/31 遗留面） */
+/* ------------------------------------------------------- 组查询助手 */
 
-/** 按窗格 id 找所属组（消费方：TUI 活标签激活 / popout / 布局恢复） */
+/** 按窗格 id 找所属组（store 内 movePaneToGroup / isSplitDropNoOp 同源） */
 export function findGroupOfPane(
   groups: Readonly<Record<string, PaneGroup>>,
   paneId: string,
@@ -917,7 +896,7 @@ export function findGroupOfPane(
   return Object.values(groups).find((g) => g.tabOrder.includes(paneId));
 }
 
-/** 树/组状态里的全部窗格 id（持久化与清理用） */
+/** 组状态里的全部窗格 id（canvasLayout 的持久化与归一同源） */
 export function allPaneIds(groups: Readonly<Record<string, PaneGroup>>): string[] {
   return Object.values(groups).flatMap((g) => [...g.tabOrder]);
 }

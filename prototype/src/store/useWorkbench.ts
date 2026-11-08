@@ -10,6 +10,7 @@ import type {
 } from "../core/adapter.ts";
 import type { RuntimeEvent, SteerQueueItem } from "../core/events.ts";
 import {
+  appendInputHistory,
   asModelId,
   asRuntimeId,
   asSessionId,
@@ -17,6 +18,7 @@ import {
   DEFAULT_CONTEXT_MANIFEST,
   ensureContextPresets,
   normalizeContextManifest,
+  normalizeSessionStatus,
   resolveActivePresetName,
   resolveEffectiveTurnManifest,
   LEGACY_CONTEXT_MANIFEST,
@@ -1155,7 +1157,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     // 挂 true 的话，后续 session.status 事件找不到活跃会话、永远没人清它 ——
     // openSession 门禁从此锁死，被切走的运行中对话也回不去（侧栏历史行 /
     // 对话标签重新聚焦走的就是这条路）。后台运行状态由侧栏历史状态灯与
-    // 画布标签的快照事件泵承担（任务栏机制已退役，docs/32 §九）。
+    // 画布标签的快照事件泵承担（任务栏机制已退役，docs/32 §十）。
     // 临时注入配置按 bot 记忆：切回来恢复这个 bot 上次的覆盖态（不重置回跟随预设）
     const restoredTurn = get().turnContextByUnit[String(activeUnitId)] ?? DEFAULT_TURN_CONFIG;
     set({
@@ -1462,21 +1464,16 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     return true;
   },
 
-  /** 对账水合的状态归一：契约六值直通；failed 前缀（failed_executor 等）
-   *  归 failed；未知值保守落 idle（无灯）—— 水合是快照不是事件流，
-   *  宁可少亮不可误亮转圈 */
+  /** 对账水合的状态归一（normalizeSessionStatus 单源）：契约值直通；failed 前缀
+   *  （failed_executor 等）归 failed；未知值保守落 idle（无灯）—— 水合是快照不是
+   *  事件流，宁可少亮不可误亮转圈 */
   hydrateSessions: (rows) =>
     set((s) => {
       const known = new Set(s.sessions.map((x) => String(x.id)));
-      const KNOWN = new Set(["running", "idle", "done", "awaiting_permission", "awaiting_input"]);
       const add: Session[] = [];
       for (const r of rows) {
         if (known.has(String(r.id))) continue;
-        const status: SessionStatus = KNOWN.has(r.status)
-          ? (r.status as SessionStatus)
-          : r.status.startsWith("failed")
-            ? "failed"
-            : "idle";
+        const status = normalizeSessionStatus(r.status, "idle");
         add.push({
           id: asSessionId(r.id),
           unitId: asUnitId(r.unitId),
@@ -1668,8 +1665,9 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
     };
     const usages: Record<string, UsageSnapshot> = {};
     // 输入历史随视图切换整段重建（终端换 shell 同款）：本段账本里的用户消息
-    // 按时间升序进来，连续去重。fullPrompt（含附件块）也照收 —— 那是当时的原话。
-    const history: string[] = [];
+    // 按时间升序进来（appendInputHistory 单源：连续去重 + 上限掐头 —— 此前这里
+    // 只去重不截断，长会话重建出超限的历史）。fullPrompt（含附件块）也照收 —— 那是当时的原话。
+    let history: readonly string[] = [];
     for (const r of rebuilt) {
       const e = r.event;
       if (!("sessionId" in e)) continue;
@@ -1684,8 +1682,7 @@ export const useWorkbench = create<WorkbenchState>((set, get) => ({
           at: r.at,
         };
       } else if (e.type === "message.delta" && e.role === "user") {
-        const t = e.text.trim();
-        if (t !== "" && history[history.length - 1] !== t) history.push(t);
+        history = appendInputHistory(history, e.text);
       }
     }
     set((s) => {
@@ -2418,30 +2415,21 @@ function applyDisplayEcho(event: RuntimeEvent): RuntimeEvent {
   return { ...event, text: entry.displayText, attachments: entry.attachments };
 }
 
-/** 输入历史上限（终端 shell 的 HISTSIZE 同位） */
-const INPUT_HISTORY_CAP = 200;
-
-/** 追加一条输入历史：空串不入史、连续重复去重、超限掐头 */
+/** 追加一条输入历史（规则单源见 core 的 appendInputHistory） */
 function pushInputHistory(text: string): void {
-  const t = text.trim();
-  if (t === "") return;
   useWorkbench.setState((s) => {
-    if (s.inputHistory[s.inputHistory.length - 1] === t) return {};
-    const next = [...s.inputHistory, t];
-    if (next.length > INPUT_HISTORY_CAP) next.splice(0, next.length - INPUT_HISTORY_CAP);
-    return { inputHistory: next };
+    const next = appendInputHistory(s.inputHistory, text);
+    return next === s.inputHistory ? {} : { inputHistory: next };
   });
 }
 
-/** 归一化 turn 完成态 → 契约 SessionStatus */
+/** 归一化 turn 完成态 → 契约 SessionStatus（未知值落 running：帧在流里，宁可多转一拍） */
 function mapTurnStatus(raw: string): SessionStatus {
-  if (raw.startsWith("failed")) return "failed";
-  if (raw === "idle" || raw === "running" || raw === "done" || raw === "awaiting_permission" || raw === "awaiting_input") return raw;
-  return "running";
+  return normalizeSessionStatus(raw, "running");
 }
 
 /**
- * 执行器/会话切换门禁（ADR 0012 原 idle-only；底栏任务栏上线后放宽）：
+ * 执行器/会话切换门禁（ADR 0012 原 idle-only；会话画布 + 状态灯上线后放宽）：
  * 只拦「对话在等你回答」（awaiting_permission / awaiting_input）—— 那是当前
  * 视图里挂着的问题，切走会把待决问题藏起来（侧栏历史行与画布 chat 标签会亮
  * 待交互灯提醒，但对话内的裁决弹层/输入请求只有回到现场才能处理）。运行中
@@ -2468,7 +2456,7 @@ function consumeEvents(adapter: RuntimeAdapter): void {
       // daemon 回显只有合成文本 —— 换回登记过的原始文本 + chips 再入时间线。
       const event = applyDisplayEcho(rawEvent);
       useWorkbench.setState((s) => {
-        // 谱系过滤（底栏任务栏的配套）：时间线只收「活跃视图」的事件。规则：
+        // 谱系过滤（会话画布的配套：后台会话事件改由快照泵转投）：时间线只收「活跃视图」的事件。规则：
         // 台账已认识、又不是活跃会话的 → 丢弃（被切走的运行中对话不再把事件
         // 灌进新视图）；台账不认识的 → 收（run() 的 fork/续聊
         // 开新段流程在 startSession 的 await 期间就要靠泵实时入账，那时

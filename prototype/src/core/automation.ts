@@ -73,7 +73,7 @@ export interface AutomationLink {
  * - `terminal`：到点在前端 PTY 里拉执行器 TUI 本尊（免审批），人可看可插手
  * - `chat`：到点走 headless 派发 + 广播 `session.foreground` 把前端拉到该会话 ——
  *   对话开在主聊天页前台，可看可插话（steer 队列天然支持），GUI 原生形态
- * - `headless`：纯后台 host 会话，不拉前台（历史/任务栏/监控里事后可看）
+ * - `headless`：纯后台 host 会话，不拉前台（侧栏历史 / 通知中心 / 监控里事后可看）
  */
 export type LaunchMode = "terminal" | "chat" | "headless";
 

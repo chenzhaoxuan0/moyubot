@@ -35,13 +35,13 @@ import {
 } from "../adapters/daemon/client.ts";
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { useSidePane } from "../store/useSidePane.ts";
-import { useHistoryPrefs } from "../store/useHistoryPrefs.ts";
-import { useTerminalStore } from "../store/useTerminalStore.ts";
+import { entryKeys, useHistoryPrefs } from "../store/useHistoryPrefs.ts";
 import { useChatPanes } from "../store/useChatPanes.ts";
 import { asSessionId, asUnitId, SESSION_SOURCE_LABEL, type SessionSource } from "../core/units.ts";
 import { useShell } from "../store/useShell.ts";
 import { collapseForkVersions } from "./forkHistory.ts";
 import { MarkdownContent } from "./MarkdownContent.tsx";
+import { SessionLightDot } from "./SessionLightDot.tsx";
 import { cn } from "./cn.ts";
 
 /**
@@ -68,13 +68,14 @@ const KIND_META: Record<UnitHistoryEntry["kind"], { icon: typeof ListTodo; label
   session: { icon: MessageSquare, label: "会话", cls: "bg-line-soft text-graphite" },
 };
 
-function statusMeta(status: string): { icon: typeof CircleCheck; cls: string; label: string } {
+function statusMeta(status: string): { icon: typeof CircleCheck | null; cls: string; label: string } {
   if (status === "done" || status === "completed" || status === "idle") {
     return { icon: CircleCheck, cls: "text-gain", label: "完成" };
   }
   if (status === "failed") return { icon: CircleAlert, cls: "text-loss", label: "失败" };
   if (status === "skipped") return { icon: CircleAlert, cls: "text-ash", label: "跳过" };
-  if (status === "running") return { icon: CircleDot, cls: "text-blue-500 animate-pulse", label: "运行中" };
+  // 运行中 = 转圈（灯模型唯一形制，渲染走 SessionLightDot；呼吸点已退役）
+  if (status === "running") return { icon: null, cls: "text-graphite", label: "运行中" };
   return { icon: CircleDot, cls: "text-graphite", label: status };
 }
 
@@ -209,8 +210,6 @@ export function HistoryPane({
     const args = resumeArgsFor(e.runtimeId, e.resumeRef);
     if (u === undefined || args === null) return;
     setResumeBusy(e.key);
-    // 派发意图先登记：紧跟的「终端跟随 bot」effect 看到在途就不再发一个全新 TUI
-    useTerminalStore.getState().notePendingUnitDispatch(unitId);
     void dispatchTerminal({
       unitId,
       unitName: u.name,
@@ -227,9 +226,7 @@ export function HistoryPane({
         // TUI 恢复的落点是终端窗格标签（docs/31 画布常驻，created 帧认领会激活）
         useShell.getState().setMainView("chat");
         // 打开即已读：熄掉侧栏的「完成未读」灯
-        useHistoryPrefs
-          .getState()
-          .markViewed([e.key, ...(e.sessionId !== null ? [`session-${e.sessionId}`] : [])]);
+        useHistoryPrefs.getState().markViewed(entryKeys(e));
         onFinished();
       })
       .catch((err2: unknown) => console.error("[HistoryPane] TUI 恢复失败:", err2))
@@ -248,7 +245,7 @@ export function HistoryPane({
     // 幂等开窗格：已有就聚焦（窗格内切到那段），没有就开标签
     useChatPanes.getState().openChatPane({ unitId: String(unitId), sessionId: e.sessionId, runtimeId: e.runtimeId });
     // 打开即已读：熄掉侧栏的「完成未读」灯
-    useHistoryPrefs.getState().markViewed([e.key, `session-${e.sessionId}`]);
+    useHistoryPrefs.getState().markViewed(entryKeys(e));
     onFinished();
   };
 
@@ -308,7 +305,6 @@ export function HistoryPane({
     const args = resumeArgsFor(s.executorId, s.sessionId);
     if (u === undefined || args === null) return;
     setResumeBusy(`native-${s.executorId}-${s.sessionId}`);
-    useTerminalStore.getState().notePendingUnitDispatch(unitId);
     void dispatchTerminal({
       unitId,
       unitName: u.name,
@@ -913,7 +909,7 @@ function HistoryRow({
                 当前定位
               </span>
             )}
-            <SIcon size={12} className={cn("shrink-0", st.cls)} />
+            {SIcon === null ? <SessionLightDot kind="running" /> : <SIcon size={12} className={cn("shrink-0", st.cls)} />}
             <span className={cn("shrink-0 text-caption", st.cls)}>{st.label}</span>
             {dur !== null && <span className="shrink-0 text-caption text-ash">{dur}</span>}
             <span className="shrink-0 text-caption text-ash">{formatWhen(entry.startedAt)}</span>

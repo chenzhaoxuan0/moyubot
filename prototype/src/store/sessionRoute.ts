@@ -18,7 +18,7 @@
 
 import { useWorkbench } from "./useWorkbench.ts";
 import { useShell } from "./useShell.ts";
-import { asSessionId, asUnitId } from "../core/units.ts";
+import { asUnitId } from "../core/units.ts";
 
 interface RouteTarget {
   readonly unitId: string;

@@ -17,7 +17,7 @@ import { cn } from "./cn.ts";
  * 会话画布弹出窗口壳（docs/31 三期）—— `#/popout/...` 路由下的精简顶层：
  * 只有一个窗格 + 自绘拖拽头/关闭钮（window.close() 对 JS 打开的窗口两栖可用，
  * Electron 与浏览器一致）。不装 WorkspaceShell 的任何全局机制（路由镜像 /
- * 任务栏 / 通知 / 布局持久化）——它是别人窗口里的一片叶子，不是工作台。
+ * 通知 / 布局持久化）——它是别人窗口里的一片叶子，不是工作台。
  *
  * 关闭通告：beforeunload 向 opener postMessage 自身 URL，主窗口按 URL 对账
  * 重认领（终端 readoptTerminal / 对话 openChatPane），不依赖它的内存台账。
@@ -28,7 +28,8 @@ export type PopoutRoute =
   | { kind: "chat"; unitId: string; sessionId: string | null };
 
 export function PopoutShell({ route }: { route: PopoutRoute }) {
-  // 关闭通告（挂载即装；unmount 不拆——beforeunload 要活到窗口关掉那一刻）
+  // 关闭通告：挂载即装、卸载即拆。窗口关闭时 beforeunload 先于 React 卸载触发，
+  // 拆监听不影响通告送达；拆是为了 StrictMode 双挂 / 路由内重挂时不叠两份监听
   useEffect(() => {
     const onBeforeUnload = (): void => {
       try {

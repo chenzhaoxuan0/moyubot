@@ -5,7 +5,7 @@ import { useWorkState, WORK_PHASE_DESCRIPTIONS } from "../store/useWorkState.ts"
 import { useWorkbench } from "../store/useWorkbench.ts";
 import { fetchAutomations, fetchChannelStatus } from "../adapters/daemon/client.ts";
 import { getGuardianConfigRpc } from "../store/useMemoryPanel.ts";
-import { SESSION_LIGHT_PALETTE, type SessionLightColorState } from "../core/sessionLight.ts";
+import { SESSION_LIGHT_COLOR_STATES, SESSION_LIGHT_DEFAULT_COLORS, SESSION_LIGHT_PALETTE, type SessionLightColorState } from "../core/sessionLight.ts";
 import { useSessionLights } from "../store/useSessionLights.ts";
 import { SessionLightDot } from "./SessionLightDot.tsx";
 import { cn } from "./cn.ts";
@@ -62,6 +62,12 @@ const LIGHT_ROWS: readonly { state: SessionLightColorState; name: string; desc: 
     desc: "执行出错 / 非正常退出，需要你辅助定位。侧栏行与画布 chat 标签同亮。",
   },
 ];
+
+/** 「恢复默认灯色」按钮的色名串：默认色 → 色板中文名，按图例同序（态集单源派生，
+ *  改默认色或色板不用回来改文案） */
+const DEFAULT_COLOR_NAMES = SESSION_LIGHT_COLOR_STATES.map(
+  (s) => SESSION_LIGHT_PALETTE.find((p) => p.hex === SESSION_LIGHT_DEFAULT_COLORS[s])?.label ?? SESSION_LIGHT_DEFAULT_COLORS[s],
+).join(" / ");
 
 export function SessionLightLegendBadge({
   popoverUp = false,
@@ -177,7 +183,7 @@ export function SessionLightLegendBadge({
                 className="mt-1.5 flex cursor-pointer items-center gap-1 rounded-btn px-1.5 py-0.5 text-[11px] text-graphite transition hover:bg-line hover:text-ink"
               >
                 <RotateCcw size={10} />
-                恢复默认灯色（绿 / 琥珀 / 红 / 青）
+                恢复默认灯色（{DEFAULT_COLOR_NAMES}）
               </button>
             </div>
           </div>

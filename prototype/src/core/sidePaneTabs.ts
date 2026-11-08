@@ -169,18 +169,20 @@ export type SidePaneTab =
  */
 export type SidePaneTabScope = "unit" | "workspace";
 
-export function tabScope(tab: SidePaneTab): SidePaneTabScope {
-  return tab.type === "notify" || tab.type === "newbot" || tab.type === "scm" ? "workspace" : "unit";
-}
+/** workspace 级 tab 的 type 白名单单源（tabScope / isUnitTab / 窄类型都从这里派生）——
+ *  新增 workspace 级 tab 只改这一处 */
+const WORKSPACE_TAB_TYPES = ["notify", "newbot", "scm"] as const satisfies readonly SidePaneTab["type"][];
+type WorkspaceTabType = (typeof WORKSPACE_TAB_TYPES)[number];
 
 /** unit 级 tab 的窄类型（带 ownerUnitId）—— 类型守卫给 TS 收窄用，语义同 tabScope */
-export type UnitScopedSidePaneTab = Exclude<
-  SidePaneTab,
-  NotificationsSidePaneTab | NewBotSidePaneTab | SourceControlSidePaneTab
->;
+export type UnitScopedSidePaneTab = Exclude<SidePaneTab, { type: WorkspaceTabType }>;
 
 export function isUnitTab(tab: SidePaneTab): tab is UnitScopedSidePaneTab {
-  return tab.type !== "notify" && tab.type !== "newbot" && tab.type !== "scm";
+  return !(WORKSPACE_TAB_TYPES as readonly string[]).includes(tab.type);
+}
+
+export function tabScope(tab: SidePaneTab): SidePaneTabScope {
+  return isUnitTab(tab) ? "unit" : "workspace";
 }
 
 export interface SidePaneState {

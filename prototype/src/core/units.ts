@@ -564,30 +564,88 @@ export function orderUnitsLikeSidebar(
       const bs = b.id === "steward" || (b.tags ?? []).includes("steward");
       return as === bs ? 0 : as ? -1 : 1;
     });
-  const orderedNormals = unitOrder
-    ? stewardFirst(normals).sort(
-        (a, b) => (unitOrder.indexOf(a.id) + 1 || 99) - (unitOrder.indexOf(b.id) + 1 || 99),
-      )
-    : stewardFirst(normals);
-  const orderedResidents = residentOrder
-    ? stewardFirst(residents).sort(
-        (a, b) => (residentOrder.indexOf(a.id) + 1 || 99) - (residentOrder.indexOf(b.id) + 1 || 99),
-      )
-    : stewardFirst(residents);
-  return { residentUnits: orderedResidents, normalUnits: orderedNormals };
+  /** 按拖拽序排（sort 稳定：未记录的单元同列末尾、保持缺省相对序）；无记录 = 缺省序 */
+  const byOrderList = (list: WorkUnit[], order: readonly string[] | null | undefined): WorkUnit[] => {
+    const base = stewardFirst(list);
+    if (!order) return base;
+    const rank = (id: string): number => {
+      const i = order.indexOf(id);
+      return i < 0 ? Number.POSITIVE_INFINITY : i;
+    };
+    return base.sort((a, b) => {
+      const ra = rank(a.id);
+      const rb = rank(b.id);
+      return ra === rb ? 0 : ra < rb ? -1 : 1;
+    });
+  };
+  return { residentUnits: byOrderList(residents, residentOrder), normalUnits: byOrderList(normals, unitOrder) };
+}
+
+/**
+ * 侧栏拖拽重排单源（常驻节 / 普通节共用）：把 dragged 挪到 target 的位置，返回
+ * **全量**持久序。当前节只看得到可见子集（[bot|项目] 视图过滤），只写子集会把
+ * 另一视图的自定义序整表覆盖清掉 —— 这里以全量持久序为基座，可见 id 占的槽位
+ * 按新相对序依次回填，不可见的原位不动；已删单元（不在 alive 里）顺手剔除。
+ * 拖拽源或落点不在可见集里 → null（调用方不写盘）。
+ */
+export function reorderUnitIds(
+  visible: readonly string[],
+  persisted: readonly string[] | null,
+  dragged: string,
+  target: string,
+  alive: ReadonlySet<string>,
+): string[] | null {
+  const from = visible.indexOf(dragged);
+  const to = visible.indexOf(target);
+  if (from < 0 || to < 0) return null;
+  const next = [...visible];
+  next.splice(to, 0, ...next.splice(from, 1));
+  // 基座 = 仍存在的持久序 + 持久序里还没有的可见 id（首次拖拽 / 新 bot，按显示序
+  // 追加 —— 与 orderUnitsLikeSidebar「未记录排末尾」一致，槽位序 = 显示序）
+  const base = (persisted ?? []).filter((id) => alive.has(id));
+  for (const id of visible) if (!base.includes(id)) base.push(id);
+  const visibleSet = new Set(visible);
+  let k = 0;
+  return base.map((id) => (visibleSet.has(id) ? next[k++]! : id));
 }
 
 // ---------------------------------------------------------------------------
 // 会话
 // ---------------------------------------------------------------------------
 
-export type SessionStatus =
-  | "idle"
-  | "running"
-  | "awaiting_permission"
-  | "awaiting_input"
-  | "failed"
-  | "done";
+/** 契约会话状态（值集单源：类型、水合与 turn 帧的归一都从这里派生） */
+export const SESSION_STATUSES = ["idle", "running", "awaiting_permission", "awaiting_input", "failed", "done"] as const;
+export type SessionStatus = (typeof SESSION_STATUSES)[number];
+
+/** failed 前缀判定：台账 / 适配器层存在 failed_executor 这类变体（backend 真实
+ *  产生），严格相等会漏判 —— 灯判定与状态归一共用 */
+export function isFailedSessionStatus(raw: string | undefined): boolean {
+  return raw !== undefined && raw.startsWith("failed");
+}
+
+/**
+ * 原始状态串（台账快照 / turn 完成帧）→ 契约 SessionStatus 的归一单源：failed 前缀
+ * 归 failed，契约值直通，其余落调用方给的兜底 —— 水合快照保守落 idle（宁可少亮
+ * 不可误亮转圈），turn 帧落 running。
+ */
+export function normalizeSessionStatus(raw: string, fallback: SessionStatus): SessionStatus {
+  if (isFailedSessionStatus(raw)) return "failed";
+  return (SESSION_STATUSES as readonly string[]).includes(raw) ? (raw as SessionStatus) : fallback;
+}
+
+/** 输入历史上限（终端 shell 的 HISTSIZE 同位） */
+export const INPUT_HISTORY_CAP = 200;
+
+/**
+ * 输入历史追加规则单源（全局输入框 / 窗格快照泵 / openSession 账本重建三处共用）：
+ * 空串不入史、连续重复去重、超限掐头。无变化时原样返回同一引用（调用方可据此短路）。
+ */
+export function appendInputHistory(history: readonly string[], text: string): readonly string[] {
+  const t = text.trim();
+  if (t === "" || history[history.length - 1] === t) return history;
+  const next = [...history, t];
+  return next.length > INPUT_HISTORY_CAP ? next.slice(-INPUT_HISTORY_CAP) : next;
+}
 
 /**
  * 会话来源。四个端是同一个 bot 的四扇窗口，来源不同**只**体现在这个字段上

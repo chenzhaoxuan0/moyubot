@@ -6,7 +6,7 @@ import { useChatPanes } from "../store/useChatPanes.ts";
 import { useCanvasDnd } from "../store/canvasDnd.ts";
 import { useCanvasPopouts } from "../store/useCanvasPopouts.ts";
 import { dispatchTerminal } from "../adapters/daemon/client.ts";
-import { useWorkbench } from "../store/useWorkbench.ts";
+import { selectActiveUnit, useWorkbench } from "../store/useWorkbench.ts";
 import { useSidePane } from "../store/useSidePane.ts";
 import { terminalSessionRegistry } from "../store/TerminalSessionManager.ts";
 import { deriveSessionLight, lightFlagsFromStatus, type SessionLightKind } from "../core/sessionLight.ts";
@@ -20,6 +20,13 @@ import { cn } from "./cn.ts";
 /** 悬停焦点预览的时长阈值（B，docs/32 §四.4） */
 const HOVER_FOCUS_PREVIEW_MS = 300;
 
+/** 条尾图标钮（h-5 w-5）的统一样式；重启钮的 teal 悬停与最大化钮是仅有的变体 */
+const TAIL_BTN = "flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink";
+
+/** 选择▾ 下拉菜单项的统一样式（归拢项是 teal 文字的唯一变体） */
+const MENU_ITEM =
+  "flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal active:bg-teal-tint";
+
 /**
  * 拆分某格（组栈语义：该格一分为二，新组承载新标签 —— 焦点标签是 chat → 新格
  * 开草稿对话；是终端 → 开终端）。条尾直出按钮与「选择▾」菜单共用。
@@ -32,7 +39,7 @@ function splitGroupPane(groupId: string, direction: "horizontal" | "vertical"): 
     ts.splitPane({ direction, chatPaneKey: useChatPanes.getState().createDraftRecord() });
     return;
   }
-  ts.splitPane({ direction, cwd: useWorkbench.getState().units.find((u) => u.id === useWorkbench.getState().activeUnitId)?.rootPath });
+  ts.splitPane({ direction, cwd: selectActiveUnit(useWorkbench.getState())?.rootPath });
 }
 
 /**
@@ -365,11 +372,12 @@ function GroupTailActions({ groupId }: { groupId: string }) {
   // getState 在 selector 里读了也不会触发重算 —— 草稿格选完 bot 按钮不出现的坑）：
   // 终端 store 出 activePaneId → chat store 出 unitId → workbench 出 unit 元素
   const activePaneIdOfGroup = useTerminalStore((s) => s.groups[groupId]?.activePaneId ?? null);
-  const group = useTerminalStore((s) => s.groups[groupId]);
+  // 存在性只订布尔（整组对象每次激活/MRU 都换引用，订它会让条尾跟着空转重渲）
+  const groupExists = useTerminalStore((s) => s.groups[groupId] !== undefined);
   const activePane = useTerminalStore((s) => (activePaneIdOfGroup === null ? undefined : s.panes[activePaneIdOfGroup]));
   const chatUnitId = useChatPanes((s) => (activePaneIdOfGroup === null ? "" : (s.panes[activePaneIdOfGroup]?.unitId ?? "")));
   const chatUnit = useWorkbench((s) => (chatUnitId === "" ? undefined : s.units.find((u) => u.id === chatUnitId)));
-  if (group === undefined) return null;
+  if (!groupExists) return null;
   const isChat = activePane?.kind === "chat";
 
   return (
@@ -383,7 +391,7 @@ function GroupTailActions({ groupId }: { groupId: string }) {
               onClick={() => useChatPanes.getState().openChatPane({ unitId: chatUnit.id, sessionId: null })}
               title={`给 ${chatUnit.name} 新开一个对话标签（草稿）`}
               aria-label="新对话"
-              className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
+              className={TAIL_BTN}
             >
               <MessageSquarePlus size={11} />
             </button>
@@ -393,7 +401,7 @@ function GroupTailActions({ groupId }: { groupId: string }) {
             onClick={() => useSidePane.getState().openTab({ unitId: chatUnit.id, unitName: chatUnit.name })}
             title="在右侧面板打开这个 bot 的历史会话列表"
             aria-label="历史会话"
-            className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
+            className={TAIL_BTN}
           >
             <History size={11} />
           </button>
@@ -408,7 +416,7 @@ function GroupTailActions({ groupId }: { groupId: string }) {
             onClick={() => terminalSessionRegistry.get(activePane.id)?.clear()}
             title="清空当前窗格屏幕 (Ctrl+L 重绘)"
             aria-label="清屏"
-            className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
+            className={TAIL_BTN}
           >
             <Trash2 size={11} />
           </button>
@@ -432,7 +440,7 @@ function GroupTailActions({ groupId }: { groupId: string }) {
             onClick={() => splitGroupPane(groupId, "horizontal")}
             title="向右拆分当前格：新格承载新标签"
             aria-label="向右拆分当前格"
-            className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
+            className={TAIL_BTN}
           >
             <Columns2 size={11} />
           </button>
@@ -441,7 +449,7 @@ function GroupTailActions({ groupId }: { groupId: string }) {
             onClick={() => splitGroupPane(groupId, "vertical")}
             title="向下拆分当前格：新格承载新标签"
             aria-label="向下拆分当前格"
-            className="flex h-5 w-5 items-center justify-center rounded text-ash transition hover:bg-line-soft hover:text-ink"
+            className={TAIL_BTN}
           >
             <Rows2 size={11} />
           </button>
@@ -453,8 +461,7 @@ function GroupTailActions({ groupId }: { groupId: string }) {
         <button
           type="button"
           onClick={() => {
-            const paneId = group.activePaneId;
-            if (paneId !== null) useTerminalStore.getState().toggleMaximize(paneId);
+            if (activePaneIdOfGroup !== null) useTerminalStore.getState().toggleMaximize(activePaneIdOfGroup);
           }}
           title="最大化当前标签（整格全幅显示）"
           aria-label="最大化当前标签"
@@ -481,9 +488,9 @@ function ChatTabLight({ paneId }: { paneId: string }) {
     sessionId === null ? undefined : s.sessions.find((x) => String(x.id) === sessionId)?.status,
   );
   if (sessionId === null || status === undefined) return null;
-  const flags = lightFlagsFromStatus(status);
-  const kind: SessionLightKind = deriveSessionLight({ ...flags, unread: false });
-  if (kind === "none" || kind === "unreadDone") return null;
+  // unread 恒 false（标签不承担已读语义）→ 判定不会产出 unreadDone，只剩 none 要滤
+  const kind: SessionLightKind = deriveSessionLight({ ...lightFlagsFromStatus(status), unread: false });
+  if (kind === "none") return null;
   return <SessionLightDot kind={kind} size="md" />;
 }
 
@@ -521,7 +528,7 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
   const [menuPos, setMenuPos] = useState<ReturnType<typeof createMenuPosOf> | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const { isMobile } = useIsMobile();
-  const unit = useWorkbench((s) => s.units.find((u) => u.id === s.activeUnitId));
+  const unit = useWorkbench(selectActiveUnit);
   const activeRuntimeId = useWorkbench((s) => s.activeRuntimeId);
   const runtimes = useWorkbench((s) => s.runtimes);
   const popoutCount = useCanvasPopouts((s) => s.entries.length);
@@ -544,7 +551,11 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
   const newTerminal = (): void => {
     useTerminalStore.getState().createTab({ profileId: defaultProfileId, cwd: unit?.rootPath });
   };
-  /** Agent CLI：全部走派发系统（记历史、免审批、标签带「派发」徽章）；无 bot 退回手动开 */
+  /**
+   * Agent CLI：全部走派发系统（记历史、免审批、标签带「派发」徽章）；无 bot 退回手动开。
+   * 不走 sessionOpen.openNewTuiForUnit：那条是「按 bot 主绑定开新 TUI 并切到该 bot」，
+   * 这里是用户在菜单里显式选执行器、新标签进本格、不切 bot、派发失败回退手开终端
+   */
   const launchExecutor = (execId: string, displayName: string): void => {
     const bareId = execId.replace(/^daemon:/, "").replace(/:yolo$/, "");
     if (unit && bareId !== "") {
@@ -562,8 +573,6 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
     }
     useTerminalStore.getState().createTab({ profileId: "pwsh", cwd: unit?.rootPath, executorId: bareId, title: `${displayName} (TUI)` });
   };
-  /** 拆本格（组栈语义：本格一分为二，新格承载新标签）—— 模块级实现，条尾按钮共用 */
-  const splitGroup = (direction: "horizontal" | "vertical"): void => splitGroupPane(groupId, direction);
 
   // 下拉打开期间：窗口缩放（坐标失效）或 Esc 即关
   useEffect(() => {
@@ -639,7 +648,7 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
                     setOpen(false);
                     newChat();
                   }}
-                  className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal active:bg-teal-tint"
+                  className={MENU_ITEM}
                 >
                   <MessageSquarePlus size={13} className="shrink-0 text-teal" />
                   <span className="flex-1 truncate font-mono text-caption font-medium">
@@ -665,7 +674,7 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
                     setOpen(false);
                     launchExecutor(r.id, r.presentation.displayName);
                   }}
-                  className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal active:bg-teal-tint"
+                  className={MENU_ITEM}
                 >
                   <ShellOrAgentIcon icon={r.id} />
                   <div className="flex min-w-0 flex-1 items-center justify-between gap-1.5">
@@ -692,7 +701,7 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
                     setOpen(false);
                     useTerminalStore.getState().createTab({ profileId: profile.id, cwd: unit?.rootPath });
                   }}
-                  className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal active:bg-teal-tint"
+                  className={MENU_ITEM}
                 >
                   <ShellOrAgentIcon icon={profile.icon} />
                   <span className="flex-1 truncate font-mono text-caption">{profile.name}</span>
@@ -710,9 +719,9 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
                 <button
                   onClick={() => {
                     setOpen(false);
-                    splitGroup("horizontal");
+                    splitGroupPane(groupId, "horizontal");
                   }}
-                  className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal"
+                  className={MENU_ITEM}
                 >
                   <Columns2 size={13} className="text-teal" />
                   <span className="font-mono text-caption">向右拆分当前格 (Split Right)</span>
@@ -720,9 +729,9 @@ function GroupCreateBar({ groupId }: { groupId: string }) {
                 <button
                   onClick={() => {
                     setOpen(false);
-                    splitGroup("vertical");
+                    splitGroupPane(groupId, "vertical");
                   }}
-                  className="flex w-full items-center gap-2.5 rounded px-2.5 py-1.5 text-left text-body-sm text-ink transition hover:bg-teal-tint hover:text-teal"
+                  className={MENU_ITEM}
                 >
                   <Rows2 size={13} className="text-teal" />
                   <span className="font-mono text-caption">向下拆分当前格 (Split Down)</span>

@@ -1,7 +1,7 @@
 import { MessageSquarePlus, Plus, Zap } from "lucide-react";
 import { useChatPanes } from "../store/useChatPanes.ts";
 import { useTerminalStore, SUPPORTED_TERMINAL_PROFILES } from "../store/useTerminalStore.ts";
-import { useWorkbench } from "../store/useWorkbench.ts";
+import { selectActiveUnit, useWorkbench } from "../store/useWorkbench.ts";
 import { openNewTuiForUnit } from "../store/sessionOpen.ts";
 import { BotAvatar } from "./BotAvatar.tsx";
 import { ShellOrAgentIcon } from "./TerminalPaneSlot.tsx";
@@ -92,7 +92,7 @@ export function NewSessionPage() {
               <button
                 key={profile.id}
                 onClick={() => {
-                  const unit = useWorkbench.getState().units.find((u) => u.id === useWorkbench.getState().activeUnitId);
+                  const unit = selectActiveUnit(useWorkbench.getState());
                   useTerminalStore.getState().createTab({ profileId: profile.id, cwd: unit?.rootPath });
                 }}
                 className="flex items-center gap-2 rounded-btn border border-line/60 bg-card px-2.5 py-1.5 text-caption font-mono text-ink transition hover:border-teal/40 hover:bg-teal-tint hover:text-teal"
