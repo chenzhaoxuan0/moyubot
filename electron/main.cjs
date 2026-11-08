@@ -505,7 +505,10 @@ function createWindow() {
     // 初始按持久化主题；渲染层上报后 applyBrandIcons 会换（icon.png 仅作打包兜底，运行时不再引用）
     icon: startDark ? ICON_DARK : ICON_LIGHT,
     backgroundColor: startDark ? "#000000" : "#f7f7f4",
-    show: true, // 立即显示窗口，防止 ready-to-show 被阻塞
+    // 首绘后再显示（见下方 ready-to-show）：show:true 时窗口在 Chromium 合成器
+    // 绘出第一帧之前就亮，Windows DWM 先拿默认白画刷把窗口画出来 —— 深色用户
+    // 开窗闪白的最后一块（backgroundColor 也要等合成器开工才生效）。
+    show: false,
     autoHideMenuBar: true,
     // 无边框窗口：隐藏系统标题栏，网页内容铺到窗口最顶端。拖拽移动 / 双击最大化 /
     // Win+方向贴靠仍是系统原生行为（前端顶行挂 .titlebar-drag 热区）。
@@ -526,6 +529,15 @@ function createWindow() {
   });
 
   bindZoomShortcuts(mainWindow.webContents);
+
+  // 开窗闪白的收尾（show:false 的配套）：ready-to-show = 首帧已合成，此刻亮窗
+  // 即终色。兜底定时器防「ready-to-show 被阻塞」（曾在 dev 遇到过：页面加载
+  // 卡死 / 失败时不来）—— 1.2s 后无条件显示，不会「启动了但没窗口」。
+  const revealMainWindow = () => {
+    if (mainWindow !== null && !mainWindow.isDestroyed() && !mainWindow.isVisible()) mainWindow.show();
+  };
+  mainWindow.once("ready-to-show", revealMainWindow);
+  setTimeout(revealMainWindow, 1200);
 
   // 最大化状态推送：前端 WindowControls 靠它切换「最大化/还原」图标
   const sendMaximized = (value) => {
@@ -580,9 +592,10 @@ function createWindow() {
           minWidth: 480,
           minHeight: 320,
           autoHideMenuBar: true,
-          // 弹出窗同样按持久化主题给底色 —— 否则首绘前露 Chromium 默认白底，
-          // 深色用户开弹出窗也要挨一下闪白（主窗口同款治理）
+          // 弹出窗同样按持久化主题给底色 + 首绘后再显示 —— 否则首绘前露
+          // Chromium 默认白底，深色用户开弹出窗也要挨一下闪白（主窗口同款治理）
           backgroundColor: startupUseDark() ? "#000000" : "#f7f7f4",
+          show: false,
           ...(process.platform === "darwin" ? {} : { titleBarStyle: "hidden" }),
           webPreferences: {
             preload: path.join(__dirname, "preload.cjs"),
@@ -599,6 +612,16 @@ function createWindow() {
       return { action: "deny" };
     }
     return { action: "allow" };
+  });
+
+  // 弹出窗首绘后再显示（上方 show:false 的配套，主窗口同款治理 + 兜底）：
+  // overrideBrowserWindowOptions 里挂不了监听，窗口在 did-create-window 交手
+  mainWindow.webContents.on("did-create-window", (child) => {
+    const reveal = () => {
+      if (!child.isDestroyed() && !child.isVisible()) child.show();
+    };
+    child.once("ready-to-show", reveal);
+    setTimeout(reveal, 1200);
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL || "http://127.0.0.1:5280";
