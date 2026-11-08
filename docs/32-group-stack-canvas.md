@@ -61,7 +61,8 @@ state：`panes: Record<id, CanvasPane>`、`groups: Record<id, PaneGroup>`、
 
 **焦点链不变**：`useChatPanes` 的「单活+快照注册表」原样保留；激活链改为
 `activatePane(paneId)` = 置所属组 activePaneId + activeGroupId + （chat 时）
-焦点链恢复。旧 `focusChatPaneTab` 更名保留兼容别名。
+焦点链恢复。旧 `focusChatPaneTab` 更名保留兼容别名（2026-11-08：别名零消费，
+已删除，见 §十一）。
 
 ## 三、渲染层
 
@@ -75,6 +76,9 @@ TerminalPanel（工具栏 + 空态；顶栏标签条退役）
        └─ 窗格层：组内全部标签**常驻挂载**（A1），仅 activePaneId 可见
            （display:none + inert；切标签零 remount、xterm/对话状态零迁移）
 ```
+
+（2026-11-08 修订：TerminalPanel 的工具栏整行也已退役（e02ba37）——新建组与
+动作组全部下沉到各格标签条尾，TerminalPanel 只剩树 + 空态，见 §十一）
 
 - **非激活组 dim**（A3）：`activeGroupId` 之外的格子内容降不透明度
   （`--canvas-unfocused-dim: 0.75`，对齐 orca `UNFOCUSED_SPLIT_GROUP_OPACITY`）。
@@ -111,7 +115,7 @@ B 级：五向 zone（§四.2）与悬停预览激活（§四.4）。
 ## 六、迁移面（消费点盘点）
 
 store：useTerminalStore 重造（文件与主导出名保留）；useChatPanes 激活链与
-`focusChatPaneTab` 更名兼容；canvasLayout **v2** 文档（panes/groups/layout/
+`focusChatPaneTab` 更名兼容（别名已于 2026-11-08 删除）；canvasLayout **v2** 文档（panes/groups/layout/
 activeGroupId；对话身份仍存 unitId+sessionId；**v1 布局不迁移**——升级后回
 落 reattach 平铺 + 路由回放，一次性损失布局排列）；useCanvasPopouts.popoutTab
 改为「从组摘标签」；reattach / created 认领 / splitPane / closeTab 族 /
@@ -199,3 +203,17 @@ sessionForeground、useTaskbar 口径、PopoutShell、Electron 放行、移动�
 6 条断言：首开即回放 / 终端焦点不清内容（live 归属解耦）/ 点回不重置 /
 切走快照封存 / 往返后 openSession 权威重建内容完整。最后一条正是本表
 第三行的验收点。
+
+## 十一、顶栏退役与整周评审修订（2026-11-08）
+
+| 问题 | 根因 | 处置 |
+|---|---|---|
+| 画布顶栏整行占纵向空间（e02ba37） | 新建区 + 工具条在格子之外另起一行，分屏后格子越小越挤 | **顶栏整行退役**：新建组（对话 / 终端 / 选择▾ 派发菜单 / 归拢弹窗）与动作组（新对话 / 历史 / 清屏 / 重启 / 拆分 / 最大化）下沉到各格标签条尾，按本格激活标签出钮；§三 的 TerminalPanel 只剩树 + 空态 |
+| 移动端格内出现「对话」与拆分入口 | 顶栏迁入标签条时没带 `!isMobile` 门控（docs/31 §九：画布内再开对话窗格会与移动端对话页双头） | 对话快捷钮 / 菜单对话组与拆分组 / 条尾新对话与最大化在移动端恢复隐藏 |
+| 选择▾ 菜单在矮/窄格子里被裁切 | 菜单 absolute 挂在格子根（overflow-hidden）内；画布层 @container 的 containment 也会困住 fixed 遮罩 | 菜单与遮罩 portal 到 body，按触发钮 rect 落 fixed 坐标（下方不够向上翻，左缘夹视口） |
+| `pnpm check:canvas-focus` 自 94e1c05 起整体挂掉 | 脚本按 import 行原文做字符串替换，useChatPanes 的 import 行一改就静默失配（残留相对导入 → ERR_MODULE_NOT_FOUND），`pnpm check` 实际一直是红的 | 替换串与桩对齐；新增「同目录导入漏网」守卫让失配当场报错；⑥ 改快照直通口径，新增 ⑦ 门禁不过回落 openSession |
+| 兼容别名 / 死状态残留 | 单轨 activatePane 迁移后 focusChatPaneTab 零消费；pendingUnitDispatch 的唯一读者（旧「终端跟随 bot」effect）随 docs/31 一期删除 | 两者删除；findGroupOfPane / allPaneIds / id 生成改为导出复用（canvasLayout 内联副本收口），splitPane 与 createTab 共用终端标签构造 |
+
+**回归防线（三）**：check:canvas-focus 增至 7 条断言（新增直通门禁回落）；
+`check:canvas` 14 条不变。两脚本的替换目标是 useTerminalStore / useChatPanes 的
+import 行原文——改这两个文件的 import 行时必须同步脚本（守卫会当场指出漏网行）。

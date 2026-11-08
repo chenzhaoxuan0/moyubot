@@ -1,6 +1,6 @@
 # 33 —— 派发与通知：router-worker 体系定稿
 
-> 2026-11-07。四参照系收口：dsh-superagent 原型（领域模型）/ DeepSeek Harness 本体（派发契约）/ orca（唤醒式协调）/ Grok Bot·Muse（产品形态观察）→ moyubot 的 **gate-thread / report-run / mandate-assignment / 唤醒式调度** 四件套。本文是设计定稿，未实施；分期表见文末。
+> 2026-11-07。四参照系收口：dsh-superagent 原型（领域模型）/ DeepSeek Harness 本体（派发契约）/ orca（唤醒式协调）/ Grok Bot·Muse（产品形态观察）→ moyubot 的 **gate-thread / report-run / mandate-assignment / 唤醒式调度** 四件套。本文是设计定稿；一至三期半已于 2026-11-07 ~ 08 落地（38d055c / 10accf9 / a565074 / d773f1a），**实现与本文的偏差、未落地项以文末「落地与修订记录」为准**；分期表见文末。
 
 ## 总纲：一条产品公理与一条派发管线
 
@@ -253,3 +253,34 @@ report 管说话（blocked 会提问、dropped 会沉默），runs 管记账（�
 mandate 管授权（observe 先看后放），assignment 管配置（默认档+一屏覆盖）；
 结算即唤醒（不等 tick），无人值守先断问路（nonInteractive 是前提），
 通知只发要人动的事，其余全进日报。
+
+## 落地与修订记录（2026-11-08，整周双轴评审后）
+
+落地提交：一期 `38d055c`（gate + thread_key + subscriptions + 订阅直通）、二三四期
+`10accf9`（report 结算 / runs 结果事实源 / 两级通知 / 结算即唤醒 / mandate+observe /
+派发单 / precheck / IM 确认门 / 防睡眠）、review 修复 `a565074`、UI `d773f1a`、整周评审
+修复 `88582a0`（outcome 口径 / 日报 / 徽标 / 类型单源）。**本节是实现口径的事实源**：正文与下表冲突时以下表为准。
+
+**与正文的偏差（已落地，口径以实现为准）**
+
+| 条款 | 正文 | 实际实现 | 理由 / 处置 |
+|---|---|---|---|
+| §2.1 状态集 | `progress \| ready \| blocked \| failed \| dropped \| handback` | report 自报五终态 `ready/blocked/failed/dropped/handback`；`progress` 未启用；run 行 outcome 另含 stopReason 推断的 `limit/refusal`，合计七值（`core/backlog.ts` 的 `RunOutcome`） | report 只在结算时解析一次，没有过程态，progress 无消费点；limit/refusal 不进自报协议、由 `inferOutcome` 从结算 detail 识别。§0 对照表的 `waiting` 同样不存在 |
+| §2.1 失败语义 | — | 「失败」= 进程 failed **或** outcome∈failed/limit/refusal（`isFailedRun` 单源，引擎退避 / retryOf / 续跑判定 / 前端退避计数 / 日报共用） | 本次评审修复：自报失败但进程正常结束（status=done）曾被退避与 retryOf 漏判，autopilot 立即无退避重派（热循环），日报也漏报 |
+| §2.2 追加列 | 五列 | 五列已建（另加 `retry_of`，§5） | — |
+| §2.2 model | 实际使用的模型 | 记的是任务配置的模型（`item.model`） | 真实模型在 host usage 事件里，接入随 usage 归因一并做 |
+| §3.1 basis | `typed \| gtd \| channel \| classifier` | 实际写入 `typed / pasted / gtd / channel`（`classifier` 仅为读取侧缺省回落）；类型收为 `MandateBasis` | `pasted` 是粘贴来源的真实区分，保留；GTD 统合直接建任务不写 mandate，`gtd` 当前走不到 |
+| §3.3 memory 默认档 | minimal | UI 缺省 `full`（派发时 undefined 同 full） | 记录实际口径；档位只对新开会话生效（显式会话 / 续跑 / TUI 分支忽略） |
+| §3.4 IM 确认门 | Telegram Inline Keyboard | Telegram / 微信均为「确认 / 拒绝 N」文本拦截（与飞书同口径，10accf9 已自述） | 先统一文本口径；按钮形态待渠道层支持回调后再接 |
+| 订阅直通活跃口径 | — | 活跃 = `isActiveStatus`（非 done/dropped）且非 sleeping | 本次评审修复：dropped 原被当作活跃，追加会直通到静默终态的任务 |
+
+**未落地（保留设计，待后续）**
+
+| 条款 | 现状 | 待定 |
+|---|---|---|
+| §2.1 handback「源条目重进分类器」 | 只做了「回 ready + 摘 auto」并通知「待重新分类」，没有触发分类器；交回理由写进 lastError（卡片按红色错误框显示） | 重分类会经 `applyDecision` 新建第二条任务、旧任务留存——需先定「复用旧任务还是替换」再接 `inbox.reclassify` 同款流程 |
+| §2.2 usage 时间窗归因 | 取整会话 stats 记入收口 run：续跑 / 显式会话会把历史轮次全算进本次；按轮结算的执行器 durationMs 为 0 | 数据源已有（host 的 usage.jsonl 带 sessionId+at），按 run 的 started/finished 窗口切账即可；注意 4000 行滚动上限 |
+| §2.2 deliverable | 列已建，无写入点（settleExecution 不传），前端也不展示 | 产物来源可取 `deliverable` 事件聚合（ChatViewport 已有聚合逻辑） |
+| §3.1 rulesMatched | 无任何实现 | 需分类器输出命中的类别规则 |
+| §1 第 4 条 channels 候选准入 | 飞书在 hook 前按 allowFrom + mentionOnly 过滤，daemon 侧只认 `receiveId` 会话；threadKey 为 `feishu:<chat>`（无 rootMessageId，整个会话算一个话题）；Telegram / 微信 hook 拿不到 chatId，无法生成 threadKey；Discord 无 hook；askBot 未接 gate | 渠道层补 chatId / rootMessageId 透传后统一接 gate |
+| §1 第 1 条 manual 指纹 | 前端 `addInboxEntry` 不传 threadKey，`manual:<sessionId\|日期>` 未生成（后端已接受该参数）；客户端类型也未建模 gate 命中时的 `duplicate / fanout` 返回 | 前端补指纹与返回类型 |

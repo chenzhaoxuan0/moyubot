@@ -39,6 +39,8 @@
    右栏跟随、路由镜像全部继续依赖 `activeUnitId`）。
 6. 三入口分工，互不冗余：**侧栏 = 查表**（所有 session，点了开/激活标签）、
    **标签栏 = 浏览**（已打开的窗格）、**底栏 = 运行状态**（任务 chip 跳转聚焦）。
+   （2026-11-06 修订：任务栏机制随 docs/32 §十 退役，底栏收为 28px 纯状态条；
+   后台会话的跳转由侧栏历史行 / 画布标签承担，可见性见 §九「后台窗格的审批」）
 
 ## 三、目标模型：从「终端画布」泛化为「会话画布」
 
@@ -59,6 +61,10 @@ LayoutNode.leaf: { kind: "terminal", instanceId }       // 系统终端 / Agent 
   专属空态。
 - 终端工具条按焦点窗格类型自适应：焦点在终端窗格 → 清屏/重启；焦点在 chat
   窗格 → chat 动作（新会话/切历史/清屏）；分屏/最大化常驻全局。
+  （2026-11-08 修订：画布顶栏整行退役（e02ba37），动作下沉到各格标签条尾、按
+  **本格**激活标签出钮，分屏/最大化随格不再全局；chat 动作落地为「新对话 /
+  历史」两项——chat 不设清屏：时间线是会话账本的投影，没有可清的本地屏幕，
+  要空白页即新开对话）
 
 ## 四、chat 标签的身份 = 会话线（session 级的正确形式化）
 
@@ -77,7 +83,9 @@ LayoutNode.leaf: { kind: "terminal", instanceId }       // 系统终端 / Agent 
 - **幂等开标签**：侧栏/路由/前台拉起统一走 `openChatPane(unitId, sessionId)`：
   按 chatKey 找窗格 → 找到就激活（并 openSession 到指定段）；找不到就新建
   标签。终端侧维持现状口径（`terminalId` 活实例优先激活，TUI 恢复按
-  `notePendingUnitDispatch` 防双发）。
+  `notePendingUnitDispatch` 防双发）。（2026-11-08 修订：pendingUnitDispatch
+  的唯一读者是旧 TerminalPanel「终端跟随 bot」effect，随一期删除后登记成了只写
+  不读的死状态，已整体退役；双发防线现在只剩「活实例优先激活」这一条）
 - **关闭语义**：关 chat 标签只是关窗格，不杀会话（历史永远可回，与关终端
   标签杀 PTY 的语义**刻意不同**——对话没有进程可杀）。末签关闭 = 回空态
   （新建会话页）。
@@ -128,7 +136,8 @@ LayoutNode.leaf: { kind: "terminal", instanceId }       // 系统终端 / Agent 
 5. 关 chat 标签不杀会话（侧栏历史可回）；关全部标签落新建会话页。
 6. 头部无「对话/终端」切换钮；F5 后焦点会话按 hash 恢复 + 存活终端重挂。
 7. 审批弹窗、`session.foreground` 前台拉起、底栏任务 chip 跳转，都落到对应
-   会话的窗格（不存在则开标签）。
+   会话的窗格（不存在则开标签）。（2026-11-06 修订：任务 chip 随任务栏退役，
+   该项改由侧栏历史行点击承担，同样落到对应窗格）
 8. `grep conversationView` 在桌面链路零残留（MobileLayout 除外）。
 
 ## 八、后置期预告（一期不做）
@@ -180,11 +189,11 @@ LayoutNode.leaf: { kind: "terminal", instanceId }       // 系统终端 / Agent 
 **已知近似（接受）**：草稿文本不跨 F5（种子只存身份不存正文）；单元级 hash
 目标（`#/u/<id>` 无段）只切全局上下文不动窗格；侧栏「历史详情 / bot 设置」
 里的 selectUnit 仍会清全局时间线（焦点窗格受影响，与改造前同口径）；**后台
-窗格的审批**有三个可见面**：后台对话格的快照时间线照常渲染 ask 卡（事件
+窗格的审批**有三个可见面：后台对话格的快照时间线照常渲染 ask 卡（事件
 泵转投）、侧栏历史状态灯（awaiting 亮待交互黄灯；2026-11-06 灯模型重构后
 画布 chat 标签同款，见 core/sessionLight.ts）、通知中心（daemon 广播
 approval 通知）——点击窗格聚焦后审批卡在 live 态可交互。（原「底栏任务栏
-chip」口径随任务栏机制退役作废，见 docs/32 §九）
+chip」口径随任务栏机制退役作废，见 docs/32 §十）
 
 ## 十、二期 / 三期落地记录（2026-11-05，typecheck / build 全绿）
 
@@ -247,3 +256,18 @@ maximizedInstanceId → maximizedPaneId（双 kind 语义）、popout 路由解�
 ChatPaneRecord 记录工厂、BotAvatar 抽取；createChatTab 删投机的 activate
 参数；PaneMiniBar 抽取暂缓（两条 mini-bar 的拆分动作语义不同型，硬抽是
 投机抽象）。
+
+**review 修订（2026-11-08，整周双轴评审后）**：① 移动端门控回归——画布顶栏
+迁入格标签条（9fb0e8e / e02ba37）时丢了 §九「移动端画布内隐藏『对话』新建入口」
+的门控，条尾新建组的对话快捷钮、选择▾ 菜单的对话组与拆分组、条尾新对话钮与
+最大化在移动端恢复隐藏（只留终端与派发；不复刻旧顶栏的移动端抽屉菜单）。
+② 新建下拉 portal 到 body：留在格子里会被格子根 `overflow-hidden` 裁切，且画布层
+`@container` 自带 layout containment 会把 fixed 遮罩困在画布内。③ 容器查询挂点
+补全：对话列根补 `@container`（TurnNavigator 是滚动容器的兄弟，原按画布全宽求值，
+Popout 里永不命中）；Composer 问卷分支同包外壳；外壳内浮层的约定改为「fixed 一律
+portal、点外关闭走文档级监听」（ContextUsageBadge 的 fixed 遮罩被外壳困住、点时间线
+关不掉弹层，据此修正）；查找栏移出滚动容器挂列根（以滚动容器为包含块会随内容滚走）。
+④ 死代码退役：兼容别名 focusChatPaneTab（① 的反向推游标现走单轨 activatePane）、
+pendingUnitDispatch（见 §四 修订注）。⑤ 回归防线：`check:canvas-focus` 自 94e1c05
+起因 import 行字符串替换失配而整体挂掉，已对齐并加「同目录导入漏网」守卫，新增
+直通门禁回落用例。
