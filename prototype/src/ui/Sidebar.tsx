@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type ReactElement } from "react";
 import {
   AlarmClock,
   Archive,
@@ -165,6 +165,26 @@ function refreshScheduledTasks(maxAgeMs: number): void {
 /** 收起行的待触发数据：常量引用（收起的行不随 automations 刷新重渲染） */
 const NO_AUTOMATIONS: readonly Automation[] = [];
 
+/**
+ * 行拖拽准入（常驻/普通两节共用）：整行主按钮（UnitRow 的 data-drag-handle）就是
+ * 拖拽把手，从它或行内非控件空白处起拖 = 拖行排序；起点落在其它控件上 = 点击语义，
+ * 取消拖拽。历史：侧栏行 button 化（整行是 button）后，旧守卫把「button」整个拉黑，
+ * 行内排序从此拖不动（9fd2b62 的常驻排序因此不可用）；而 23b6607 加黑名单防的是
+ * 「历史子列表里的 FolderOpen 等图标钮被误触成行拖拽」—— 那些按钮不是把手，仍拦。
+ */
+function rowDragAllowed(e: ReactDragEvent<HTMLDivElement>): boolean {
+  const t = e.target as HTMLElement;
+  if (t.closest("a, input, textarea, select, [contenteditable], [data-no-drag]") !== null) {
+    e.preventDefault();
+    return false;
+  }
+  const btn = t.closest("button");
+  if (btn !== null && !btn.hasAttribute("data-drag-handle")) {
+    e.preventDefault();
+    return false;
+  }
+  return true;
+}
 
 export function Sidebar() {
   const units = useWorkbench((s) => s.units);
@@ -493,10 +513,7 @@ export function Sidebar() {
                   key={u.id}
                   draggable
                   onDragStart={(e) => {
-                    if ((e.target as HTMLElement).closest("button, a, input, [data-no-drag]")) {
-                      e.preventDefault();
-                      return;
-                    }
+                    if (!rowDragAllowed(e)) return;
                     setDragUnit(u.id);
                   }}
                   onDragOver={(e) => e.preventDefault()}
@@ -591,10 +608,7 @@ export function Sidebar() {
                 key={u.id}
                 draggable
                 onDragStart={(e) => {
-                  if ((e.target as HTMLElement).closest("button, a, input, [data-no-drag]")) {
-                    e.preventDefault();
-                    return;
-                  }
+                  if (!rowDragAllowed(e)) return;
                   setDragUnit(u.id);
                 }}
                 onDragOver={(e) => e.preventDefault()}
@@ -1049,6 +1063,10 @@ function UnitRow({
     // 绝对定位的兄弟节点，和时间戳抢同一个位置、hover 时交叉淡入淡出。
     <div className="group/row relative">
       <button
+        // 行拖拽把手：侧栏行包装层 draggable，但拖拽起点若落在别的控件（历史
+        // 子列表按钮 / 设置齿轮等）上应是点击语义不发起拖拽 —— 外层 onDragStart
+        // 据此判定（最近的 button 是不是这个把手）。见常驻/普通两节的守卫。
+        data-drag-handle
         onClick={() => {
           // 切单元视角 = 离开当前列表的管理上下文，残留的选择集一并清掉
           if (useSidebarSelection.getState().selected.size > 0) useSidebarSelection.getState().clear();
